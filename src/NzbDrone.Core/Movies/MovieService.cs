@@ -371,13 +371,7 @@ namespace NzbDrone.Core.Movies
         {
             if (movie.TmdbId != 0)
             {
-                var existing = _movieRepository.FindAllByTmdbId(movie.TmdbId);
-                var edition = movie.MovieEdition ?? "";
-
-                // TmdbId+Edition is the canonical identity. Short-circuit here so that
-                // a second edition of the same TMDB movie is never blocked by the
-                // ImdbId/title fallbacks below (constraint: same ImdbId, different edition).
-                return existing.Any(m => string.Equals(m.MovieEdition ?? "", edition, StringComparison.OrdinalIgnoreCase));
+                return _movieRepository.FindAllByTmdbId(movie.TmdbId).Any();
             }
 
             // TmdbId absent — fall back to ImdbId then title+year.

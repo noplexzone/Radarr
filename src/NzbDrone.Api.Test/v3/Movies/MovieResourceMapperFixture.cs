@@ -4,51 +4,94 @@ using Radarr.Api.V3.Movies;
 namespace NzbDrone.Api.Test.v3.Movies;
 
 [Parallelizable(ParallelScope.All)]
-public class MovieResourceMapperFixture
+public class MovieEditionSlotResourceMapperFixture
 {
     [Test]
-    public void ToModel_without_movieEdition_should_produce_empty_string_not_null()
+    public void ToModel_trims_edition_name()
     {
-        var resource = new MovieResource
+        var resource = new MovieEditionSlotResource
         {
-            TmdbId = 123,
-            Title = "Test Movie",
-            // MovieEdition intentionally omitted (simulates normal UI/API payload)
+            MovieId = 1,
+            EditionName = "  Extended Cut  ",
+            Monitored = true,
         };
 
         var model = resource.ToModel();
 
-        Assert.That(model.MovieEdition, Is.EqualTo(string.Empty),
-            "MovieEdition must default to empty string to satisfy the NOT NULL DB constraint");
+        Assert.That(model.EditionName, Is.EqualTo("Extended Cut"));
     }
 
     [Test]
-    public void ToModel_with_explicit_movieEdition_should_preserve_value()
+    public void ToModel_null_edition_name_becomes_empty_string()
     {
-        var resource = new MovieResource
+        var resource = new MovieEditionSlotResource
         {
-            TmdbId = 456,
-            Title = "Extended Movie",
-            MovieEdition = "Extended Cut",
+            MovieId = 1,
+            EditionName = null,
+            Monitored = true,
         };
 
         var model = resource.ToModel();
 
-        Assert.That(model.MovieEdition, Is.EqualTo("Extended Cut"));
+        Assert.That(model.EditionName, Is.EqualTo(string.Empty));
     }
 
     [Test]
-    public void ToModel_with_empty_movieEdition_should_produce_empty_string()
+    public void ToModel_whitespace_search_term_becomes_null()
     {
-        var resource = new MovieResource
+        var resource = new MovieEditionSlotResource
         {
-            TmdbId = 789,
-            Title = "Normal Movie",
-            MovieEdition = "",
+            MovieId = 1,
+            EditionName = "Director's Cut",
+            SearchTerm = "   ",
+            Monitored = true,
         };
 
         var model = resource.ToModel();
 
-        Assert.That(model.MovieEdition, Is.EqualTo(string.Empty));
+        Assert.That(model.SearchTerm, Is.Null);
+    }
+
+    [Test]
+    public void ToModel_trims_search_term()
+    {
+        var resource = new MovieEditionSlotResource
+        {
+            MovieId = 1,
+            EditionName = "Director's Cut",
+            SearchTerm = "  director cut  ",
+            Monitored = true,
+        };
+
+        var model = resource.ToModel();
+
+        Assert.That(model.SearchTerm, Is.EqualTo("director cut"));
+    }
+
+    [Test]
+    public void ToResource_round_trips_all_fields()
+    {
+        var resource = new MovieEditionSlotResource
+        {
+            Id = 7,
+            MovieId = 42,
+            EditionName = "IMAX",
+            SearchTerm = "imax",
+            Monitored = false,
+            MovieFileId = 3,
+            QualityProfileId = 1,
+            MinimumCustomFormatScore = 10,
+        };
+
+        var model = resource.ToModel();
+        var back = model.ToResource();
+
+        Assert.That(back.MovieId, Is.EqualTo(42));
+        Assert.That(back.EditionName, Is.EqualTo("IMAX"));
+        Assert.That(back.SearchTerm, Is.EqualTo("imax"));
+        Assert.That(back.Monitored, Is.False);
+        Assert.That(back.MovieFileId, Is.EqualTo(3));
+        Assert.That(back.QualityProfileId, Is.EqualTo(1));
+        Assert.That(back.MinimumCustomFormatScore, Is.EqualTo(10));
     }
 }

@@ -8,21 +8,22 @@ namespace NzbDrone.Core.Datastore.Migration
     {
         protected override void MainDbUpgrade()
         {
-            Alter.Table("Movies").AddColumn("MovieEdition").AsString().WithDefaultValue("");
+            Create.Table("MovieEditionSlots")
+                .WithColumn("Id").AsInt32().PrimaryKey().Identity()
+                .WithColumn("MovieId").AsInt32().NotNullable()
+                .WithColumn("EditionName").AsString().NotNullable()
+                .WithColumn("SearchTerm").AsString().Nullable()
+                .WithColumn("Monitored").AsBoolean().NotNullable().WithDefaultValue(true)
+                .WithColumn("MovieFileId").AsInt32().Nullable()
+                .WithColumn("QualityProfileId").AsInt32().Nullable()
+                .WithColumn("MinimumCustomFormatScore").AsInt32().Nullable()
+                .WithColumn("LastSearchTime").AsDateTime().Nullable()
+                .WithColumn("DateAdded").AsDateTime().NotNullable();
 
-            // Optional freeform terms appended to indexer search queries for this edition.
-            // Populated into MovieSearchCriteria.EditionSearchTerm; see ReleaseSearchService.
-            Alter.Table("Movies").AddColumn("EditionSearchTerm").AsString().Nullable();
-
-            // Replace the 1:1 unique constraint on MovieMetadataId with a composite
-            // unique on (MovieMetadataId, MovieEdition) so multiple editions of the
-            // same TMDB movie can coexist as distinct Movie rows sharing one metadata row.
-            Delete.Index("IX_Movies_MovieMetadataId").OnTable("Movies");
-
-            Create.Index("IX_Movies_MovieMetadataId_MovieEdition")
-                .OnTable("Movies")
-                .OnColumn("MovieMetadataId").Ascending()
-                .OnColumn("MovieEdition").Ascending()
+            Create.Index("IX_MovieEditionSlots_MovieId_EditionName")
+                .OnTable("MovieEditionSlots")
+                .OnColumn("MovieId").Ascending()
+                .OnColumn("EditionName").Ascending()
                 .WithOptions().Unique();
         }
     }

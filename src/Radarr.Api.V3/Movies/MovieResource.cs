@@ -73,8 +73,6 @@ namespace Radarr.Api.V3.Movies
         public string TitleSlug { get; set; }
         public string RootFolderPath { get; set; }
         public string Folder { get; set; }
-        public string MovieEdition { get; set; }
-        public string EditionSearchTerm { get; set; }
         public string Certification { get; set; }
         public List<string> Genres { get; set; }
         public List<string> Keywords { get; set; }
@@ -152,8 +150,6 @@ namespace Radarr.Api.V3.Movies
                 ImdbId = model.ImdbId,
                 TitleSlug = model.MovieMetadata.Value.TmdbId.ToString(),
                 RootFolderPath = model.RootFolderPath,
-                MovieEdition = model.MovieEdition,
-                EditionSearchTerm = model.EditionSearchTerm,
                 Certification = model.MovieMetadata.Value.Certification,
                 Website = model.MovieMetadata.Value.Website,
                 Genres = model.MovieMetadata.Value.Genres,
@@ -213,8 +209,6 @@ namespace Radarr.Api.V3.Movies
                 MinimumAvailability = resource.MinimumAvailability,
 
                 RootFolderPath = resource.RootFolderPath,
-                MovieEdition = resource.MovieEdition ?? string.Empty,
-                EditionSearchTerm = resource.EditionSearchTerm,
 
                 Tags = resource.Tags ?? new HashSet<int>(),
                 Added = resource.Added,

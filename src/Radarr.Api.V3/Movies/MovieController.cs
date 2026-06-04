@@ -117,10 +117,7 @@ namespace Radarr.Api.V3.Movies
                     return;
                 }
 
-                var edition = resource.MovieEdition ?? "";
-                var existing = _moviesService.FindAllByTmdbId(resource.TmdbId);
-
-                if (existing.Any(m => string.Equals(m.MovieEdition ?? "", edition, StringComparison.OrdinalIgnoreCase)))
+                if (_moviesService.FindAllByTmdbId(resource.TmdbId).Any())
                 {
                     context.AddFailure(nameof(resource.TmdbId), "This movie has already been added");
                 }

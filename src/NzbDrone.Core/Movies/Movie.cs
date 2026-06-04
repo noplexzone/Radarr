@@ -14,7 +14,6 @@ namespace NzbDrone.Core.Movies
         {
             Tags = new HashSet<int>();
             MovieMetadata = new MovieMetadata();
-            MovieEdition = string.Empty;
         }
 
         public int MovieMetadataId { get; set; }
@@ -24,11 +23,6 @@ namespace NzbDrone.Core.Movies
         public int QualityProfileId { get; set; }
 
         public string Path { get; set; }
-        public string MovieEdition { get; set; }
-
-        // Optional extra search terms sent to indexers for this edition (e.g. "extended cut").
-        // Populated into MovieSearchCriteria.EditionSearchTerm by ReleaseSearchService.
-        public string EditionSearchTerm { get; set; }
 
         public LazyLoaded<MovieMetadata> MovieMetadata { get; set; }
 
@@ -164,8 +158,6 @@ namespace NzbDrone.Core.Movies
             RootFolderPath = otherMovie.RootFolderPath;
             Tags = otherMovie.Tags;
             AddOptions = otherMovie.AddOptions;
-            MovieEdition = otherMovie.MovieEdition;
-            EditionSearchTerm = otherMovie.EditionSearchTerm;
         }
     }
 }

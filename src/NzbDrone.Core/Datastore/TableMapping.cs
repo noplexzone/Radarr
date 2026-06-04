@@ -30,6 +30,7 @@ using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.AlternativeTitles;
 using NzbDrone.Core.Movies.Collections;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Movies.Credits;
 using NzbDrone.Core.Movies.Translations;
 using NzbDrone.Core.Notifications;
@@ -177,6 +178,8 @@ namespace NzbDrone.Core.Datastore
                 .Ignore(s => s.Translations);
 
             Mapper.Entity<MovieCollection>("Collections").RegisterModel();
+
+            Mapper.Entity<MovieEditionSlot>("MovieEditionSlots").RegisterModel();
 
             Mapper.Entity<AutoTagging.AutoTag>("AutoTagging").RegisterModel();
         }
