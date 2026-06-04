@@ -7,6 +7,7 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
     public interface IMovieEditionSlotRepository : IBasicRepository<MovieEditionSlot>
     {
         List<MovieEditionSlot> FindByMovieId(int movieId);
+        List<MovieEditionSlot> FindByMovieFileId(int movieFileId);
         void DeleteForMovie(int movieId);
     }
 
@@ -20,6 +21,11 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
         public List<MovieEditionSlot> FindByMovieId(int movieId)
         {
             return Query(x => x.MovieId == movieId);
+        }
+
+        public List<MovieEditionSlot> FindByMovieFileId(int movieFileId)
+        {
+            return Query(x => x.MovieFileId == movieFileId);
         }
 
         public void DeleteForMovie(int movieId)
