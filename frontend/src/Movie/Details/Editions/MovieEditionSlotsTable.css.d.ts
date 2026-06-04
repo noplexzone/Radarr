@@ -2,7 +2,10 @@
 // Please do not change this file!
 interface CssExports {
   'actionsCell': string;
+  'addForm': string;
+  'addInput': string;
   'container': string;
+  'editInput': string;
   'emptyMessage': string;
   'monitorCell': string;
   'searchAllButton': string;

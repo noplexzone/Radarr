@@ -34,10 +34,32 @@ interface MovieEditionSlotRowProps {
   isSearching: boolean;
   onMonitorToggle: (slot: MovieEditionSlot, monitored: boolean) => void;
   onSearchPress: (slotId: number) => void;
+  onSave: (
+    slot: MovieEditionSlot,
+    editionName: string,
+    searchTerm: string
+  ) => void;
+  onDelete: (slotId: number) => void;
 }
 
 function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
-  const { slot, isSearching, onMonitorToggle, onSearchPress } = props;
+  const {
+    slot,
+    isSearching,
+    onMonitorToggle,
+    onSearchPress,
+    onSave,
+    onDelete,
+  } = props;
+
+  const [editionName, setEditionName] = useState(slot.editionName);
+  const [searchTerm, setSearchTerm] = useState(slot.searchTerm ?? '');
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  useEffect(() => {
+    setEditionName(slot.editionName);
+    setSearchTerm(slot.searchTerm ?? '');
+  }, [slot.editionName, slot.searchTerm]);
 
   const handleMonitorTogglePress = useCallback(
     (monitored: boolean) => {
@@ -50,6 +72,32 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
     onSearchPress(slot.id);
   }, [slot.id, onSearchPress]);
 
+  const handleSavePress = useCallback(() => {
+    onSave(slot, editionName, searchTerm);
+  }, [slot, editionName, searchTerm, onSave]);
+
+  const handleEditionNameChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setEditionName(event.target.value);
+    },
+    []
+  );
+
+  const handleSearchTermChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setSearchTerm(event.target.value);
+    },
+    []
+  );
+
+  const handleDeletePress = useCallback(() => {
+    if (!window.confirm('Are you sure you want to delete this edition slot?')) {
+      return;
+    }
+    setIsDeleting(true);
+    onDelete(slot.id);
+  }, [slot.id, onDelete]);
+
   return (
     <TableRow>
       <TableRowCell className={styles.monitorCell}>
@@ -60,9 +108,24 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
         />
       </TableRowCell>
 
-      <TableRowCell>{slot.editionName}</TableRowCell>
+      <TableRowCell>
+        <input
+          className={styles.editInput}
+          type="text"
+          value={editionName}
+          onChange={handleEditionNameChange}
+        />
+      </TableRowCell>
 
-      <TableRowCell>{slot.searchTerm ?? '-'}</TableRowCell>
+      <TableRowCell>
+        <input
+          className={styles.editInput}
+          type="text"
+          value={searchTerm}
+          placeholder="-"
+          onChange={handleSearchTermChange}
+        />
+      </TableRowCell>
 
       <TableRowCell>
         {slot.movieFileId ? (
@@ -93,10 +156,24 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
 
       <TableRowCell className={styles.actionsCell}>
         <SpinnerIconButton
+          name={icons.SAVE}
+          title={translate('Save')}
+          isSpinning={!!slot.isSaving}
+          onPress={handleSavePress}
+        />
+
+        <SpinnerIconButton
           name={icons.SEARCH}
           title={translate('SearchEdition')}
           isSpinning={isSearching}
           onPress={handleSearchPress}
+        />
+
+        <SpinnerIconButton
+          name={icons.DELETE}
+          title={translate('Delete')}
+          isSpinning={isDeleting}
+          onPress={handleDeletePress}
         />
       </TableRowCell>
     </TableRow>
@@ -116,7 +193,11 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [slots, setSlots] = useState<MovieEditionSlot[]>([]);
 
-  useEffect(() => {
+  const [newEditionName, setNewEditionName] = useState('');
+  const [newSearchTerm, setNewSearchTerm] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
+
+  const fetchSlots = useCallback(() => {
     setIsFetching(true);
     setIsPopulated(false);
     setFetchError(null);
@@ -138,6 +219,24 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
       setIsFetching(false);
     });
   }, [movieId]);
+
+  useEffect(() => {
+    fetchSlots();
+  }, [fetchSlots]);
+
+  const handleNewEditionNameChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setNewEditionName(event.target.value);
+    },
+    []
+  );
+
+  const handleNewSearchTermChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setNewSearchTerm(event.target.value);
+    },
+    []
+  );
 
   const isSearchingAll = useMemo(() => {
     return isCommandExecuting(
@@ -200,6 +299,89 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
     []
   );
 
+  const handleAdd = useCallback(() => {
+    if (!newEditionName.trim()) {
+      return;
+    }
+
+    setIsAdding(true);
+
+    const { request } = createAjaxRequest({
+      url: '/movieeditionslot',
+      method: 'POST',
+      dataType: 'json',
+      data: JSON.stringify({
+        movieId,
+        editionName: newEditionName.trim(),
+        searchTerm: newSearchTerm.trim() || null,
+        monitored: true,
+      }),
+    });
+
+    request.done((data: unknown) => {
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        setSlots((prev) => [...prev, data as MovieEditionSlot]);
+      } else {
+        fetchSlots();
+      }
+      setNewEditionName('');
+      setNewSearchTerm('');
+      setIsAdding(false);
+    });
+
+    request.fail(() => {
+      setIsAdding(false);
+    });
+  }, [movieId, newEditionName, newSearchTerm, fetchSlots]);
+
+  const handleSaveSlot = useCallback(
+    (slot: MovieEditionSlot, editionName: string, searchTerm: string) => {
+      setSlots((prev) =>
+        prev.map((s) => (s.id === slot.id ? { ...s, isSaving: true } : s))
+      );
+
+      const { request } = createAjaxRequest({
+        url: `/movieeditionslot/${slot.id}`,
+        method: 'PUT',
+        dataType: 'json',
+        data: JSON.stringify({
+          ...slot,
+          editionName,
+          searchTerm: searchTerm || null,
+        }),
+      });
+
+      request.done((data: MovieEditionSlot) => {
+        setSlots((prev) =>
+          prev.map((s) => (s.id === slot.id ? { ...data, isSaving: false } : s))
+        );
+      });
+
+      request.fail(() => {
+        setSlots((prev) =>
+          prev.map((s) => (s.id === slot.id ? { ...s, isSaving: false } : s))
+        );
+      });
+    },
+    []
+  );
+
+  const handleDeleteSlot = useCallback((slotId: number) => {
+    const { request } = createAjaxRequest({
+      url: `/movieeditionslot/${slotId}`,
+      method: 'DELETE',
+      dataType: 'json',
+    });
+
+    request.done(() => {
+      setSlots((prev) => prev.filter((s) => s.id !== slotId));
+    });
+
+    request.fail(() => {
+      // row reverts its own isDeleting state on unmount; silently ignore
+    });
+  }, []);
+
   const isRowSearching = useCallback(
     (slotId: number) => {
       return isCommandExecuting(
@@ -222,46 +404,77 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
           <div className={styles.emptyMessage}>{fetchError}</div>
         ) : null}
 
-        {isPopulated && !slots.length && !fetchError ? (
-          <div className={styles.emptyMessage}>
-            {translate('NoMovieEditionSlots')}
-          </div>
-        ) : null}
-
-        {isPopulated && !!slots.length && (
+        {isPopulated && (
           <>
-            <div className={styles.searchAllButton}>
+            <div className={styles.addForm}>
+              <input
+                className={styles.addInput}
+                type="text"
+                value={newEditionName}
+                placeholder={translate('EditionName')}
+                onChange={handleNewEditionNameChange}
+              />
+
+              <input
+                className={styles.addInput}
+                type="text"
+                value={newSearchTerm}
+                placeholder={translate('SearchTerm')}
+                onChange={handleNewSearchTermChange}
+              />
+
               <SpinnerIconButton
-                name={icons.SEARCH}
-                title={translate('SearchAllMonitoredEditions')}
-                isSpinning={isSearchingAll}
-                onPress={handleSearchAllPress}
+                name={icons.ADD}
+                title={translate('AddEditionSlot')}
+                isSpinning={isAdding}
+                onPress={handleAdd}
               />
             </div>
 
-            <table>
-              <thead>
-                <tr>
-                  <th className={styles.monitorCell} />
-                  <th>{translate('Edition')}</th>
-                  <th>{translate('SearchTerm')}</th>
-                  <th>{translate('Status')}</th>
-                  <th>{translate('LastSearch')}</th>
-                  <th className={styles.actionsCell} />
-                </tr>
-              </thead>
-              <tbody>
-                {slots.map((slot) => (
-                  <MovieEditionSlotRow
-                    key={slot.id}
-                    slot={slot}
-                    isSearching={isRowSearching(slot.id)}
-                    onMonitorToggle={handleMonitorToggle}
-                    onSearchPress={handleRowSearchPress}
+            {!slots.length && !fetchError ? (
+              <div className={styles.emptyMessage}>
+                {translate('NoMovieEditionSlots')}
+              </div>
+            ) : null}
+
+            {!!slots.length && (
+              <>
+                <div className={styles.searchAllButton}>
+                  <SpinnerIconButton
+                    name={icons.SEARCH}
+                    title={translate('SearchAllMonitoredEditions')}
+                    isSpinning={isSearchingAll}
+                    onPress={handleSearchAllPress}
                   />
-                ))}
-              </tbody>
-            </table>
+                </div>
+
+                <table>
+                  <thead>
+                    <tr>
+                      <th className={styles.monitorCell} />
+                      <th>{translate('Edition')}</th>
+                      <th>{translate('SearchTerm')}</th>
+                      <th>{translate('Status')}</th>
+                      <th>{translate('LastSearch')}</th>
+                      <th className={styles.actionsCell} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {slots.map((slot) => (
+                      <MovieEditionSlotRow
+                        key={slot.id}
+                        slot={slot}
+                        isSearching={isRowSearching(slot.id)}
+                        onMonitorToggle={handleMonitorToggle}
+                        onSearchPress={handleRowSearchPress}
+                        onSave={handleSaveSlot}
+                        onDelete={handleDeleteSlot}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
           </>
         )}
       </div>

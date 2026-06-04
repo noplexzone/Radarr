@@ -2,6 +2,32 @@
   margin-bottom: 20px;
 }
 
+.addForm {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.addInput {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--inputBorderColor);
+  border-radius: 4px;
+  background: var(--inputBackgroundColor);
+  color: var(--inputColor);
+}
+
+.editInput {
+  width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--inputBorderColor);
+  border-radius: 4px;
+  background: var(--inputBackgroundColor);
+  color: var(--inputColor);
+}
+
 .searchAllButton {
   margin-bottom: 10px;
 }
@@ -19,7 +45,6 @@
 }
 
 .actionsCell {
-  width: 56px;
   white-space: nowrap;
 }
 
