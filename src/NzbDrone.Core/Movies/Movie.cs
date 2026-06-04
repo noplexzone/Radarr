@@ -14,6 +14,7 @@ namespace NzbDrone.Core.Movies
         {
             Tags = new HashSet<int>();
             MovieMetadata = new MovieMetadata();
+            MovieEdition = string.Empty;
         }
 
         public int MovieMetadataId { get; set; }

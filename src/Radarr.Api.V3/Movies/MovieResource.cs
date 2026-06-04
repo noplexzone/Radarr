@@ -213,7 +213,7 @@ namespace Radarr.Api.V3.Movies
                 MinimumAvailability = resource.MinimumAvailability,
 
                 RootFolderPath = resource.RootFolderPath,
-                MovieEdition = resource.MovieEdition,
+                MovieEdition = resource.MovieEdition ?? string.Empty,
                 EditionSearchTerm = resource.EditionSearchTerm,
 
                 Tags = resource.Tags ?? new HashSet<int>(),
