@@ -20,7 +20,10 @@ namespace NzbDrone.Core.Housekeeping.Housekeepers
                              SELECT ""MovieFiles"".""Id"" FROM ""MovieFiles""
                              LEFT OUTER JOIN ""Movies""
                              ON ""MovieFiles"".""Id"" = ""Movies"".""MovieFileId""
-                             WHERE ""Movies"".""Id"" IS NULL)");
+                             LEFT OUTER JOIN ""MovieEditionSlots""
+                             ON ""MovieFiles"".""Id"" = ""MovieEditionSlots"".""MovieFileId""
+                             WHERE ""Movies"".""Id"" IS NULL
+                             AND ""MovieEditionSlots"".""Id"" IS NULL)");
         }
     }
 }

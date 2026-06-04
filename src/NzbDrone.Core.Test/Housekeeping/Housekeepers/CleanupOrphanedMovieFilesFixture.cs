@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using FizzWare.NBuilder;
@@ -7,6 +8,7 @@ using NzbDrone.Core.Housekeeping.Housekeepers;
 using NzbDrone.Core.Languages;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Qualities;
 using NzbDrone.Core.Test.Framework;
 
@@ -48,6 +50,38 @@ namespace NzbDrone.Core.Test.Housekeeping.Housekeepers
             Subject.Clean();
             AllStoredModels.Should().HaveCount(1);
             Db.All<Movie>().Should().Contain(e => e.MovieFileId == AllStoredModels.First().Id);
+        }
+
+        [Test]
+        public void should_not_delete_movie_file_referenced_by_edition_slot()
+        {
+            var movieFile = Builder<MovieFile>.CreateNew()
+                                              .With(h => h.Quality = new QualityModel())
+                                              .With(h => h.Languages = new List<Language> { Language.English })
+                                              .BuildNew();
+
+            Db.Insert(movieFile);
+
+            var movie = Builder<Movie>.CreateNew()
+                                      .With(e => e.MovieFileId = 0)
+                                      .BuildNew();
+
+            Db.Insert(movie);
+
+            var slot = new MovieEditionSlot
+            {
+                MovieId = movie.Id,
+                EditionName = "Director's Cut",
+                Monitored = true,
+                MovieFileId = movieFile.Id,
+                DateAdded = DateTime.UtcNow
+            };
+
+            Db.Insert(slot);
+
+            Subject.Clean();
+            AllStoredModels.Should().HaveCount(1);
+            AllStoredModels.First().Id.Should().Be(movieFile.Id);
         }
     }
 }
