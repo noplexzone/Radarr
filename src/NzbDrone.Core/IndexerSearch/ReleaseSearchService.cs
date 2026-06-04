@@ -9,6 +9,7 @@ using NzbDrone.Core.DecisionEngine;
 using NzbDrone.Core.Indexers;
 using NzbDrone.Core.IndexerSearch.Definitions;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Movies.Translations;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Profiles.Qualities;
@@ -19,6 +20,7 @@ namespace NzbDrone.Core.IndexerSearch
     {
         Task<List<DownloadDecision>> MovieSearch(int movieId, bool userInvokedSearch, bool interactiveSearch);
         Task<List<DownloadDecision>> MovieSearch(Movie movie, bool userInvokedSearch, bool interactiveSearch);
+        Task<List<DownloadDecision>> MovieEditionSearch(Movie movie, MovieEditionSlot slot, bool userInvokedSearch, bool interactiveSearch);
     }
 
     public class ReleaseSearchService : ISearchForReleases
@@ -58,6 +60,38 @@ namespace NzbDrone.Core.IndexerSearch
             var downloadDecisions = new List<DownloadDecision>();
 
             var searchSpec = Get<MovieSearchCriteria>(movie, userInvokedSearch, interactiveSearch);
+
+            var decisions = await Dispatch(indexer => indexer.Fetch(searchSpec), searchSpec);
+            downloadDecisions.AddRange(decisions);
+
+            return DeDupeDecisions(downloadDecisions);
+        }
+
+        public async Task<List<DownloadDecision>> MovieEditionSearch(Movie movie, MovieEditionSlot slot, bool userInvokedSearch, bool interactiveSearch)
+        {
+            var downloadDecisions = new List<DownloadDecision>();
+
+            var searchSpec = Get<MovieSearchCriteria>(movie, userInvokedSearch, interactiveSearch);
+
+            if (slot.SearchTerm.IsNotNullOrWhiteSpace())
+            {
+                // Prepend edition-specific variants (e.g. "Dune IMAX") before base titles for manual fallback
+                var editionVariants = searchSpec.SceneTitles
+                    .Select(t => $"{t} {slot.SearchTerm.Trim()}")
+                    .ToList();
+
+                searchSpec.SceneTitles = editionVariants
+                    .Concat(searchSpec.SceneTitles)
+                    .Distinct(StringComparer.InvariantCultureIgnoreCase)
+                    .ToList();
+
+                searchSpec.EditionSearchTerm = slot.SearchTerm;
+            }
+
+            searchSpec.MovieEditionSlotId = slot.Id;
+
+            // TODO: Release acceptance still needs edition matching in the decision engine.
+            // Releases should be filtered/rejected based on EditionSearchTerm before grabbing.
 
             var decisions = await Dispatch(indexer => indexer.Fetch(searchSpec), searchSpec);
             downloadDecisions.AddRange(decisions);
