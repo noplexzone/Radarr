@@ -24,6 +24,7 @@ namespace NzbDrone.Core.Movies
         List<Movie> AddMovies(List<Movie> newMovies);
         Movie FindByImdbId(string imdbid);
         Movie FindByTmdbId(int tmdbid);
+        List<Movie> FindAllByTmdbId(int tmdbid);
         Movie FindByTitle(string title);
         Movie FindByTitle(string title, int year);
         Movie FindByTitle(List<string> titles, int? year, List<string> otherTitles, List<Movie> candidates);
@@ -195,6 +196,11 @@ namespace NzbDrone.Core.Movies
             return _movieRepository.FindByTmdbId(tmdbid);
         }
 
+        public List<Movie> FindAllByTmdbId(int tmdbid)
+        {
+            return _movieRepository.FindAllByTmdbId(tmdbid);
+        }
+
         public Movie FindByPath(string path)
         {
             return _movieRepository.FindByPath(path);
@@ -363,16 +369,19 @@ namespace NzbDrone.Core.Movies
 
         public bool MovieExists(Movie movie)
         {
-            Movie result = null;
-
             if (movie.TmdbId != 0)
             {
-                result = _movieRepository.FindByTmdbId(movie.TmdbId);
-                if (result != null)
-                {
-                    return true;
-                }
+                var existing = _movieRepository.FindAllByTmdbId(movie.TmdbId);
+                var edition = movie.MovieEdition ?? "";
+
+                // TmdbId+Edition is the canonical identity. Short-circuit here so that
+                // a second edition of the same TMDB movie is never blocked by the
+                // ImdbId/title fallbacks below (constraint: same ImdbId, different edition).
+                return existing.Any(m => string.Equals(m.MovieEdition ?? "", edition, StringComparison.OrdinalIgnoreCase));
             }
+
+            // TmdbId absent — fall back to ImdbId then title+year.
+            Movie result = null;
 
             if (movie.ImdbId.IsNotNullOrWhiteSpace())
             {

@@ -19,6 +19,7 @@ namespace NzbDrone.Core.Movies
         Movie FindByImdbId(string imdbid);
         Movie FindByTmdbId(int tmdbid);
         List<Movie> FindByTmdbId(List<int> tmdbids);
+        List<Movie> FindAllByTmdbId(int tmdbid);
         List<Movie> MoviesBetweenDates(DateTime start, DateTime end, bool includeUnmonitored);
         PagingSpec<Movie> MoviesWithoutFiles(PagingSpec<Movie> pagingSpec);
         List<Movie> GetMoviesByFileId(int fileId);
@@ -216,6 +217,11 @@ namespace NzbDrone.Core.Movies
         public Movie FindByTmdbId(int tmdbid)
         {
             return Query(x => x.MovieMetadata.Value.TmdbId == tmdbid).FirstOrDefault();
+        }
+
+        public List<Movie> FindAllByTmdbId(int tmdbid)
+        {
+            return Query(x => x.MovieMetadata.Value.TmdbId == tmdbid);
         }
 
         public List<Movie> FindByTmdbId(List<int> tmdbids)

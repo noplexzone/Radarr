@@ -92,6 +92,18 @@ namespace NzbDrone.Core.IndexerSearch
 
             spec.SceneTitles = queryTranslations.Where(t => t.IsNotNullOrWhiteSpace()).Distinct(StringComparer.InvariantCultureIgnoreCase).ToList();
 
+            // When an edition search term is set, inject edition-appended title variants into
+            // SceneTitles so every indexer (which consumes SceneTitles/CleanSceneTitles)
+            // generates edition-specific queries without requiring per-indexer changes.
+            // Base titles are kept so interactive/manual searches also return plain results.
+            // TODO(multi-edition): decision-engine filtering of grabbed releases by edition
+            // (rejecting releases that do not match the requested edition) is not yet implemented.
+            if (spec is MovieSearchCriteria movieSpec && movie.EditionSearchTerm.IsNotNullOrWhiteSpace())
+            {
+                movieSpec.EditionSearchTerm = movie.EditionSearchTerm;
+                spec.SceneTitles = MovieSearchCriteria.BuildEditionTitles(spec.SceneTitles, movie.EditionSearchTerm);
+            }
+
             return spec;
         }
 

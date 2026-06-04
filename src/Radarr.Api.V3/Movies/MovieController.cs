@@ -61,7 +61,6 @@ namespace Radarr.Api.V3.Movies
                            RootFolderValidator rootFolderValidator,
                            MappedNetworkDriveValidator mappedNetworkDriveValidator,
                            MoviePathValidator moviesPathValidator,
-                           MovieExistsValidator moviesExistsValidator,
                            MovieAncestorValidator moviesAncestorValidator,
                            RecycleBinValidator recycleBinValidator,
                            SystemFolderValidator systemFolderValidator,
@@ -110,7 +109,22 @@ namespace Radarr.Api.V3.Movies
                 .SetValidator(qualityProfileExistsValidator);
 
             PostValidator.RuleFor(s => s.Title).NotEmpty().When(s => s.TmdbId <= 0);
-            PostValidator.RuleFor(s => s.TmdbId).NotNull().NotEmpty().SetValidator(moviesExistsValidator);
+            PostValidator.RuleFor(s => s.TmdbId).NotNull().NotEmpty();
+            PostValidator.RuleFor(s => s).Custom((resource, context) =>
+            {
+                if (resource.TmdbId <= 0)
+                {
+                    return;
+                }
+
+                var edition = resource.MovieEdition ?? "";
+                var existing = _moviesService.FindAllByTmdbId(resource.TmdbId);
+
+                if (existing.Any(m => string.Equals(m.MovieEdition ?? "", edition, StringComparison.OrdinalIgnoreCase)))
+                {
+                    context.AddFailure(nameof(resource.TmdbId), "This movie has already been added");
+                }
+            });
         }
 
         [HttpGet]
@@ -124,9 +138,9 @@ namespace Radarr.Api.V3.Movies
 
             if (tmdbId.HasValue)
             {
-                var movie = _moviesService.FindByTmdbId(tmdbId.Value);
+                var movies = _moviesService.FindAllByTmdbId(tmdbId.Value);
 
-                if (movie != null)
+                foreach (var movie in movies)
                 {
                     moviesResources.AddIfNotNull(MapToResource(movie, translationLanguage));
                 }
