@@ -1,0 +1,28 @@
+.container {
+  margin-bottom: 20px;
+}
+
+.searchAllButton {
+  margin-bottom: 10px;
+}
+
+.statusHasFile {
+  color: var(--successColor);
+}
+
+.statusMissing {
+  color: var(--dangerColor);
+}
+
+.monitorCell {
+  width: 56px;
+}
+
+.actionsCell {
+  width: 56px;
+  white-space: nowrap;
+}
+
+.emptyMessage {
+  padding: 10px;
+}

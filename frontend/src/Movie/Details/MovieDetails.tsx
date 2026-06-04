@@ -94,6 +94,7 @@ import {
 import translate from 'Utilities/String/translate';
 import MovieCastPosters from './Credits/Cast/MovieCastPosters';
 import MovieCrewPosters from './Credits/Crew/MovieCrewPosters';
+import MovieEditionSlotsTable from './Editions/MovieEditionSlotsTable';
 import MovieDetailsLinks from './MovieDetailsLinks';
 import MovieReleaseDates from './MovieReleaseDates';
 import MovieStatusLabel from './MovieStatusLabel';
@@ -911,6 +912,8 @@ function MovieDetails({ movieId }: MovieDetailsProps) {
 
             <ExtraFileTable movieId={id} />
           </FieldSet>
+
+          <MovieEditionSlotsTable movieId={id} />
 
           <FieldSet legend={translate('Cast')}>
             <MovieCastPosters isSmallScreen={isSmallScreen} />

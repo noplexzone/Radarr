@@ -18,4 +18,5 @@ export const RESET_API_KEY = 'ResetApiKey';
 export const RESET_QUALITY_DEFINITIONS = 'ResetQualityDefinitions';
 export const RSS_SYNC = 'RssSync';
 export const MOVIE_SEARCH = 'MoviesSearch';
+export const MOVIE_EDITION_SEARCH = 'MovieEditionSearch';
 export const IMPORT_LIST_SYNC = 'ImportListSync';
