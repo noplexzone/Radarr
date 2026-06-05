@@ -61,6 +61,9 @@ namespace Radarr.Api.V3.Indexers
         public int? MovieId { get; set; }
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public int? MovieEditionSlotId { get; set; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public int? DownloadClientId { get; set; }
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
@@ -101,6 +104,7 @@ namespace Radarr.Api.V3.Indexers
                 MovieTitles = parsedMovieInfo.MovieTitles,
                 Languages = remoteMovie.Languages,
                 MappedMovieId = remoteMovie.Movie?.Id,
+                MovieEditionSlotId = remoteMovie.MovieEditionSlotId,
                 Approved = model.Approved,
                 TemporarilyRejected = model.TemporarilyRejected,
                 Rejected = model.Rejected,

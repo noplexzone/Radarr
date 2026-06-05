@@ -13,6 +13,7 @@ using NzbDrone.Core.Exceptions;
 using NzbDrone.Core.Indexers;
 using NzbDrone.Core.IndexerSearch;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Profiles.Qualities;
 using NzbDrone.Core.Validation;
@@ -30,6 +31,7 @@ namespace Radarr.Api.V3.Indexers
         private readonly IPrioritizeDownloadDecision _prioritizeDownloadDecision;
         private readonly IDownloadService _downloadService;
         private readonly IMovieService _movieService;
+        private readonly IMovieEditionSlotService _movieEditionSlotService;
         private readonly Logger _logger;
 
         private readonly ICached<RemoteMovie> _remoteMovieCache;
@@ -40,6 +42,7 @@ namespace Radarr.Api.V3.Indexers
                              IPrioritizeDownloadDecision prioritizeDownloadDecision,
                              IDownloadService downloadService,
                              IMovieService movieService,
+                             IMovieEditionSlotService movieEditionSlotService,
                              ICacheManager cacheManager,
                              IQualityProfileService qualityProfileService,
                              Logger logger)
@@ -51,6 +54,7 @@ namespace Radarr.Api.V3.Indexers
             _prioritizeDownloadDecision = prioritizeDownloadDecision;
             _downloadService = downloadService;
             _movieService = movieService;
+            _movieEditionSlotService = movieEditionSlotService;
             _logger = logger;
 
             PostValidator.RuleFor(s => s.IndexerId).ValidId();
@@ -91,7 +95,8 @@ namespace Radarr.Api.V3.Indexers
                         CustomFormats = remoteMovie.CustomFormats,
                         CustomFormatScore = remoteMovie.CustomFormatScore,
                         MovieMatchType = remoteMovie.MovieMatchType,
-                        ReleaseSource = remoteMovie.ReleaseSource
+                        ReleaseSource = remoteMovie.ReleaseSource,
+                        MovieEditionSlotId = remoteMovie.MovieEditionSlotId
                     };
 
                     remoteMovie.Movie = _movieService.GetMovie(release.MovieId!.Value);
@@ -113,6 +118,11 @@ namespace Radarr.Api.V3.Indexers
                     }
                 }
 
+                if (release.MovieEditionSlotId.HasValue)
+                {
+                    remoteMovie.MovieEditionSlotId = release.MovieEditionSlotId;
+                }
+
                 await _downloadService.DownloadReport(remoteMovie, release.DownloadClientId);
             }
             catch (ReleaseDownloadException ex)
@@ -126,14 +136,51 @@ namespace Radarr.Api.V3.Indexers
 
         [HttpGet]
         [Produces("application/json")]
-        public async Task<List<ReleaseResource>> GetReleases(int? movieId)
+        public async Task<List<ReleaseResource>> GetReleases(int? movieId, int? movieEditionSlotId)
         {
+            if (movieId.HasValue && movieEditionSlotId.HasValue)
+            {
+                return await GetEditionSlotReleases(movieId.Value, movieEditionSlotId.Value);
+            }
+
             if (movieId.HasValue)
             {
                 return await GetMovieReleases(movieId.Value);
             }
 
             return await GetRss();
+        }
+
+        private async Task<List<ReleaseResource>> GetEditionSlotReleases(int movieId, int movieEditionSlotId)
+        {
+            try
+            {
+                var movie = _movieService.GetMovie(movieId);
+                var slot = _movieEditionSlotService.GetById(movieEditionSlotId);
+
+                if (slot.MovieId != movieId)
+                {
+                    throw new NzbDroneClientException(HttpStatusCode.BadRequest, "Movie edition slot does not belong to the requested movie");
+                }
+
+                var decisions = await _releaseSearchService.MovieEditionSearch(movie, slot, true, true);
+                var prioritizedDecisions = _prioritizeDownloadDecision.PrioritizeDecisionsForMovies(decisions);
+
+                return MapDecisions(prioritizedDecisions);
+            }
+            catch (SearchFailedException ex)
+            {
+                throw new NzbDroneClientException(HttpStatusCode.BadRequest, ex.Message);
+            }
+            catch (NzbDroneClientException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Movie edition slot search failed: " + ex.Message);
+                throw new NzbDroneClientException(HttpStatusCode.InternalServerError, ex.Message);
+            }
         }
 
         private async Task<List<ReleaseResource>> GetMovieReleases(int movieId)

@@ -10,6 +10,7 @@ import RelativeDateCell from 'Components/Table/Cells/RelativeDateCell';
 import TableRowCell from 'Components/Table/Cells/TableRowCell';
 import TableRow from 'Components/Table/TableRow';
 import { icons, kinds } from 'Helpers/Props';
+import MovieEditionSlotInteractiveSearchModal from 'Movie/Search/MovieEditionSlotInteractiveSearchModal';
 import { executeCommand } from 'Store/Actions/commandActions';
 import createCommandsSelector from 'Store/Selectors/createCommandsSelector';
 import { findCommand, isCommandExecuting } from 'Utilities/Command';
@@ -34,6 +35,7 @@ interface MovieEditionSlotRowProps {
   isSearching: boolean;
   onMonitorToggle: (slot: MovieEditionSlot, monitored: boolean) => void;
   onSearchPress: (slotId: number) => void;
+  onInteractiveSearchPress: (slot: MovieEditionSlot) => void;
   onSave: (
     slot: MovieEditionSlot,
     editionName: string,
@@ -48,6 +50,7 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
     isSearching,
     onMonitorToggle,
     onSearchPress,
+    onInteractiveSearchPress,
     onSave,
     onDelete,
   } = props;
@@ -71,6 +74,10 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
   const handleSearchPress = useCallback(() => {
     onSearchPress(slot.id);
   }, [slot.id, onSearchPress]);
+
+  const handleInteractiveSearchPress = useCallback(() => {
+    onInteractiveSearchPress(slot);
+  }, [slot, onInteractiveSearchPress]);
 
   const handleSavePress = useCallback(() => {
     onSave(slot, editionName, searchTerm);
@@ -170,6 +177,13 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
         />
 
         <SpinnerIconButton
+          name={icons.INTERACTIVE}
+          title={translate('InteractiveSearch')}
+          isSpinning={false}
+          onPress={handleInteractiveSearchPress}
+        />
+
+        <SpinnerIconButton
           name={icons.DELETE}
           title={translate('Delete')}
           isSpinning={isDeleting}
@@ -196,6 +210,8 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
   const [newEditionName, setNewEditionName] = useState('');
   const [newSearchTerm, setNewSearchTerm] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const [interactiveSearchSlot, setInteractiveSearchSlot] =
+    useState<MovieEditionSlot | null>(null);
 
   const fetchSlots = useCallback(() => {
     setIsFetching(true);
@@ -268,6 +284,15 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
     },
     [dispatch, movieId]
   );
+
+  const handleInteractiveSearchPress = useCallback((slot: MovieEditionSlot) => {
+    setInteractiveSearchSlot(slot);
+  }, []);
+
+  const handleInteractiveSearchModalClose = useCallback(() => {
+    setInteractiveSearchSlot(null);
+    fetchSlots();
+  }, [fetchSlots]);
 
   const handleMonitorToggle = useCallback(
     (slot: MovieEditionSlot, monitored: boolean) => {
@@ -467,6 +492,7 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
                         isSearching={isRowSearching(slot.id)}
                         onMonitorToggle={handleMonitorToggle}
                         onSearchPress={handleRowSearchPress}
+                        onInteractiveSearchPress={handleInteractiveSearchPress}
                         onSave={handleSaveSlot}
                         onDelete={handleDeleteSlot}
                       />
@@ -477,6 +503,16 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
             )}
           </>
         )}
+
+        {interactiveSearchSlot ? (
+          <MovieEditionSlotInteractiveSearchModal
+            isOpen={true}
+            movieId={movieId}
+            movieEditionSlotId={interactiveSearchSlot.id}
+            editionName={interactiveSearchSlot.editionName}
+            onModalClose={handleInteractiveSearchModalClose}
+          />
+        ) : null}
       </div>
     </FieldSet>
   );

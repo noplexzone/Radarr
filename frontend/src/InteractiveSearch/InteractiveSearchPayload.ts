@@ -2,6 +2,14 @@ interface MovieSearchPayload {
   movieId: number;
 }
 
-type InteractiveSearchPayload = MovieSearchPayload;
+interface MovieEditionSlotSearchPayload {
+  movieId: number;
+  movieEditionSlotId: number;
+}
 
+type InteractiveSearchPayload =
+  | MovieSearchPayload
+  | MovieEditionSlotSearchPayload;
+
+export type { MovieEditionSlotSearchPayload };
 export default InteractiveSearchPayload;
