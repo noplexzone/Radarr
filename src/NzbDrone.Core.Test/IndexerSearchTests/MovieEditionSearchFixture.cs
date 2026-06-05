@@ -15,6 +15,7 @@ using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Movies.Translations;
 using NzbDrone.Core.Parser.Model;
+using NzbDrone.Core.Profiles.Qualities;
 using NzbDrone.Core.Test.Framework;
 
 namespace NzbDrone.Core.Test.IndexerSearchTests
@@ -118,6 +119,51 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
             criteria.SceneTitles.Should().Contain("Dyuna 4K");
             criteria.SceneTitles.Should().Contain("Dune");
             criteria.SceneTitles.Should().Contain("Dyuna");
+        }
+
+        [Test]
+        public async Task Edition_search_sets_override_quality_profile_when_slot_has_quality_profile_id()
+        {
+            var slotProfile = new QualityProfile { Id = 99, Name = "Slot Profile" };
+
+            Mocker.GetMock<NzbDrone.Core.Profiles.Qualities.IQualityProfileService>()
+                .Setup(s => s.Get(99))
+                .Returns(slotProfile);
+
+            var slot = new MovieEditionSlot { Id = 5, MovieId = _movie.Id, SearchTerm = "IMAX", QualityProfileId = 99, Monitored = true };
+
+            var captured = WatchForEditionSearchCriteria();
+
+            await Subject.MovieEditionSearch(_movie, slot, true, false);
+
+            var criteria = captured.Should().ContainSingle().Subject;
+            criteria.OverrideQualityProfile.Should().BeSameAs(slotProfile);
+        }
+
+        [Test]
+        public async Task Edition_search_leaves_override_quality_profile_null_when_slot_has_no_quality_profile_id()
+        {
+            var slot = new MovieEditionSlot { Id = 6, MovieId = _movie.Id, QualityProfileId = null, Monitored = true };
+
+            var captured = WatchForEditionSearchCriteria();
+
+            await Subject.MovieEditionSearch(_movie, slot, true, false);
+
+            var criteria = captured.Should().ContainSingle().Subject;
+            criteria.OverrideQualityProfile.Should().BeNull();
+        }
+
+        [Test]
+        public async Task Edition_search_sets_slot_minimum_custom_format_score_when_slot_has_value()
+        {
+            var slot = new MovieEditionSlot { Id = 7, MovieId = _movie.Id, MinimumCustomFormatScore = 50, Monitored = true };
+
+            var captured = WatchForEditionSearchCriteria();
+
+            await Subject.MovieEditionSearch(_movie, slot, true, false);
+
+            var criteria = captured.Should().ContainSingle().Subject;
+            criteria.SlotMinimumCustomFormatScore.Should().Be(50);
         }
     }
 

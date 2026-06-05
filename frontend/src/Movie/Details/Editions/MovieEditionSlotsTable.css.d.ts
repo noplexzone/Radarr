@@ -5,12 +5,15 @@ interface CssExports {
   'addForm': string;
   'addInput': string;
   'container': string;
+  'customFormatScoreCell': string;
   'editInput': string;
   'emptyMessage': string;
   'monitorCell': string;
   'searchAllButton': string;
+  'smallEditInput': string;
   'statusHasFile': string;
   'statusMissing': string;
+  'statusUnmonitored': string;
 }
 export const cssExports: CssExports;
 export default cssExports;

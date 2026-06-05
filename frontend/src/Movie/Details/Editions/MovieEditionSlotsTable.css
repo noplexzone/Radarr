@@ -51,3 +51,21 @@
 .emptyMessage {
   padding: 10px;
 }
+
+
+.statusUnmonitored {
+  color: var(--disabledColor);
+}
+
+.smallEditInput {
+  width: 90px;
+  padding: 2px 6px;
+  border: 1px solid var(--inputBorderColor);
+  border-radius: 4px;
+  background: var(--inputBackgroundColor);
+  color: var(--inputColor);
+}
+
+.customFormatScoreCell {
+  white-space: nowrap;
+}

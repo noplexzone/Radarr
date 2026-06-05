@@ -10,11 +10,16 @@ import RelativeDateCell from 'Components/Table/Cells/RelativeDateCell';
 import TableRowCell from 'Components/Table/Cells/TableRowCell';
 import TableRow from 'Components/Table/TableRow';
 import { icons, kinds } from 'Helpers/Props';
+import MovieFormats from 'Movie/MovieFormats';
+import MovieQuality from 'Movie/MovieQuality';
 import MovieEditionSlotInteractiveSearchModal from 'Movie/Search/MovieEditionSlotInteractiveSearchModal';
+import { QualityModel } from 'Quality/Quality';
 import { executeCommand } from 'Store/Actions/commandActions';
 import createCommandsSelector from 'Store/Selectors/createCommandsSelector';
+import CustomFormat from 'typings/CustomFormat';
 import { findCommand, isCommandExecuting } from 'Utilities/Command';
 import createAjaxRequest from 'Utilities/createAjaxRequest';
+import formatCustomFormatScore from 'Utilities/Number/formatCustomFormatScore';
 import translate from 'Utilities/String/translate';
 import styles from './MovieEditionSlotsTable.css';
 
@@ -25,6 +30,11 @@ interface MovieEditionSlot {
   searchTerm: string | null;
   monitored: boolean;
   movieFileId: number | null;
+  qualityProfileId: number | null;
+  minimumCustomFormatScore: number | null;
+  movieFileQuality: QualityModel | null;
+  movieFileCustomFormatScore: number | null;
+  movieFileCustomFormats: CustomFormat[] | null;
   lastSearchTime: string | null;
   dateAdded: string;
   isSaving?: boolean;
@@ -39,7 +49,9 @@ interface MovieEditionSlotRowProps {
   onSave: (
     slot: MovieEditionSlot,
     editionName: string,
-    searchTerm: string
+    searchTerm: string,
+    qualityProfileId: number | null,
+    minimumCustomFormatScore: number | null
   ) => void;
   onDelete: (slotId: number) => void;
 }
@@ -57,12 +69,27 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
 
   const [editionName, setEditionName] = useState(slot.editionName);
   const [searchTerm, setSearchTerm] = useState(slot.searchTerm ?? '');
+  const [qualityProfileId, setQualityProfileId] = useState(
+    slot.qualityProfileId?.toString() ?? ''
+  );
+  const [minimumCustomFormatScore, setMinimumCustomFormatScore] = useState(
+    slot.minimumCustomFormatScore?.toString() ?? ''
+  );
   const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     setEditionName(slot.editionName);
     setSearchTerm(slot.searchTerm ?? '');
-  }, [slot.editionName, slot.searchTerm]);
+    setQualityProfileId(slot.qualityProfileId?.toString() ?? '');
+    setMinimumCustomFormatScore(
+      slot.minimumCustomFormatScore?.toString() ?? ''
+    );
+  }, [
+    slot.editionName,
+    slot.searchTerm,
+    slot.qualityProfileId,
+    slot.minimumCustomFormatScore,
+  ]);
 
   const handleMonitorTogglePress = useCallback(
     (monitored: boolean) => {
@@ -80,8 +107,30 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
   }, [slot, onInteractiveSearchPress]);
 
   const handleSavePress = useCallback(() => {
-    onSave(slot, editionName, searchTerm);
-  }, [slot, editionName, searchTerm, onSave]);
+    const parsedQualityProfileId = qualityProfileId.trim()
+      ? parseInt(qualityProfileId)
+      : null;
+    const parsedMinimumCustomFormatScore = minimumCustomFormatScore.trim()
+      ? parseInt(minimumCustomFormatScore)
+      : null;
+
+    onSave(
+      slot,
+      editionName,
+      searchTerm,
+      Number.isNaN(parsedQualityProfileId) ? null : parsedQualityProfileId,
+      Number.isNaN(parsedMinimumCustomFormatScore)
+        ? null
+        : parsedMinimumCustomFormatScore
+    );
+  }, [
+    slot,
+    editionName,
+    searchTerm,
+    qualityProfileId,
+    minimumCustomFormatScore,
+    onSave,
+  ]);
 
   const handleEditionNameChange = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -97,6 +146,20 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
     []
   );
 
+  const handleQualityProfileIdChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setQualityProfileId(event.target.value);
+    },
+    []
+  );
+
+  const handleMinimumCustomFormatScoreChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setMinimumCustomFormatScore(event.target.value);
+    },
+    []
+  );
+
   const handleDeletePress = useCallback(() => {
     if (!window.confirm('Are you sure you want to delete this edition slot?')) {
       return;
@@ -104,6 +167,37 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
     setIsDeleting(true);
     onDelete(slot.id);
   }, [slot.id, onDelete]);
+
+  let status = (
+    <span className={styles.statusUnmonitored}>
+      <Icon name={icons.UNMONITORED} title={translate('Unmonitored')} />{' '}
+      {translate('Unmonitored')}
+    </span>
+  );
+
+  if (slot.movieFileId) {
+    status = (
+      <span className={styles.statusHasFile}>
+        <Icon
+          name={icons.CHECK}
+          kind={kinds.SUCCESS}
+          title={translate('Downloaded')}
+        />{' '}
+        {translate('Downloaded')}
+      </span>
+    );
+  } else if (slot.monitored) {
+    status = (
+      <span className={styles.statusMissing}>
+        <Icon
+          name={icons.MISSING}
+          kind={kinds.DANGER}
+          title={translate('Missing')}
+        />{' '}
+        {translate('Missing')}
+      </span>
+    );
+  }
 
   return (
     <TableRow>
@@ -134,26 +228,54 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
         />
       </TableRowCell>
 
+      <TableRowCell>{status}</TableRowCell>
+
       <TableRowCell>
-        {slot.movieFileId ? (
-          <span className={styles.statusHasFile}>
-            <Icon
-              name={icons.CHECK}
-              kind={kinds.SUCCESS}
-              title={translate('HasFile')}
-            />{' '}
-            {translate('HasFile')}
-          </span>
+        {slot.movieFileQuality ? (
+          <MovieQuality
+            quality={slot.movieFileQuality}
+            isCutoffNotMet={false}
+          />
         ) : (
-          <span className={styles.statusMissing}>
-            <Icon
-              name={icons.MISSING}
-              kind={kinds.DANGER}
-              title={translate('Missing')}
-            />{' '}
-            {translate('Missing')}
-          </span>
+          '-'
         )}
+      </TableRowCell>
+
+      <TableRowCell>
+        {slot.movieFileCustomFormats?.length ? (
+          <MovieFormats formats={slot.movieFileCustomFormats} />
+        ) : (
+          '-'
+        )}
+      </TableRowCell>
+
+      <TableRowCell className={styles.customFormatScoreCell}>
+        {slot.movieFileCustomFormatScore == null
+          ? '-'
+          : formatCustomFormatScore(
+              slot.movieFileCustomFormatScore,
+              slot.movieFileCustomFormats?.length ?? 0
+            )}
+      </TableRowCell>
+
+      <TableRowCell>
+        <input
+          className={styles.smallEditInput}
+          type="number"
+          value={qualityProfileId}
+          placeholder={translate('Default')}
+          onChange={handleQualityProfileIdChange}
+        />
+      </TableRowCell>
+
+      <TableRowCell>
+        <input
+          className={styles.smallEditInput}
+          type="number"
+          value={minimumCustomFormatScore}
+          placeholder={translate('Default')}
+          onChange={handleMinimumCustomFormatScoreChange}
+        />
       </TableRowCell>
 
       <RelativeDateCell
@@ -360,7 +482,13 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
   }, [movieId, newEditionName, newSearchTerm, fetchSlots]);
 
   const handleSaveSlot = useCallback(
-    (slot: MovieEditionSlot, editionName: string, searchTerm: string) => {
+    (
+      slot: MovieEditionSlot,
+      editionName: string,
+      searchTerm: string,
+      qualityProfileId: number | null,
+      minimumCustomFormatScore: number | null
+    ) => {
       setSlots((prev) =>
         prev.map((s) => (s.id === slot.id ? { ...s, isSaving: true } : s))
       );
@@ -373,6 +501,8 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
           ...slot,
           editionName,
           searchTerm: searchTerm || null,
+          qualityProfileId,
+          minimumCustomFormatScore,
         }),
       });
 
@@ -480,6 +610,11 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
                       <th>{translate('Edition')}</th>
                       <th>{translate('SearchTerm')}</th>
                       <th>{translate('Status')}</th>
+                      <th>{translate('Quality')}</th>
+                      <th>{translate('CustomFormats')}</th>
+                      <th>{translate('CustomFormatScore')}</th>
+                      <th>{translate('QualityProfile')}</th>
+                      <th>{translate('MinimumCustomFormatScore')}</th>
                       <th>{translate('LastSearch')}</th>
                       <th className={styles.actionsCell} />
                     </tr>

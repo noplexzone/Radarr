@@ -90,8 +90,15 @@ namespace NzbDrone.Core.IndexerSearch
 
             searchSpec.MovieEditionSlotId = slot.Id;
 
-            // TODO: Release acceptance still needs edition matching in the decision engine.
-            // Releases should be filtered/rejected based on EditionSearchTerm before grabbing.
+            if (slot.QualityProfileId.HasValue)
+            {
+                searchSpec.OverrideQualityProfile = _qualityProfileService.Get(slot.QualityProfileId.Value);
+            }
+
+            if (slot.MinimumCustomFormatScore.HasValue)
+            {
+                searchSpec.SlotMinimumCustomFormatScore = slot.MinimumCustomFormatScore.Value;
+            }
 
             var decisions = await Dispatch(indexer => indexer.Fetch(searchSpec), searchSpec);
             downloadDecisions.AddRange(decisions);

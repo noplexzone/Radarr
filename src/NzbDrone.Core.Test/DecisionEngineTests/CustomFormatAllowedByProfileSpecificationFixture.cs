@@ -112,5 +112,63 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
 
             Subject.IsSatisfiedBy(_remoteMovie, null).Accepted.Should().BeTrue();
         }
+
+        [Test]
+        public void slot_override_profile_used_instead_of_movie_profile()
+        {
+            // Movie profile requires score >= 1, but slot's override profile has MinFormatScore = 0
+            _remoteMovie.CustomFormats = new List<CustomFormat> { };
+            _remoteMovie.Movie.QualityProfile.FormatItems = CustomFormatsTestHelpers.GetSampleFormatItems(_format1.Name);
+            _remoteMovie.Movie.QualityProfile.MinFormatScore = 1;
+            _remoteMovie.CustomFormatScore = 0;
+
+            var overrideProfile = new NzbDrone.Core.Profiles.Qualities.QualityProfile
+            {
+                MinFormatScore = 0,
+                FormatItems = CustomFormatsTestHelpers.GetDefaultFormatItems()
+            };
+
+            var criteria = new NzbDrone.Core.IndexerSearch.Definitions.MovieSearchCriteria
+            {
+                MovieEditionSlotId = 1,
+                OverrideQualityProfile = overrideProfile
+            };
+
+            // Override profile has MinFormatScore = 0, so score 0 should be accepted
+            Subject.IsSatisfiedBy(_remoteMovie, criteria).Accepted.Should().BeTrue();
+        }
+
+        [Test]
+        public void slot_minimum_custom_format_score_overrides_profile_min_score()
+        {
+            // Profile MinFormatScore = 0 would accept, but slot sets a higher floor of 5
+            _remoteMovie.CustomFormats = new List<CustomFormat> { };
+            _remoteMovie.Movie.QualityProfile.MinFormatScore = 0;
+            _remoteMovie.CustomFormatScore = 3;
+
+            var criteria = new NzbDrone.Core.IndexerSearch.Definitions.MovieSearchCriteria
+            {
+                MovieEditionSlotId = 1,
+                SlotMinimumCustomFormatScore = 5
+            };
+
+            Subject.IsSatisfiedBy(_remoteMovie, criteria).Accepted.Should().BeFalse();
+        }
+
+        [Test]
+        public void slot_minimum_custom_format_score_accepts_when_score_meets_floor()
+        {
+            _remoteMovie.CustomFormats = new List<CustomFormat> { };
+            _remoteMovie.Movie.QualityProfile.MinFormatScore = 100;
+            _remoteMovie.CustomFormatScore = 10;
+
+            var criteria = new NzbDrone.Core.IndexerSearch.Definitions.MovieSearchCriteria
+            {
+                MovieEditionSlotId = 1,
+                SlotMinimumCustomFormatScore = 10
+            };
+
+            Subject.IsSatisfiedBy(_remoteMovie, criteria).Accepted.Should().BeTrue();
+        }
     }
 }

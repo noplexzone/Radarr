@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using NzbDrone.Core.Movies.MovieEditionSlots;
+using NzbDrone.Core.Qualities;
+using Radarr.Api.V3.CustomFormats;
 using Radarr.Http.REST;
 
 namespace Radarr.Api.V3.Movies
@@ -17,6 +19,11 @@ namespace Radarr.Api.V3.Movies
         public int? MinimumCustomFormatScore { get; set; }
         public DateTime? LastSearchTime { get; set; }
         public DateTime DateAdded { get; set; }
+
+        // Enriched file data — populated when MovieFileId is set
+        public QualityModel MovieFileQuality { get; set; }
+        public int? MovieFileCustomFormatScore { get; set; }
+        public List<CustomFormatResource> MovieFileCustomFormats { get; set; }
     }
 
     public static class MovieEditionSlotResourceMapper

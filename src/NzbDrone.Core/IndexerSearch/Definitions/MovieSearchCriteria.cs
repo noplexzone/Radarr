@@ -1,9 +1,18 @@
+using NzbDrone.Core.Profiles.Qualities;
+
 namespace NzbDrone.Core.IndexerSearch.Definitions
 {
     public class MovieSearchCriteria : SearchCriteriaBase
     {
         public string EditionSearchTerm { get; set; }
         public int? MovieEditionSlotId { get; set; }
+
+        // When an edition slot has its own quality profile, this overrides
+        // Movie.QualityProfile for quality/custom-format acceptance checks.
+        public QualityProfile OverrideQualityProfile { get; set; }
+
+        // Flat minimum custom-format score from the slot (overrides profile's MinFormatScore when set).
+        public int? SlotMinimumCustomFormatScore { get; set; }
 
         public override string ToString()
         {

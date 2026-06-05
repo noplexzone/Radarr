@@ -20,13 +20,14 @@ namespace NzbDrone.Core.DecisionEngine.Specifications
         {
             _logger.Debug("Checking if report meets quality requirements. {0}", subject.ParsedMovieInfo.Quality);
 
-            var profile = subject.Movie.QualityProfile;
+            var profile = (searchCriteria as IndexerSearch.Definitions.MovieSearchCriteria)?.OverrideQualityProfile
+                          ?? subject.Movie.QualityProfile;
             var qualityIndex = profile.GetIndex(subject.ParsedMovieInfo.Quality.Quality);
             var qualityOrGroup = profile.Items[qualityIndex.Index];
 
             if (!qualityOrGroup.Allowed)
             {
-                _logger.Debug("Quality {0} rejected by Movie's quality profile", subject.ParsedMovieInfo.Quality);
+                _logger.Debug("Quality {0} rejected by profile", subject.ParsedMovieInfo.Quality);
                 return DownloadSpecDecision.Reject(DownloadRejectionReason.QualityNotWanted, "{0} is not wanted in profile", subject.ParsedMovieInfo.Quality.Quality);
             }
 
