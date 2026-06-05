@@ -176,6 +176,13 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
                 if (trackedDownload.RemoteMovie != null)
                 {
+                    var latestGrab = _downloadHistoryService.GetLatestGrab(downloadItem.DownloadId);
+                    if (latestGrab != null &&
+                        int.TryParse(latestGrab.Data?.GetValueOrDefault(MovieHistory.MOVIE_EDITION_SLOT_ID), out var slotId))
+                    {
+                        trackedDownload.RemoteMovie.MovieEditionSlotId = slotId;
+                    }
+
                     _aggregationService.Augment(trackedDownload.RemoteMovie);
 
                     // Calculate custom formats

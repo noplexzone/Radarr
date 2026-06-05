@@ -117,6 +117,12 @@ namespace NzbDrone.Core.Download.History
             history.Data.Add("DownloadClientName", message.DownloadClientName);
 
             history.Data.Add("CustomFormatScore", message.Movie.CustomFormatScore.ToString());
+
+            if (message.Movie.MovieEditionSlotId.HasValue)
+            {
+                history.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, message.Movie.MovieEditionSlotId.Value.ToString());
+            }
+
             _repository.Insert(history);
         }
 
