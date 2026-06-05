@@ -1,8 +1,11 @@
 using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
 using NLog;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.MediaFiles.MovieImport;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser.Model;
 
 namespace NzbDrone.Core.MediaFiles
@@ -14,22 +17,27 @@ namespace NzbDrone.Core.MediaFiles
 
     public class UpgradeMediaFileService : IUpgradeMediaFiles
     {
+        private static readonly Regex NormalizeEditionRegex = new Regex(@"[\s\-_.']+", RegexOptions.Compiled);
+
         private readonly IRecycleBinProvider _recycleBinProvider;
         private readonly IMediaFileService _mediaFileService;
         private readonly IMoveMovieFiles _movieFileMover;
         private readonly IDiskProvider _diskProvider;
+        private readonly IMovieEditionSlotService _editionSlotService;
         private readonly Logger _logger;
 
         public UpgradeMediaFileService(IRecycleBinProvider recycleBinProvider,
                                        IMediaFileService mediaFileService,
                                        IMoveMovieFiles movieFileMover,
                                        IDiskProvider diskProvider,
+                                       IMovieEditionSlotService editionSlotService,
                                        Logger logger)
         {
             _recycleBinProvider = recycleBinProvider;
             _mediaFileService = mediaFileService;
             _movieFileMover = movieFileMover;
             _diskProvider = diskProvider;
+            _editionSlotService = editionSlotService;
             _logger = logger;
         }
 
@@ -39,7 +47,7 @@ namespace NzbDrone.Core.MediaFiles
 
             var moveFileResult = new MovieFileMoveResult();
 
-            var existingFile = localMovie.Movie.MovieFileId > 0 ? localMovie.Movie.MovieFile : null;
+            var existingFile = ResolveExistingFile(localMovie);
 
             var rootFolder = _diskProvider.GetParentFolder(localMovie.Movie.Path);
 
@@ -81,6 +89,39 @@ namespace NzbDrone.Core.MediaFiles
             }
 
             return moveFileResult;
+        }
+
+        // When importing an edition-specific file, only replace the file that belongs to the
+        // matching edition slot — never touch a different slot's file.
+        private MovieFile ResolveExistingFile(LocalMovie localMovie)
+        {
+            if (localMovie.Edition.IsNotNullOrWhiteSpace())
+            {
+                var slots = _editionSlotService.GetForMovie(localMovie.Movie.Id);
+                var normalizedEdition = NormalizeEdition(localMovie.Edition);
+                var matchingSlot = slots.FirstOrDefault(s =>
+                    NormalizeEdition(s.EditionName) == normalizedEdition ||
+                    NormalizeEdition(s.SearchTerm) == normalizedEdition);
+
+                if (matchingSlot?.MovieFileId > 0)
+                {
+                    return _mediaFileService.GetMovie(matchingSlot.MovieFileId.Value);
+                }
+
+                return null;
+            }
+
+            return localMovie.Movie.MovieFileId > 0 ? localMovie.Movie.MovieFile : null;
+        }
+
+        private static string NormalizeEdition(string value)
+        {
+            if (value.IsNullOrWhiteSpace())
+            {
+                return string.Empty;
+            }
+
+            return NormalizeEditionRegex.Replace(value, string.Empty).ToLowerInvariant();
         }
     }
 }

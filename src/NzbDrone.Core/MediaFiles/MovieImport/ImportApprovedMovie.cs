@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using NLog;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
@@ -60,9 +61,10 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
             _logger.Debug("Decisions: {0}", decisions.Count);
 
             // I added a null op for the rare case that the quality is null. TODO: find out why that would even happen in the first place.
+            // Group by (movie, edition) so that multiple edition slots for the same movie are treated independently.
             var qualifiedImports = decisions
                 .Where(decision => decision.Approved)
-                .GroupBy(decision => decision.LocalMovie.Movie.Id)
+                .GroupBy(decision => (decision.LocalMovie.Movie.Id, NormalizeEdition(decision.LocalMovie.Edition)))
                 .SelectMany(group => group
                     .OrderByDescending(decision => decision.LocalMovie.Quality ?? new QualityModel { Quality = Quality.Unknown }, new QualityModelComparer(group.First().LocalMovie.Movie.QualityProfile))
                     .ThenByDescending(decision => decision.LocalMovie.Size))
@@ -77,9 +79,10 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
 
                 try
                 {
-                    // check if already imported
-                    if (importResults.Select(r => r.ImportDecision.LocalMovie.Movie)
-                                         .Select(m => m.Id).Contains(localMovie.Movie.Id))
+                    // check if already imported — per (movie, edition) so each edition slot gets one file
+                    if (importResults.Any(r =>
+                            r.ImportDecision.LocalMovie.Movie.Id == localMovie.Movie.Id &&
+                            NormalizeEdition(r.ImportDecision.LocalMovie.Edition) == NormalizeEdition(localMovie.Edition)))
                     {
                         importResults.Add(new ImportResult(importDecision, "Movie has already been imported"));
                         continue;
@@ -207,6 +210,11 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
 
             return importResults;
         }
+
+        private static readonly Regex _editionNormRegex = new Regex(@"[\s\-_.']+", RegexOptions.Compiled);
+
+        private static string NormalizeEdition(string edition) =>
+            edition.IsNullOrWhiteSpace() ? string.Empty : _editionNormRegex.Replace(edition, string.Empty).ToLowerInvariant();
 
         private string GetOriginalFilePath(DownloadClientItem downloadClientItem, LocalMovie localMovie)
         {

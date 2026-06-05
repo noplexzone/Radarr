@@ -346,5 +346,67 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
                   .Verify(v => v.UpgradeMovieFile(It.Is<MovieFile>(e => e.SceneName == firstDecision.LocalMovie.SceneName), _approvedDecisions.First().LocalMovie, false),
                       Times.Once());
         }
+
+        [Test]
+        public void should_import_both_when_same_movie_has_different_editions()
+        {
+            var movie = _approvedDecisions.First().LocalMovie.Movie;
+
+            var directorsDecision = new ImportDecision(
+                new LocalMovie
+                {
+                    Movie = movie,
+                    Path = Path.Combine(movie.Path, "30 Rock - Directors Cut.mkv"),
+                    Quality = new QualityModel(),
+                    Edition = "Director's Cut",
+                    ReleaseGroup = "DRONE"
+                });
+
+            var imaxDecision = new ImportDecision(
+                new LocalMovie
+                {
+                    Movie = movie,
+                    Path = Path.Combine(movie.Path, "30 Rock - IMAX.mkv"),
+                    Quality = new QualityModel(),
+                    Edition = "IMAX",
+                    ReleaseGroup = "DRONE"
+                });
+
+            var result = Subject.Import(new List<ImportDecision> { directorsDecision, imaxDecision }, true);
+
+            result.Where(i => i.Result == ImportResultType.Imported).Should().HaveCount(2);
+        }
+
+        [Test]
+        public void should_only_import_once_when_same_movie_and_same_edition_appears_twice()
+        {
+            var movie = _approvedDecisions.First().LocalMovie.Movie;
+
+            var first = new ImportDecision(
+                new LocalMovie
+                {
+                    Movie = movie,
+                    Path = Path.Combine(movie.Path, "30 Rock - Directors Cut 1080p.mkv"),
+                    Quality = new QualityModel(Quality.Bluray1080p),
+                    Edition = "Director's Cut",
+                    ReleaseGroup = "DRONE",
+                    Size = 8.Gigabytes()
+                });
+
+            var second = new ImportDecision(
+                new LocalMovie
+                {
+                    Movie = movie,
+                    Path = Path.Combine(movie.Path, "30 Rock - Directors Cut 720p.mkv"),
+                    Quality = new QualityModel(Quality.Bluray720p),
+                    Edition = "Director's Cut",
+                    ReleaseGroup = "DRONE",
+                    Size = 4.Gigabytes()
+                });
+
+            var result = Subject.Import(new List<ImportDecision> { first, second }, true);
+
+            result.Where(i => i.Result == ImportResultType.Imported).Should().HaveCount(1);
+        }
     }
 }
