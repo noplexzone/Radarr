@@ -12,6 +12,7 @@ using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.MediaFiles.MovieImport;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.RootFolders;
 using NzbDrone.Core.Test.Framework;
 using NzbDrone.Test.Common;
@@ -447,6 +448,49 @@ namespace NzbDrone.Core.Test.MediaFiles.DiskScanServiceTests
 
             Mocker.GetMock<IEventAggregator>()
                 .Verify(v => v.PublishEvent(It.Is<MovieScannedEvent>(c => c.Movie != null && c.PossibleExtraFiles.Count == 0)), Times.Once());
+        }
+
+        [Test]
+        public void should_reconcile_edition_slots_for_existing_movie_files()
+        {
+            GivenMovieFolder();
+
+            GivenFiles(new List<string>
+            {
+                Path.Combine(_movie.Path, "Movie (2020) {edition-Director's Cut}.mkv").AsOsAgnostic()
+            });
+
+            var existingFile = Builder<MovieFile>.CreateNew()
+                .With(f => f.MovieId = _movie.Id)
+                .With(f => f.RelativePath = "Movie (2020) {edition-Director's Cut}.mkv")
+                .With(f => f.Edition = "Director's Cut")
+                .Build();
+
+            Mocker.GetMock<IMediaFileService>()
+                .Setup(s => s.GetFilesByMovie(_movie.Id))
+                .Returns(new List<MovieFile> { existingFile });
+
+            Mocker.GetMock<IDiskProvider>()
+                .Setup(s => s.GetFileSize(It.IsAny<string>()))
+                .Returns(existingFile.Size);
+
+            Subject.Scan(_movie);
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Verify(v => v.ReconcileForMovie(_movie.Id, It.Is<IReadOnlyList<MovieFile>>(l => l.Count == 1)), Times.Once());
+        }
+
+        [Test]
+        public void should_reconcile_edition_slots_even_when_no_existing_files()
+        {
+            GivenMovieFolder();
+
+            GivenFiles(new List<string>());
+
+            Subject.Scan(_movie);
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Verify(v => v.ReconcileForMovie(_movie.Id, It.IsAny<IReadOnlyList<MovieFile>>()), Times.Once());
         }
     }
 }

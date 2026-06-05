@@ -17,6 +17,7 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
         MovieEditionSlot Add(MovieEditionSlot slot);
         MovieEditionSlot Update(MovieEditionSlot slot);
         void Delete(int id);
+        void ReconcileForMovie(int movieId, IReadOnlyList<MovieFile> existingFiles);
     }
 
     public class MovieEditionSlotService : IMovieEditionSlotService,
@@ -101,6 +102,47 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
             {
                 slot.MovieFileId = null;
                 _repo.Update(slot);
+            }
+        }
+
+        public void ReconcileForMovie(int movieId, IReadOnlyList<MovieFile> existingFiles)
+        {
+            var slots = _repo.FindByMovieId(movieId);
+            if (slots.Count == 0)
+            {
+                return;
+            }
+
+            var fileIds = new HashSet<int>(existingFiles.Select(f => f.Id));
+
+            // Clear slot references whose file no longer exists (belt-and-suspenders;
+            // MovieFileDeletedEvent normally handles this during cleanup).
+            foreach (var slot in slots.Where(s => s.MovieFileId.HasValue && !fileIds.Contains(s.MovieFileId.Value)))
+            {
+                slot.MovieFileId = null;
+                _repo.Update(slot);
+            }
+
+            // Build set of file IDs already linked to a slot so we skip them.
+            var linkedFileIds = new HashSet<int>(slots.Where(s => s.MovieFileId.HasValue).Select(s => s.MovieFileId.Value));
+
+            // Link each unlinked edition file to its matching slot (conservative: no slot creation).
+            foreach (var file in existingFiles.Where(f => !f.Edition.IsNullOrWhiteSpace() && !linkedFileIds.Contains(f.Id)))
+            {
+                var normalizedEdition = NormalizeEditionForMatch(file.Edition);
+                var matchingSlot = slots.FirstOrDefault(s =>
+                    s.MovieFileId == null &&
+                    (NormalizeEditionForMatch(s.EditionName) == normalizedEdition ||
+                     NormalizeEditionForMatch(s.SearchTerm) == normalizedEdition));
+
+                if (matchingSlot == null)
+                {
+                    continue;
+                }
+
+                matchingSlot.MovieFileId = file.Id;
+                linkedFileIds.Add(file.Id);
+                _repo.Update(matchingSlot);
             }
         }
 

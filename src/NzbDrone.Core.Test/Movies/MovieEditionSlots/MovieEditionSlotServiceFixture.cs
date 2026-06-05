@@ -128,5 +128,151 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
             Mocker.GetMock<IMovieEditionSlotRepository>()
                 .Verify(s => s.Insert(It.IsAny<MovieEditionSlot>()), Times.Never);
         }
+
+        // ReconcileForMovie tests
+
+        [Test]
+        public void reconcile_should_link_file_to_matching_unlinked_slot()
+        {
+            var slot = new MovieEditionSlot
+            {
+                Id = 10,
+                MovieId = MovieId,
+                EditionName = "Director's Cut",
+                SearchTerm = null,
+                MovieFileId = null
+            };
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Setup(s => s.FindByMovieId(MovieId))
+                .Returns(new List<MovieEditionSlot> { slot });
+
+            Subject.ReconcileForMovie(MovieId, new List<MovieFile> { BuildMovieFile("Directors.Cut") });
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Verify(s => s.Update(It.Is<MovieEditionSlot>(x => x.Id == slot.Id && x.MovieFileId == MovieFileId)), Times.Once);
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Verify(s => s.Insert(It.IsAny<MovieEditionSlot>()), Times.Never);
+        }
+
+        [Test]
+        public void reconcile_should_link_file_to_matching_slot_by_search_term()
+        {
+            var slot = new MovieEditionSlot
+            {
+                Id = 11,
+                MovieId = MovieId,
+                EditionName = "IMAX Enhanced",
+                SearchTerm = "IMAX",
+                MovieFileId = null
+            };
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Setup(s => s.FindByMovieId(MovieId))
+                .Returns(new List<MovieEditionSlot> { slot });
+
+            Subject.ReconcileForMovie(MovieId, new List<MovieFile> { BuildMovieFile("IMAX") });
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Verify(s => s.Update(It.Is<MovieEditionSlot>(x => x.Id == slot.Id && x.MovieFileId == MovieFileId)), Times.Once);
+        }
+
+        [Test]
+        public void reconcile_should_not_create_slot_when_no_matching_slot_exists()
+        {
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Setup(s => s.FindByMovieId(MovieId))
+                .Returns(new List<MovieEditionSlot>
+                {
+                    new MovieEditionSlot { Id = 12, MovieId = MovieId, EditionName = "Theatrical", MovieFileId = null }
+                });
+
+            Subject.ReconcileForMovie(MovieId, new List<MovieFile> { BuildMovieFile("Extended Edition") });
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Verify(s => s.Insert(It.IsAny<MovieEditionSlot>()), Times.Never);
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Verify(s => s.Update(It.IsAny<MovieEditionSlot>()), Times.Never);
+        }
+
+        [Test]
+        public void reconcile_should_not_update_already_correctly_linked_slot()
+        {
+            var slot = new MovieEditionSlot
+            {
+                Id = 13,
+                MovieId = MovieId,
+                EditionName = "Extended Edition",
+                MovieFileId = MovieFileId
+            };
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Setup(s => s.FindByMovieId(MovieId))
+                .Returns(new List<MovieEditionSlot> { slot });
+
+            Subject.ReconcileForMovie(MovieId, new List<MovieFile> { BuildMovieFile("Extended Edition") });
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Verify(s => s.Update(It.IsAny<MovieEditionSlot>()), Times.Never);
+        }
+
+        [Test]
+        public void reconcile_should_clear_stale_slot_reference_when_file_not_in_list()
+        {
+            const int staleFileId = 999;
+            var slot = new MovieEditionSlot
+            {
+                Id = 14,
+                MovieId = MovieId,
+                EditionName = "Extended Edition",
+                MovieFileId = staleFileId
+            };
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Setup(s => s.FindByMovieId(MovieId))
+                .Returns(new List<MovieEditionSlot> { slot });
+
+            // Pass an empty list — the file is gone
+            Subject.ReconcileForMovie(MovieId, new List<MovieFile>());
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Verify(s => s.Update(It.Is<MovieEditionSlot>(x => x.Id == slot.Id && x.MovieFileId == null)), Times.Once);
+        }
+
+        [Test]
+        public void reconcile_should_skip_files_without_edition()
+        {
+            var slot = new MovieEditionSlot
+            {
+                Id = 15,
+                MovieId = MovieId,
+                EditionName = "Director's Cut",
+                MovieFileId = null
+            };
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Setup(s => s.FindByMovieId(MovieId))
+                .Returns(new List<MovieEditionSlot> { slot });
+
+            Subject.ReconcileForMovie(MovieId, new List<MovieFile> { BuildMovieFile("") });
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Verify(s => s.Update(It.IsAny<MovieEditionSlot>()), Times.Never);
+        }
+
+        [Test]
+        public void reconcile_should_do_nothing_when_no_slots_exist()
+        {
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Setup(s => s.FindByMovieId(MovieId))
+                .Returns(new List<MovieEditionSlot>());
+
+            Subject.ReconcileForMovie(MovieId, new List<MovieFile> { BuildMovieFile("Director's Cut") });
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Verify(s => s.Update(It.IsAny<MovieEditionSlot>()), Times.Never);
+        }
     }
 }

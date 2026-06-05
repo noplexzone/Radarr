@@ -16,6 +16,7 @@ using NzbDrone.Core.MediaFiles.MovieImport;
 using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.RootFolders;
 
 namespace NzbDrone.Core.MediaFiles
@@ -41,6 +42,7 @@ namespace NzbDrone.Core.MediaFiles
         private readonly IMediaFileTableCleanupService _mediaFileTableCleanupService;
         private readonly IRootFolderService _rootFolderService;
         private readonly IUpdateMediaInfo _updateMediaInfoService;
+        private readonly IMovieEditionSlotService _editionSlotService;
         private readonly IEventAggregator _eventAggregator;
         private readonly Logger _logger;
 
@@ -53,6 +55,7 @@ namespace NzbDrone.Core.MediaFiles
                                IMediaFileTableCleanupService mediaFileTableCleanupService,
                                IRootFolderService rootFolderService,
                                IUpdateMediaInfo updateMediaInfoService,
+                               IMovieEditionSlotService editionSlotService,
                                IEventAggregator eventAggregator,
                                Logger logger)
         {
@@ -65,6 +68,7 @@ namespace NzbDrone.Core.MediaFiles
             _mediaFileTableCleanupService = mediaFileTableCleanupService;
             _rootFolderService = rootFolderService;
             _updateMediaInfoService = updateMediaInfoService;
+            _editionSlotService = editionSlotService;
             _eventAggregator = eventAggregator;
             _logger = logger;
         }
@@ -142,6 +146,11 @@ namespace NzbDrone.Core.MediaFiles
             _logger.Trace("Import decisions complete for: {0} [{1}]", movie, decisionsStopwatch.Elapsed);
             _importApprovedMovies.Import(decisions, false);
 
+            // Refresh the movie file list after importing unmapped files so edition-slot
+            // reconciliation sees files added during this scan and does not clear those
+            // newly-linked slot references as stale.
+            movieFiles = _mediaFileService.GetFilesByMovie(movie.Id);
+
             // Update existing files that have a different file size
             var fileInfoStopwatch = Stopwatch.StartNew();
             var filesToUpdate = new List<MovieFile>();
@@ -172,6 +181,8 @@ namespace NzbDrone.Core.MediaFiles
 
             fileInfoStopwatch.Stop();
             _logger.Trace("Reprocessing existing files complete for: {0} [{1}]", movie, decisionsStopwatch.Elapsed);
+
+            _editionSlotService.ReconcileForMovie(movie.Id, movieFiles);
 
             var filesOnDisk = GetNonVideoFiles(movie.Path);
             var possibleExtraFiles = FilterPaths(movie.Path, filesOnDisk);
