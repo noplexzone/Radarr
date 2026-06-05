@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using NLog;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
@@ -13,6 +12,7 @@ using NzbDrone.Core.MediaFiles.Commands;
 using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Messaging.Events;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Qualities;
 
@@ -211,10 +211,8 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
             return importResults;
         }
 
-        private static readonly Regex _editionNormRegex = new Regex(@"[\s\-_.']+", RegexOptions.Compiled);
-
         private static string NormalizeEdition(string edition) =>
-            edition.IsNullOrWhiteSpace() ? string.Empty : _editionNormRegex.Replace(edition, string.Empty).ToLowerInvariant();
+            EditionNormalizer.Normalize(edition);
 
         private string GetOriginalFilePath(DownloadClientItem downloadClientItem, LocalMovie localMovie)
         {

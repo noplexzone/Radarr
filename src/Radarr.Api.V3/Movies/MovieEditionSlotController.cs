@@ -65,15 +65,20 @@ namespace Radarr.Api.V3.Movies
             var movie = _movieService.GetMovie(movieId);
             var filesById = _mediaFileService.GetMovies(fileIds).ToDictionary(f => f.Id);
 
-            for (var i = 0; i < slots.Count; i++)
+            var resourcesById = resources.ToDictionary(r => r.Id);
+
+            foreach (var slot in slots)
             {
-                var slot = slots[i];
                 if (!slot.MovieFileId.HasValue || !filesById.TryGetValue(slot.MovieFileId.Value, out var file))
                 {
                     continue;
                 }
 
-                var resource = resources[i];
+                if (!resourcesById.TryGetValue(slot.Id, out var resource))
+                {
+                    continue;
+                }
+
                 resource.MovieFileQuality = file.Quality;
 
                 var effectiveProfile = slot.QualityProfileId.HasValue

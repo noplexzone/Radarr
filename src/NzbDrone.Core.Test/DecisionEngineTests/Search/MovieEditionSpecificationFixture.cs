@@ -95,5 +95,28 @@ namespace NzbDrone.Core.Test.DecisionEngineTests.Search
             var remote = BuildRemote(parsedEdition: null, releaseTitle: releaseTitle);
             Subject.IsSatisfiedBy(remote, EditionCriteria(searchTerm)).Accepted.Should().BeTrue();
         }
+
+        // Bug 6 – exact edition matching: substring must not produce false positives
+
+        [TestCase("IMAX Enhanced", "IMAX")]
+        [TestCase("IMAX", "IMAX Enhanced")]
+        [TestCase("Extended Edition", "Extended")]
+        [TestCase("Extended", "Extended Edition")]
+        public void should_reject_when_parsed_edition_is_substring_or_superstring_of_wanted(string parsedEdition, string searchTerm)
+        {
+            var remote = BuildRemote(parsedEdition: parsedEdition);
+            var result = Subject.IsSatisfiedBy(remote, EditionCriteria(searchTerm));
+            result.Accepted.Should().BeFalse();
+            result.Reason.Should().Be(DownloadRejectionReason.WrongEdition);
+        }
+
+        [TestCase("IMAX", "IMAX")]
+        [TestCase("Extended Edition", "Extended Edition")]
+        [TestCase("Director's Cut", "Directors Cut")]
+        public void should_accept_when_parsed_edition_exactly_matches_wanted(string parsedEdition, string searchTerm)
+        {
+            var remote = BuildRemote(parsedEdition: parsedEdition);
+            Subject.IsSatisfiedBy(remote, EditionCriteria(searchTerm)).Accepted.Should().BeTrue();
+        }
     }
 }

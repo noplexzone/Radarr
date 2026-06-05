@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.Events;
@@ -27,7 +26,6 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
         IHandle<MovieFileImportedEvent>,
         IHandle<MovieFileDeletedEvent>
     {
-        private static readonly Regex NormalizeEditionRegex = new Regex(@"[\s\-_.']+", RegexOptions.Compiled);
         private readonly IMovieEditionSlotRepository _repo;
 
         public MovieEditionSlotService(IMovieEditionSlotRepository repo)
@@ -129,11 +127,11 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
             // Link each unlinked edition file to its matching slot (conservative: no slot creation).
             foreach (var file in existingFiles.Where(f => !f.Edition.IsNullOrWhiteSpace() && !linkedFileIds.Contains(f.Id)))
             {
-                var normalizedEdition = NormalizeEditionForMatch(file.Edition);
+                var normalizedEdition = EditionNormalizer.Normalize(file.Edition);
                 var matchingSlot = slots.FirstOrDefault(s =>
                     s.MovieFileId == null &&
-                    (NormalizeEditionForMatch(s.EditionName) == normalizedEdition ||
-                     NormalizeEditionForMatch(s.SearchTerm) == normalizedEdition));
+                    (EditionNormalizer.Normalize(s.EditionName) == normalizedEdition ||
+                     EditionNormalizer.Normalize(s.SearchTerm) == normalizedEdition));
 
                 if (matchingSlot == null)
                 {
@@ -154,10 +152,10 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
             }
 
             var slots = _repo.FindByMovieId(movieFile.MovieId);
-            var normalizedEdition = NormalizeEditionForMatch(movieFile.Edition);
+            var normalizedEdition = EditionNormalizer.Normalize(movieFile.Edition);
             var matchingSlot = slots.FirstOrDefault(slot =>
-                NormalizeEditionForMatch(slot.EditionName) == normalizedEdition ||
-                NormalizeEditionForMatch(slot.SearchTerm) == normalizedEdition);
+                EditionNormalizer.Normalize(slot.EditionName) == normalizedEdition ||
+                EditionNormalizer.Normalize(slot.SearchTerm) == normalizedEdition);
 
             if (matchingSlot == null)
             {
@@ -175,16 +173,6 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
 
             matchingSlot.MovieFileId = movieFile.Id;
             _repo.Update(matchingSlot);
-        }
-
-        private static string NormalizeEditionForMatch(string value)
-        {
-            if (value.IsNullOrWhiteSpace())
-            {
-                return string.Empty;
-            }
-
-            return NormalizeEditionRegex.Replace(value, string.Empty).ToLowerInvariant();
         }
 
         private static void Normalize(MovieEditionSlot slot)

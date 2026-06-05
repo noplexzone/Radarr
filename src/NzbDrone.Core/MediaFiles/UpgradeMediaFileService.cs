@@ -1,6 +1,5 @@
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 using NLog;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
@@ -17,8 +16,6 @@ namespace NzbDrone.Core.MediaFiles
 
     public class UpgradeMediaFileService : IUpgradeMediaFiles
     {
-        private static readonly Regex NormalizeEditionRegex = new Regex(@"[\s\-_.']+", RegexOptions.Compiled);
-
         private readonly IRecycleBinProvider _recycleBinProvider;
         private readonly IMediaFileService _mediaFileService;
         private readonly IMoveMovieFiles _movieFileMover;
@@ -115,31 +112,27 @@ namespace NzbDrone.Core.MediaFiles
 
                 if (matchingSlot == null && localMovie.Edition.IsNotNullOrWhiteSpace())
                 {
-                    var normalizedEdition = NormalizeEdition(localMovie.Edition);
+                    var normalizedEdition = EditionNormalizer.Normalize(localMovie.Edition);
                     matchingSlot = slots.FirstOrDefault(s =>
-                        NormalizeEdition(s.EditionName) == normalizedEdition ||
-                        NormalizeEdition(s.SearchTerm) == normalizedEdition);
+                        EditionNormalizer.Normalize(s.EditionName) == normalizedEdition ||
+                        EditionNormalizer.Normalize(s.SearchTerm) == normalizedEdition);
                 }
 
                 if (matchingSlot?.MovieFileId > 0)
                 {
-                    return _mediaFileService.GetMovie(matchingSlot.MovieFileId.Value);
+                    var file = (_mediaFileService.GetMovies(new[] { matchingSlot.MovieFileId.Value }) ?? Enumerable.Empty<MovieFile>()).FirstOrDefault();
+                    if (file == null)
+                    {
+                        _logger.Warn("Edition slot {0} references movie file {1} which no longer exists; skipping replacement", matchingSlot.Id, matchingSlot.MovieFileId.Value);
+                    }
+
+                    return file;
                 }
 
                 return null;
             }
 
             return localMovie.Movie.MovieFileId > 0 ? localMovie.Movie.MovieFile : null;
-        }
-
-        private static string NormalizeEdition(string value)
-        {
-            if (value.IsNullOrWhiteSpace())
-            {
-                return string.Empty;
-            }
-
-            return NormalizeEditionRegex.Replace(value, string.Empty).ToLowerInvariant();
         }
     }
 }

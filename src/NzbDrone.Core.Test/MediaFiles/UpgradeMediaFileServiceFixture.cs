@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using FizzWare.NBuilder;
 using FluentAssertions;
 using Moq;
@@ -150,8 +151,8 @@ namespace NzbDrone.Core.Test.MediaFiles
                   .Returns(new List<MovieEditionSlot> { slotA });
 
             Mocker.GetMock<IMediaFileService>()
-                  .Setup(s => s.GetMovie(1))
-                  .Returns(slotAFile);
+                  .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
+                  .Returns(new List<MovieFile> { slotAFile });
 
             Subject.UpgradeMovieFile(_movieFile, _localMovie);
 
@@ -176,8 +177,8 @@ namespace NzbDrone.Core.Test.MediaFiles
                   .Returns(new List<MovieEditionSlot> { slotA });
 
             Mocker.GetMock<IMediaFileService>()
-                  .Setup(s => s.GetMovie(1))
-                  .Returns(slotAFile);
+                  .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
+                  .Returns(new List<MovieFile> { slotAFile });
 
             Subject.UpgradeMovieFile(_movieFile, _localMovie);
 
@@ -240,8 +241,8 @@ namespace NzbDrone.Core.Test.MediaFiles
                   .Returns(new List<MovieEditionSlot> { slot });
 
             Mocker.GetMock<IMediaFileService>()
-                  .Setup(s => s.GetMovie(5))
-                  .Returns(slotFile);
+                  .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
+                  .Returns(new List<MovieFile> { slotFile });
 
             var result = Subject.UpgradeMovieFile(_movieFile, _localMovie);
 
@@ -263,8 +264,8 @@ namespace NzbDrone.Core.Test.MediaFiles
                   .Returns(new List<MovieEditionSlot> { slot });
 
             Mocker.GetMock<IMediaFileService>()
-                  .Setup(s => s.GetMovie(10))
-                  .Returns(slotFile);
+                  .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
+                  .Returns(new List<MovieFile> { slotFile });
 
             var result = Subject.UpgradeMovieFile(_movieFile, _localMovie);
 
@@ -288,14 +289,14 @@ namespace NzbDrone.Core.Test.MediaFiles
                   .Returns(new List<MovieEditionSlot> { slotA, slotB });
 
             Mocker.GetMock<IMediaFileService>()
-                  .Setup(s => s.GetMovie(20))
-                  .Returns(slotBFile);
+                  .Setup(s => s.GetMovies(It.Is<IEnumerable<int>>(ids => ids.Contains(20))))
+                  .Returns(new List<MovieFile> { slotBFile });
 
             var result = Subject.UpgradeMovieFile(_movieFile, _localMovie);
 
             result.OldFiles.Should().ContainSingle(f => f.MovieFile.Id == 20);
             Mocker.GetMock<IMediaFileService>()
-                  .Verify(v => v.GetMovie(10), Times.Never);
+                  .Verify(v => v.GetMovies(It.Is<IEnumerable<int>>(ids => ids.Contains(10))), Times.Never);
         }
 
         [Test]
@@ -315,7 +316,7 @@ namespace NzbDrone.Core.Test.MediaFiles
 
             result.OldFiles.Should().BeEmpty();
             Mocker.GetMock<IMediaFileService>()
-                  .Verify(v => v.GetMovie(5), Times.Never);
+                  .Verify(v => v.GetMovies(It.IsAny<IEnumerable<int>>()), Times.Never);
             Mocker.GetMock<IMediaFileService>()
                   .Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
         }
@@ -332,6 +333,30 @@ namespace NzbDrone.Core.Test.MediaFiles
                   .Returns(new List<MovieEditionSlot> { slot });
 
             Subject.UpgradeMovieFile(_movieFile, _localMovie);
+
+            Mocker.GetMock<IMediaFileService>()
+                  .Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+        }
+
+        [Test]
+        public void should_not_throw_and_not_delete_when_slot_movie_file_id_is_stale()
+        {
+            // Slot holds a MovieFileId that no longer exists in the database (race / missed delete event).
+            // Import must proceed without aborting the whole operation.
+            _localMovie.Edition = "Director's Cut";
+
+            var slot = new MovieEditionSlot { Id = 5, MovieId = _localMovie.Movie.Id, EditionName = "Director's Cut", MovieFileId = 99 };
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
+                  .Returns(new List<MovieEditionSlot> { slot });
+
+            // GetMovies returns empty — file record is gone
+            Mocker.GetMock<IMediaFileService>()
+                  .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
+                  .Returns(new List<MovieFile>());
+
+            Assert.DoesNotThrow(() => Subject.UpgradeMovieFile(_movieFile, _localMovie));
 
             Mocker.GetMock<IMediaFileService>()
                   .Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
