@@ -96,5 +96,42 @@ namespace NzbDrone.Core.Test.HistoryTests
             Mocker.GetMock<IHistoryRepository>()
                 .Verify(v => v.Insert(It.Is<MovieHistory>(h => h.SourceTitle == Path.GetFileNameWithoutExtension(localMovie.Path))));
         }
+
+        [Test]
+        public void should_store_movie_edition_slot_id_for_grabbed_release()
+        {
+            var remoteMovie = new RemoteMovie
+            {
+                Movie = Builder<Movie>.CreateNew().With(m => m.Id = 12).Build(),
+                ParsedMovieInfo = new ParsedMovieInfo { Quality = new QualityModel(Quality.WEBDL1080p) },
+                Release = new ReleaseInfo { Title = "Movie.2024.Directors.Cut.1080p", Indexer = "TestIndexer" },
+                MovieEditionSlotId = 42
+            };
+
+            Subject.Handle(new MovieGrabbedEvent(remoteMovie) { DownloadId = "download-1" });
+
+            Mocker.GetMock<IHistoryRepository>()
+                .Verify(v => v.Insert(It.Is<MovieHistory>(h =>
+                    h.EventType == MovieHistoryEventType.Grabbed &&
+                    h.Data[MovieHistory.MOVIE_EDITION_SLOT_ID] == "42")));
+        }
+
+        [Test]
+        public void should_not_store_movie_edition_slot_id_for_normal_grabbed_release()
+        {
+            var remoteMovie = new RemoteMovie
+            {
+                Movie = Builder<Movie>.CreateNew().With(m => m.Id = 12).Build(),
+                ParsedMovieInfo = new ParsedMovieInfo { Quality = new QualityModel(Quality.WEBDL1080p) },
+                Release = new ReleaseInfo { Title = "Movie.2024.1080p", Indexer = "TestIndexer" }
+            };
+
+            Subject.Handle(new MovieGrabbedEvent(remoteMovie) { DownloadId = "download-1" });
+
+            Mocker.GetMock<IHistoryRepository>()
+                .Verify(v => v.Insert(It.Is<MovieHistory>(h =>
+                    h.EventType == MovieHistoryEventType.Grabbed &&
+                    !h.Data.ContainsKey(MovieHistory.MOVIE_EDITION_SLOT_ID))));
+        }
     }
 }

@@ -148,6 +148,16 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
         }
 
         [Test]
+        public void should_copy_movie_edition_slot_id_from_search_criteria_to_remote_movie()
+        {
+            GivenSpecifications();
+
+            var result = Subject.GetSearchDecision(_reports, new MovieSearchCriteria { MovieEditionSlotId = 42 });
+
+            result.Single().RemoteMovie.MovieEditionSlotId.Should().Be(42);
+        }
+
+        [Test]
         public void should_not_attempt_to_make_decision_if_series_is_unknown()
         {
             GivenSpecifications(_pass1, _pass2, _pass3);

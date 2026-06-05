@@ -93,15 +93,33 @@ namespace NzbDrone.Core.MediaFiles
 
         // When importing an edition-specific file, only replace the file that belongs to the
         // matching edition slot — never touch a different slot's file.
+        // Slot ID (from grab history) wins over fuzzy edition-name matching.
         private MovieFile ResolveExistingFile(LocalMovie localMovie)
         {
-            if (localMovie.Edition.IsNotNullOrWhiteSpace())
+            if (localMovie.MovieEditionSlotId.HasValue || localMovie.Edition.IsNotNullOrWhiteSpace())
             {
                 var slots = _editionSlotService.GetForMovie(localMovie.Movie.Id);
-                var normalizedEdition = NormalizeEdition(localMovie.Edition);
-                var matchingSlot = slots.FirstOrDefault(s =>
-                    NormalizeEdition(s.EditionName) == normalizedEdition ||
-                    NormalizeEdition(s.SearchTerm) == normalizedEdition);
+
+                MovieEditionSlot matchingSlot = null;
+
+                if (localMovie.MovieEditionSlotId.HasValue)
+                {
+                    matchingSlot = slots.FirstOrDefault(s => s.Id == localMovie.MovieEditionSlotId.Value);
+
+                    if (matchingSlot == null)
+                    {
+                        _logger.Warn("Movie edition slot {0} was specified for import of '{1}', but no matching slot exists for movie {2}; no existing file will be replaced", localMovie.MovieEditionSlotId.Value, localMovie.Path, localMovie.Movie.Id);
+                        return null;
+                    }
+                }
+
+                if (matchingSlot == null && localMovie.Edition.IsNotNullOrWhiteSpace())
+                {
+                    var normalizedEdition = NormalizeEdition(localMovie.Edition);
+                    matchingSlot = slots.FirstOrDefault(s =>
+                        NormalizeEdition(s.EditionName) == normalizedEdition ||
+                        NormalizeEdition(s.SearchTerm) == normalizedEdition);
+                }
 
                 if (matchingSlot?.MovieFileId > 0)
                 {

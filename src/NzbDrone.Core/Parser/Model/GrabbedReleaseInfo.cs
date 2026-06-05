@@ -13,6 +13,7 @@ namespace NzbDrone.Core.Parser.Model
         public IndexerFlags IndexerFlags { get; set; }
 
         public List<int> MovieIds { get; set; }
+        public int? MovieEditionSlotId { get; set; }
 
         public GrabbedReleaseInfo(List<MovieHistory> grabbedHistories)
         {
@@ -29,6 +30,11 @@ namespace NzbDrone.Core.Parser.Model
             Size = size;
             IndexerFlags = indexerFlags;
             MovieIds = movieIds;
+
+            if (int.TryParse(grabbedHistory.Data.GetValueOrDefault(MovieHistory.MOVIE_EDITION_SLOT_ID), out var slotId))
+            {
+                MovieEditionSlotId = slotId;
+            }
         }
     }
 }

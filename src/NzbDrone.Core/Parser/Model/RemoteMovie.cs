@@ -19,6 +19,7 @@ namespace NzbDrone.Core.Parser.Model
         public TorrentSeedConfiguration SeedConfiguration { get; set; }
         public List<Language> Languages { get; set; }
         public ReleaseSourceType ReleaseSource { get; set; }
+        public int? MovieEditionSlotId { get; set; }
 
         public RemoteMovie()
         {

@@ -247,5 +247,94 @@ namespace NzbDrone.Core.Test.MediaFiles
 
             result.OldFiles.Should().ContainSingle(f => f.MovieFile.Id == 5);
         }
+
+        // --- Slot ID-based resolution tests (slot id wins over edition name) ---
+
+        [Test]
+        public void should_resolve_slot_by_id_when_movie_edition_slot_id_set()
+        {
+            _localMovie.MovieEditionSlotId = 7;
+
+            var slot = new MovieEditionSlot { Id = 7, MovieId = _localMovie.Movie.Id, EditionName = "IMAX", MovieFileId = 10 };
+            var slotFile = new MovieFile { Id = 10, RelativePath = "IMAX.mkv" };
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
+                  .Returns(new List<MovieEditionSlot> { slot });
+
+            Mocker.GetMock<IMediaFileService>()
+                  .Setup(s => s.GetMovie(10))
+                  .Returns(slotFile);
+
+            var result = Subject.UpgradeMovieFile(_movieFile, _localMovie);
+
+            result.OldFiles.Should().ContainSingle(f => f.MovieFile.Id == 10);
+        }
+
+        [Test]
+        public void should_prefer_slot_id_over_edition_name_when_both_set()
+        {
+            // slot id = 2 (IMAX), edition name = "Director's Cut" (slot id = 1)
+            // slot id should win
+            _localMovie.MovieEditionSlotId = 2;
+            _localMovie.Edition = "Director's Cut";
+
+            var slotA = new MovieEditionSlot { Id = 1, MovieId = _localMovie.Movie.Id, EditionName = "Director's Cut", MovieFileId = 10 };
+            var slotB = new MovieEditionSlot { Id = 2, MovieId = _localMovie.Movie.Id, EditionName = "IMAX", MovieFileId = 20 };
+            var slotBFile = new MovieFile { Id = 20, RelativePath = "IMAX.mkv" };
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
+                  .Returns(new List<MovieEditionSlot> { slotA, slotB });
+
+            Mocker.GetMock<IMediaFileService>()
+                  .Setup(s => s.GetMovie(20))
+                  .Returns(slotBFile);
+
+            var result = Subject.UpgradeMovieFile(_movieFile, _localMovie);
+
+            result.OldFiles.Should().ContainSingle(f => f.MovieFile.Id == 20);
+            Mocker.GetMock<IMediaFileService>()
+                  .Verify(v => v.GetMovie(10), Times.Never);
+        }
+
+        [Test]
+        public void should_not_fall_back_to_edition_name_when_slot_id_not_found()
+        {
+            // slot id points to a non-existent slot; explicit slot context wins over fuzzy name matching.
+            _localMovie.MovieEditionSlotId = 99;
+            _localMovie.Edition = "Director's Cut";
+
+            var slot = new MovieEditionSlot { Id = 1, MovieId = _localMovie.Movie.Id, EditionName = "Director's Cut", MovieFileId = 5 };
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
+                  .Returns(new List<MovieEditionSlot> { slot });
+
+            var result = Subject.UpgradeMovieFile(_movieFile, _localMovie);
+
+            result.OldFiles.Should().BeEmpty();
+            Mocker.GetMock<IMediaFileService>()
+                  .Verify(v => v.GetMovie(5), Times.Never);
+            Mocker.GetMock<IMediaFileService>()
+                  .Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+        }
+
+        [Test]
+        public void should_not_delete_any_file_when_slot_id_set_but_slot_has_no_file()
+        {
+            _localMovie.MovieEditionSlotId = 3;
+
+            var slot = new MovieEditionSlot { Id = 3, MovieId = _localMovie.Movie.Id, EditionName = "Extended", MovieFileId = null };
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
+                  .Returns(new List<MovieEditionSlot> { slot });
+
+            Subject.UpgradeMovieFile(_movieFile, _localMovie);
+
+            Mocker.GetMock<IMediaFileService>()
+                  .Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+        }
     }
 }

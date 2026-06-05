@@ -15,6 +15,7 @@ namespace NzbDrone.Core.History
         public const string RELEASE_GROUP = "releaseGroup";
         public const string SIZE = "size";
         public const string INDEXER = "indexer";
+        public const string MOVIE_EDITION_SLOT_ID = "movieEditionSlotId";
 
         public MovieHistory()
         {

@@ -163,6 +163,11 @@ namespace NzbDrone.Core.History
                 history.Data.Add("ReleaseHash", message.Movie.ParsedMovieInfo.ReleaseHash);
             }
 
+            if (message.Movie.MovieEditionSlotId.HasValue)
+            {
+                history.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, message.Movie.MovieEditionSlotId.Value.ToString());
+            }
+
             if (message.Movie.Release is TorrentInfo torrentRelease)
             {
                 history.Data.Add("TorrentInfoHash", torrentRelease.InfoHash);

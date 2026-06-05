@@ -157,6 +157,11 @@ namespace NzbDrone.Core.DecisionEngine
 
                     decision.RemoteMovie.ReleaseSource = source;
 
+                    if (searchCriteria is MovieSearchCriteria movieCriteria)
+                    {
+                        decision.RemoteMovie.MovieEditionSlotId = movieCriteria.MovieEditionSlotId;
+                    }
+
                     if (decision.Rejections.Any())
                     {
                         _logger.Debug("Release '{0}' from '{1}' rejected for the following reasons: {2}", report.Title, report.Indexer, string.Join(", ", decision.Rejections));
