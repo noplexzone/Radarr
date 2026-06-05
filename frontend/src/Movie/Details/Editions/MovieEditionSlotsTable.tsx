@@ -1,7 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { createSelector } from 'reselect';
+import { QualityProfilesAppState } from 'App/State/SettingsAppState';
 import * as commandNames from 'Commands/commandNames';
 import FieldSet from 'Components/FieldSet';
+import EnhancedSelectInput, {
+  EnhancedSelectInputValue,
+} from 'Components/Form/Select/EnhancedSelectInput';
 import Icon from 'Components/Icon';
 import SpinnerIconButton from 'Components/Link/SpinnerIconButton';
 import LoadingIndicator from 'Components/Loading/LoadingIndicator';
@@ -16,12 +21,73 @@ import MovieEditionSlotInteractiveSearchModal from 'Movie/Search/MovieEditionSlo
 import { QualityModel } from 'Quality/Quality';
 import { executeCommand } from 'Store/Actions/commandActions';
 import createCommandsSelector from 'Store/Selectors/createCommandsSelector';
+import createSortedSectionSelector from 'Store/Selectors/createSortedSectionSelector';
 import CustomFormat from 'typings/CustomFormat';
+import { EnhancedSelectInputChanged } from 'typings/inputs';
+import QualityProfile from 'typings/QualityProfile';
+import sortByProp from 'Utilities/Array/sortByProp';
 import { findCommand, isCommandExecuting } from 'Utilities/Command';
 import createAjaxRequest from 'Utilities/createAjaxRequest';
 import formatCustomFormatScore from 'Utilities/Number/formatCustomFormatScore';
 import translate from 'Utilities/String/translate';
 import styles from './MovieEditionSlotsTable.css';
+
+const SLOT_DEFAULT_PROFILE_KEY = 'slot-default' as const;
+
+type SlotQualityProfileValue = number | typeof SLOT_DEFAULT_PROFILE_KEY;
+
+const selectQualityProfileItems = createSelector(
+  createSortedSectionSelector<QualityProfile, QualityProfilesAppState>(
+    'settings.qualityProfiles',
+    sortByProp<QualityProfile, 'name'>('name')
+  ),
+  (section: QualityProfilesAppState) => section.items
+);
+
+interface SlotQualityProfileSelectProps {
+  value: number | null;
+  onChange: (value: number | null) => void;
+}
+
+function SlotQualityProfileSelect({
+  value,
+  onChange,
+}: SlotQualityProfileSelectProps) {
+  const profiles = useSelector(selectQualityProfileItems);
+
+  const options = useMemo<EnhancedSelectInputValue<SlotQualityProfileValue>[]>(
+    () => [
+      {
+        key: SLOT_DEFAULT_PROFILE_KEY,
+        get value() {
+          return translate('Default');
+        },
+      },
+      ...profiles.map((p) => ({ key: p.id, value: p.name })),
+    ],
+    [profiles]
+  );
+
+  const handleChange = useCallback(
+    ({
+      value: newValue,
+    }: EnhancedSelectInputChanged<SlotQualityProfileValue>) => {
+      onChange(
+        newValue === SLOT_DEFAULT_PROFILE_KEY ? null : (newValue as number)
+      );
+    },
+    [onChange]
+  );
+
+  return (
+    <EnhancedSelectInput
+      name="qualityProfileId"
+      value={value ?? SLOT_DEFAULT_PROFILE_KEY}
+      values={options}
+      onChange={handleChange}
+    />
+  );
+}
 
 interface MovieEditionSlot {
   id: number;
@@ -69,8 +135,8 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
 
   const [editionName, setEditionName] = useState(slot.editionName);
   const [searchTerm, setSearchTerm] = useState(slot.searchTerm ?? '');
-  const [qualityProfileId, setQualityProfileId] = useState(
-    slot.qualityProfileId?.toString() ?? ''
+  const [qualityProfileId, setQualityProfileId] = useState<number | null>(
+    slot.qualityProfileId
   );
   const [minimumCustomFormatScore, setMinimumCustomFormatScore] = useState(
     slot.minimumCustomFormatScore?.toString() ?? ''
@@ -80,7 +146,7 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
   useEffect(() => {
     setEditionName(slot.editionName);
     setSearchTerm(slot.searchTerm ?? '');
-    setQualityProfileId(slot.qualityProfileId?.toString() ?? '');
+    setQualityProfileId(slot.qualityProfileId);
     setMinimumCustomFormatScore(
       slot.minimumCustomFormatScore?.toString() ?? ''
     );
@@ -107,21 +173,15 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
   }, [slot, onInteractiveSearchPress]);
 
   const handleSavePress = useCallback(() => {
-    const parsedQualityProfileId = qualityProfileId.trim()
-      ? parseInt(qualityProfileId)
-      : null;
-    const parsedMinimumCustomFormatScore = minimumCustomFormatScore.trim()
-      ? parseInt(minimumCustomFormatScore)
-      : null;
+    const rawScore = minimumCustomFormatScore.trim();
+    const parsedScore = rawScore ? parseInt(rawScore) : null;
 
     onSave(
       slot,
       editionName,
       searchTerm,
-      Number.isNaN(parsedQualityProfileId) ? null : parsedQualityProfileId,
-      Number.isNaN(parsedMinimumCustomFormatScore)
-        ? null
-        : parsedMinimumCustomFormatScore
+      qualityProfileId,
+      Number.isNaN(parsedScore) ? null : parsedScore
     );
   }, [
     slot,
@@ -146,12 +206,9 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
     []
   );
 
-  const handleQualityProfileIdChange = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      setQualityProfileId(event.target.value);
-    },
-    []
-  );
+  const handleQualityProfileIdChange = useCallback((value: number | null) => {
+    setQualityProfileId(value);
+  }, []);
 
   const handleMinimumCustomFormatScoreChange = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -259,11 +316,8 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
       </TableRowCell>
 
       <TableRowCell>
-        <input
-          className={styles.smallEditInput}
-          type="number"
+        <SlotQualityProfileSelect
           value={qualityProfileId}
-          placeholder={translate('Default')}
           onChange={handleQualityProfileIdChange}
         />
       </TableRowCell>
