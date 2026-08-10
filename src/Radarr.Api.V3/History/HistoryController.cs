@@ -9,6 +9,7 @@ using NzbDrone.Core.DecisionEngine.Specifications;
 using NzbDrone.Core.Download;
 using NzbDrone.Core.History;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using Radarr.Api.V3.Movies;
 using Radarr.Http;
 using Radarr.Http.Extensions;
@@ -23,18 +24,21 @@ namespace Radarr.Api.V3.History
         private readonly ICustomFormatCalculationService _formatCalculator;
         private readonly IUpgradableSpecification _upgradableSpecification;
         private readonly IFailedDownloadService _failedDownloadService;
+        private readonly IMovieEditionSlotService _movieEditionSlotService;
 
         public HistoryController(IHistoryService historyService,
                              IMovieService movieService,
                              ICustomFormatCalculationService formatCalculator,
                              IUpgradableSpecification upgradableSpecification,
-                             IFailedDownloadService failedDownloadService)
+                             IFailedDownloadService failedDownloadService,
+                             IMovieEditionSlotService movieEditionSlotService)
         {
             _historyService = historyService;
             _movieService = movieService;
             _formatCalculator = formatCalculator;
             _upgradableSpecification = upgradableSpecification;
             _failedDownloadService = failedDownloadService;
+            _movieEditionSlotService = movieEditionSlotService;
         }
 
         protected HistoryResource MapToResource(MovieHistory model, bool includeMovie)
@@ -90,21 +94,53 @@ namespace Radarr.Api.V3.History
                 pagingSpec.FilterExpressions.Add(h => movieIds.Contains(h.MovieId));
             }
 
-            return pagingSpec.ApplyToPage(h => _historyService.Paged(pagingSpec, languages, quality), h => MapToResource(h, includeMovie));
+            var page = pagingSpec.ApplyToPage(h => _historyService.Paged(pagingSpec, languages, quality), h => MapToResource(h, includeMovie));
+            EnrichMovieEditionSlotNames(page.Records);
+
+            return page;
         }
 
         [HttpGet("since")]
         [Produces("application/json")]
         public List<HistoryResource> GetHistorySince(DateTime date, MovieHistoryEventType? eventType = null, bool includeMovie = false)
         {
-            return _historyService.Since(date, eventType).Select(h => MapToResource(h, includeMovie)).ToList();
+            var resources = _historyService.Since(date, eventType).Select(h => MapToResource(h, includeMovie)).ToList();
+            EnrichMovieEditionSlotNames(resources);
+
+            return resources;
         }
 
         [HttpGet("movie")]
         [Produces("application/json")]
         public List<HistoryResource> GetMovieHistory(int movieId, MovieHistoryEventType? eventType = null, bool includeMovie = false)
         {
-            return _historyService.GetByMovieId(movieId, eventType).Select(h => MapToResource(h, includeMovie)).ToList();
+            var resources = _historyService.GetByMovieId(movieId, eventType).Select(h => MapToResource(h, includeMovie)).ToList();
+            EnrichMovieEditionSlotNames(resources);
+
+            return resources;
+        }
+
+        private void EnrichMovieEditionSlotNames(List<HistoryResource> resources)
+        {
+            var slotIds = resources
+                .Where(r => r.MovieEditionSlotId.HasValue)
+                .Select(r => r.MovieEditionSlotId.Value)
+                .Distinct()
+                .ToList();
+
+            if (!slotIds.Any())
+            {
+                return;
+            }
+
+            var slotsById = _movieEditionSlotService.GetByIds(slotIds);
+
+            foreach (var resource in resources.Where(r => r.MovieEditionSlotId.HasValue))
+            {
+                resource.MovieEditionSlotName = slotsById.TryGetValue(resource.MovieEditionSlotId.Value, out var slot)
+                    ? slot.EditionName
+                    : $"Edition slot #{resource.MovieEditionSlotId.Value}";
+            }
         }
 
         [HttpPost("failed/{id}")]

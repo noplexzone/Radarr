@@ -35,6 +35,8 @@ interface HistoryRowProps {
   sourceTitle: string;
   date: string;
   data: HistoryData;
+  movieEditionSlotId?: number;
+  movieEditionSlotName?: string;
   downloadId?: string;
   isMarkingAsFailed?: boolean;
   markAsFailedError?: object;
@@ -54,6 +56,8 @@ function HistoryRow(props: HistoryRowProps) {
     sourceTitle,
     date,
     data,
+    movieEditionSlotId,
+    movieEditionSlotName,
     downloadId,
     isMarkingAsFailed = false,
     markAsFailedError,
@@ -65,6 +69,9 @@ function HistoryRow(props: HistoryRowProps) {
   const movie = useMovie(movieId);
 
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
+  const editionSlotLabel = movieEditionSlotId
+    ? movieEditionSlotName ?? `Edition slot #${movieEditionSlotId}`
+    : null;
 
   const handleDetailsPress = useCallback(() => {
     setIsDetailsModalOpen(true);
@@ -118,6 +125,9 @@ function HistoryRow(props: HistoryRowProps) {
           return (
             <TableRowCell key={name}>
               <MovieTitleLink titleSlug={movie.titleSlug} title={movie.title} />
+              {editionSlotLabel ? (
+                <div className={styles.editionSlot}>{editionSlotLabel}</div>
+              ) : null}
             </TableRowCell>
           );
         }
@@ -198,7 +208,14 @@ function HistoryRow(props: HistoryRowProps) {
         }
 
         if (name === 'sourceTitle') {
-          return <TableRowCell key={name}>{sourceTitle}</TableRowCell>;
+          return (
+            <TableRowCell key={name}>
+              {sourceTitle}
+              {editionSlotLabel ? (
+                <div className={styles.editionSlot}>{editionSlotLabel}</div>
+              ) : null}
+            </TableRowCell>
+          );
         }
 
         if (name === 'details') {

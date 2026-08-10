@@ -4,6 +4,7 @@ interface CssExports {
   'customFormatScore': string;
   'details': string;
   'downloadClient': string;
+  'editionSlot': string;
   'indexer': string;
   'releaseGroup': string;
 }

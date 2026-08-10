@@ -25,6 +25,8 @@ namespace Radarr.Api.V3.History
         public MovieHistoryEventType EventType { get; set; }
 
         public Dictionary<string, string> Data { get; set; }
+        public int? MovieEditionSlotId { get; set; }
+        public string MovieEditionSlotName { get; set; }
 
         public MovieResource Movie { get; set; }
     }
@@ -58,7 +60,10 @@ namespace Radarr.Api.V3.History
 
                 EventType = model.EventType,
 
-                Data = model.Data
+                Data = model.Data,
+                MovieEditionSlotId = model.Data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var slotIdStr) && int.TryParse(slotIdStr, out var slotId)
+                    ? slotId
+                    : (int?)null
             };
         }
     }

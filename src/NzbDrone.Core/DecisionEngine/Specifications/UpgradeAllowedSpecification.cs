@@ -26,18 +26,12 @@ namespace NzbDrone.Core.DecisionEngine.Specifications
 
         public virtual DownloadSpecDecision IsSatisfiedBy(RemoteMovie subject, SearchCriteriaBase searchCriteria)
         {
-            var qualityProfile = subject.Movie.QualityProfile;
+            var qualityProfile = subject.SlotQualityProfile ?? subject.Movie.QualityProfile;
 
-            if (subject.Movie.MovieFileId != 0)
+            var file = subject.SlotContextStamped ? subject.SlotMovieFile : subject.Movie.MovieFile;
+
+            if (file != null)
             {
-                var file = subject.Movie.MovieFile;
-
-                if (file == null)
-                {
-                    _logger.Debug("File is no longer available, skipping this file.");
-                    return DownloadSpecDecision.Accept();
-                }
-
                 file.Movie = subject.Movie;
                 var customFormats = _formatService.ParseCustomFormat(file);
                 _logger.Debug("Comparing file quality with report. Existing file is {0} [{1}]", file.Quality, customFormats.ConcatToString());

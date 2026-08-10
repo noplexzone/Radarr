@@ -4,17 +4,20 @@ using System.Linq;
 using System.Threading.Tasks;
 using NLog;
 using NzbDrone.Common.Instrumentation.Extensions;
+using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.Datastore;
 using NzbDrone.Core.DecisionEngine;
 using NzbDrone.Core.Download;
+using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.MovieEditionSlots;
+using NzbDrone.Core.Profiles.Qualities;
 using NzbDrone.Core.Queue;
 
 namespace NzbDrone.Core.IndexerSearch
 {
-    public class MovieSearchService : IExecute<MoviesSearchCommand>, IExecute<MissingMoviesSearchCommand>, IExecute<CutoffUnmetMoviesSearchCommand>, IExecute<MovieEditionSearchCommand>
+    public class MovieSearchService : IExecute<MoviesSearchCommand>, IExecute<MissingMoviesSearchCommand>, IExecute<CutoffUnmetMoviesSearchCommand>, IExecute<MovieEditionSearchCommand>, IExecute<CutoffUnmetEditionSlotsSearchCommand>
     {
         private readonly IMovieService _movieService;
         private readonly IMovieCutoffService _movieCutoffService;
@@ -22,6 +25,9 @@ namespace NzbDrone.Core.IndexerSearch
         private readonly IProcessDownloadDecisions _processDownloadDecisions;
         private readonly IQueueService _queueService;
         private readonly IMovieEditionSlotService _movieEditionSlotService;
+        private readonly IMediaFileService _mediaFileService;
+        private readonly IQualityProfileService _qualityProfileService;
+        private readonly ICustomFormatCalculationService _customFormatCalculationService;
         private readonly Logger _logger;
 
         public MovieSearchService(IMovieService movieService,
@@ -30,6 +36,9 @@ namespace NzbDrone.Core.IndexerSearch
                                    IProcessDownloadDecisions processDownloadDecisions,
                                    IQueueService queueService,
                                    IMovieEditionSlotService movieEditionSlotService,
+                                   IMediaFileService mediaFileService,
+                                   IQualityProfileService qualityProfileService,
+                                   ICustomFormatCalculationService customFormatCalculationService,
                                    Logger logger)
         {
             _movieService = movieService;
@@ -38,6 +47,9 @@ namespace NzbDrone.Core.IndexerSearch
             _processDownloadDecisions = processDownloadDecisions;
             _queueService = queueService;
             _movieEditionSlotService = movieEditionSlotService;
+            _mediaFileService = mediaFileService;
+            _qualityProfileService = qualityProfileService;
+            _customFormatCalculationService = customFormatCalculationService;
             _logger = logger;
         }
 
@@ -66,10 +78,15 @@ namespace NzbDrone.Core.IndexerSearch
 
             var movies = _movieService.MoviesWithoutFiles(pagingSpec).Records.ToList();
 
-            var queue = _queueService.GetQueue().Where(q => q.Movie != null).Select(q => q.Movie.Id);
-            var missing = movies.Where(e => !queue.Contains(e.Id)).ToList();
+            var queue = _queueService.GetQueue();
+            var queuedMovieIds = queue.Where(q => q.Movie != null).Select(q => q.Movie.Id).ToHashSet();
+            var queuedEditionSlotIds = queue.Where(q => q.MovieEditionSlotId.HasValue).Select(q => q.MovieEditionSlotId.Value).ToHashSet();
+            var missing = movies.Where(e => !queuedMovieIds.Contains(e.Id)).ToList();
 
             SearchForBulkMovies(missing, message.Trigger == CommandTrigger.Manual).GetAwaiter().GetResult();
+
+            // Edition slots are independent: only an exact queued slot suppresses its search.
+            SearchMissingEditionSlots(queuedEditionSlotIds, message.Trigger == CommandTrigger.Manual).GetAwaiter().GetResult();
         }
 
         public void Execute(CutoffUnmetMoviesSearchCommand message)
@@ -86,10 +103,111 @@ namespace NzbDrone.Core.IndexerSearch
 
             var movies = _movieCutoffService.MoviesWhereCutoffUnmet(pagingSpec).Records.ToList();
 
-            var queue = _queueService.GetQueue().Where(q => q.Movie != null).Select(q => q.Movie.Id);
-            var missing = movies.Where(e => !queue.Contains(e.Id)).ToList();
+            var queue = _queueService.GetQueue();
+            var queuedMovieIds = queue.Where(q => q.Movie != null).Select(q => q.Movie.Id).ToHashSet();
+            var queuedEditionSlotIds = queue.Where(q => q.MovieEditionSlotId.HasValue).Select(q => q.MovieEditionSlotId.Value).ToHashSet();
+            var missing = movies.Where(e => !queuedMovieIds.Contains(e.Id)).ToList();
 
             SearchForBulkMovies(missing, message.Trigger == CommandTrigger.Manual).GetAwaiter().GetResult();
+            SearchCutoffUnmetEditionSlots(queuedEditionSlotIds, message.Trigger == CommandTrigger.Manual);
+        }
+
+        public void Execute(CutoffUnmetEditionSlotsSearchCommand message)
+        {
+            var queuedEditionSlotIds = _queueService.GetQueue()
+                .Where(q => q.MovieEditionSlotId.HasValue)
+                .Select(q => q.MovieEditionSlotId.Value)
+                .ToHashSet();
+
+            SearchCutoffUnmetEditionSlots(queuedEditionSlotIds, message.Trigger == CommandTrigger.Manual);
+        }
+
+        private void SearchCutoffUnmetEditionSlots(HashSet<int> queuedEditionSlotIds, bool userInvokedSearch)
+        {
+            var allSlots = _movieEditionSlotService.GetMonitoredSlotsWithFiles()
+                .Where(s => !queuedEditionSlotIds.Contains(s.Id))
+                .ToList();
+
+            if (!allSlots.Any())
+            {
+                return;
+            }
+
+            var movieIds = allSlots.Select(s => s.MovieId).Distinct().ToList();
+            var filesById = _mediaFileService.GetFilesByMovies(movieIds)
+                .ToDictionary(f => f.Id);
+            var moviesById = _movieService.GetMovies(movieIds).ToDictionary(m => m.Id);
+            var profiles = _qualityProfileService.All().ToDictionary(p => p.Id);
+
+            // Group slots by movie, find those where slot file is below the effective profile cutoff
+            var slotsToSearch = new List<(Movie Movie, List<MovieEditionSlot> Slots)>();
+
+            foreach (var group in allSlots.GroupBy(s => s.MovieId))
+            {
+                if (!moviesById.TryGetValue(group.Key, out var movie) || !movie.Monitored)
+                {
+                    continue;
+                }
+
+                var cutoffUnmetSlots = new List<MovieEditionSlot>();
+
+                foreach (var slot in group)
+                {
+                    if (!slot.MovieFileId.HasValue || !filesById.TryGetValue(slot.MovieFileId.Value, out var file))
+                    {
+                        continue;
+                    }
+
+                    // Resolve effective quality profile: slot override takes precedence.
+                    QualityProfile effectiveProfile;
+                    if (slot.QualityProfileId.HasValue && profiles.TryGetValue(slot.QualityProfileId.Value, out var slotProfile))
+                    {
+                        effectiveProfile = slotProfile;
+                    }
+                    else if (movie.QualityProfile != null)
+                    {
+                        effectiveProfile = movie.QualityProfile;
+                    }
+                    else if (profiles.TryGetValue(movie.QualityProfileId, out var movieProfile))
+                    {
+                        effectiveProfile = movieProfile;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+
+                    if (!effectiveProfile.UpgradeAllowed)
+                    {
+                        continue;
+                    }
+
+                    var cutoff = effectiveProfile.UpgradeAllowed ? effectiveProfile.Cutoff : effectiveProfile.FirststAllowedQuality().Id;
+                    var cutoffIndex = effectiveProfile.GetIndex(cutoff);
+                    var fileQualityIndex = effectiveProfile.GetIndex(file.Quality.Quality.Id);
+
+                    var customFormats = _customFormatCalculationService.ParseCustomFormat(file, movie);
+                    var customFormatScore = effectiveProfile.CalculateCustomFormatScore(customFormats);
+                    var requiredCustomFormatScore = Math.Max(effectiveProfile.CutoffFormatScore, slot.MinimumCustomFormatScore ?? int.MinValue);
+
+                    if (fileQualityIndex.Index < cutoffIndex.Index || customFormatScore < requiredCustomFormatScore)
+                    {
+                        cutoffUnmetSlots.Add(slot);
+                    }
+                }
+
+                if (cutoffUnmetSlots.Any())
+                {
+                    slotsToSearch.Add((movie, cutoffUnmetSlots));
+                }
+            }
+
+            _logger.ProgressInfo("Searching cutoff-unmet edition slots for {0} movie(s)", slotsToSearch.Count);
+
+            foreach (var (movie, slots) in slotsToSearch)
+            {
+                SearchForEditionSlots(movie, slots, userInvokedSearch).GetAwaiter().GetResult();
+            }
         }
 
         public void Execute(MovieEditionSearchCommand message)
@@ -159,6 +277,34 @@ namespace NzbDrone.Core.IndexerSearch
             }
 
             _logger.ProgressInfo("Completed edition search for {0} slot(s). {1} reports downloaded.", slots.Count, downloadedCount);
+        }
+
+        private async Task SearchMissingEditionSlots(HashSet<int> queuedEditionSlotIds, bool userInvokedSearch)
+        {
+            var missingSlots = _movieEditionSlotService.GetMonitoredMissingSlots();
+            if (!missingSlots.Any())
+            {
+                return;
+            }
+
+            var eligibleSlots = missingSlots.Where(s => !queuedEditionSlotIds.Contains(s.Id)).ToList();
+            if (!eligibleSlots.Any())
+            {
+                return;
+            }
+
+            var movieIds = eligibleSlots.Select(s => s.MovieId).Distinct().ToList();
+            var moviesById = _movieService.GetMovies(movieIds).ToDictionary(m => m.Id);
+
+            foreach (var group in eligibleSlots.GroupBy(s => s.MovieId))
+            {
+                if (!moviesById.TryGetValue(group.Key, out var movie) || !movie.Monitored)
+                {
+                    continue;
+                }
+
+                await SearchForEditionSlots(movie, group.ToList(), userInvokedSearch);
+            }
         }
 
         private async Task SearchForBulkMovies(List<Movie> movies, bool userInvokedSearch)

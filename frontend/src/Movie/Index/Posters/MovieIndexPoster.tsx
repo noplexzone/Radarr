@@ -90,6 +90,8 @@ function MovieIndexPoster(props: MovieIndexPosterProps) {
     originalTitle,
     originalLanguage,
     tags = [],
+    monitoredEditionSlotCount,
+    missingEditionSlotCount,
   } = movie;
 
   const { sizeOnDisk = 0 } = statistics;
@@ -143,6 +145,15 @@ function MovieIndexPoster(props: MovieIndexPosterProps) {
   }, [setIsDeleteMovieModalOpen]);
 
   const link = `/movie/${titleSlug}`;
+  const hasEditionSlots = !!monitoredEditionSlotCount;
+  const availableEditionSlots = hasEditionSlots
+    ? monitoredEditionSlotCount - (missingEditionSlotCount ?? 0)
+    : 0;
+  const editionSlotStatus = hasEditionSlots
+    ? `Edition slots: ${availableEditionSlots}/${monitoredEditionSlotCount} available${
+        missingEditionSlotCount ? `, ${missingEditionSlotCount} missing` : ''
+      }`
+    : null;
 
   const elementStyle = {
     width: `${posterWidth}px`,
@@ -231,6 +242,12 @@ function MovieIndexPoster(props: MovieIndexPosterProps) {
       {showTitle ? (
         <div className={styles.title} title={title}>
           {title}
+        </div>
+      ) : null}
+
+      {editionSlotStatus ? (
+        <div className={styles.editionSlotStatus} title={editionSlotStatus}>
+          {editionSlotStatus}
         </div>
       ) : null}
 

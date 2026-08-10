@@ -37,10 +37,13 @@ namespace NzbDrone.Core.Test.DecisionEngineTests.Search
         }
 
         [Test]
-        public void should_accept_when_edition_slot_set_but_term_empty()
+        public void should_reject_when_edition_slot_set_but_term_empty()
         {
             var criteria = new MovieSearchCriteria { MovieEditionSlotId = 1, EditionSearchTerm = string.Empty };
-            Subject.IsSatisfiedBy(BuildRemote(), criteria).Accepted.Should().BeTrue();
+            var result = Subject.IsSatisfiedBy(BuildRemote(), criteria);
+
+            result.Accepted.Should().BeFalse();
+            result.Reason.Should().Be(DownloadRejectionReason.WrongEdition);
         }
 
         [Test]
@@ -61,6 +64,18 @@ namespace NzbDrone.Core.Test.DecisionEngineTests.Search
         public void should_reject_when_edition_does_not_match()
         {
             var remote = BuildRemote(parsedEdition: "Theatrical Cut", releaseTitle: "Movie.2001.Theatrical.Cut.1080p");
+            var result = Subject.IsSatisfiedBy(remote, EditionCriteria("Director's Cut"));
+
+            result.Accepted.Should().BeFalse();
+            result.Reason.Should().Be(DownloadRejectionReason.WrongEdition);
+        }
+
+        [Test]
+        public void should_reject_shorter_overlapping_title_term_when_parsed_edition_is_more_specific()
+        {
+            var remote = BuildRemote(
+                parsedEdition: "Extended Director's Cut",
+                releaseTitle: "Movie.2001.Extended.Directors.Cut.1080p");
             var result = Subject.IsSatisfiedBy(remote, EditionCriteria("Director's Cut"));
 
             result.Accepted.Should().BeFalse();

@@ -48,6 +48,15 @@ $hoverScale: 1.05;
   font-size: $smallFontSize;
 }
 
+.editionSlotStatus {
+  @add-mixin truncate;
+
+  background-color: var(--movieBackgroundColor);
+  color: var(--dimColor);
+  text-align: center;
+  font-size: $smallFontSize;
+}
+
 .controls {
   position: absolute;
   bottom: 10px;

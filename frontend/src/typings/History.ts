@@ -84,5 +84,7 @@ export default interface History {
   downloadId: string;
   eventType: HistoryEventType;
   data: HistoryData;
+  movieEditionSlotId?: number;
+  movieEditionSlotName?: string;
   id: number;
 }

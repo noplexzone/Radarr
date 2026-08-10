@@ -8,10 +8,14 @@ using NzbDrone.Common.Serializer;
 using NzbDrone.Core.Configuration;
 using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.DecisionEngine.Specifications;
+using NzbDrone.Core.DecisionEngine.Specifications.Search;
 using NzbDrone.Core.Download.Aggregation;
 using NzbDrone.Core.IndexerSearch.Definitions;
+using NzbDrone.Core.MediaFiles;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
+using NzbDrone.Core.Profiles.Qualities;
 
 namespace NzbDrone.Core.DecisionEngine
 {
@@ -28,6 +32,9 @@ namespace NzbDrone.Core.DecisionEngine
         private readonly IConfigService _configService;
         private readonly ICustomFormatCalculationService _formatCalculator;
         private readonly IRemoteMovieAggregationService _aggregationService;
+        private readonly IMovieEditionSlotService _editionSlotService;
+        private readonly IMediaFileService _mediaFileService;
+        private readonly IQualityProfileService _qualityProfileService;
         private readonly Logger _logger;
 
         public DownloadDecisionMaker(IEnumerable<IDownloadDecisionEngineSpecification> specifications,
@@ -35,6 +42,9 @@ namespace NzbDrone.Core.DecisionEngine
                                      IConfigService configService,
                                      ICustomFormatCalculationService formatCalculator,
                                      IRemoteMovieAggregationService aggregationService,
+                                     IMovieEditionSlotService editionSlotService,
+                                     IMediaFileService mediaFileService,
+                                     IQualityProfileService qualityProfileService,
                                      Logger logger)
         {
             _specifications = specifications;
@@ -42,6 +52,9 @@ namespace NzbDrone.Core.DecisionEngine
             _configService = configService;
             _formatCalculator = formatCalculator;
             _aggregationService = aggregationService;
+            _editionSlotService = editionSlotService;
+            _mediaFileService = mediaFileService;
+            _qualityProfileService = qualityProfileService;
             _logger = logger;
         }
 
@@ -91,8 +104,24 @@ namespace NzbDrone.Core.DecisionEngine
                         {
                             _aggregationService.Augment(remoteMovie);
 
+                            // Slot context must be available before custom-format scoring and
+                            // decision specifications evaluate the release.
+                            if (searchCriteria is MovieSearchCriteria movieSearchCriteria && movieSearchCriteria.MovieEditionSlotId.HasValue)
+                            {
+                                StampExplicitEditionSlotContext(remoteMovie, movieSearchCriteria);
+                            }
+                            else if (searchCriteria == null)
+                            {
+                                // For RSS, match a parsed edition to a monitored slot so
+                                // scoring and disk-comparison specs use the slot context.
+                                StampRssEditionSlotContext(remoteMovie);
+                            }
+
                             remoteMovie.CustomFormats = _formatCalculator.ParseCustomFormat(remoteMovie, remoteMovie.Release.Size);
-                            remoteMovie.CustomFormatScore = remoteMovie?.Movie?.QualityProfile?.CalculateCustomFormatScore(remoteMovie.CustomFormats) ?? 0;
+                            var effectiveQualityProfile = remoteMovie.SlotQualityProfile ??
+                                                          (searchCriteria as MovieSearchCriteria)?.OverrideQualityProfile ??
+                                                          remoteMovie.Movie.QualityProfile;
+                            remoteMovie.CustomFormatScore = effectiveQualityProfile?.CalculateCustomFormatScore(remoteMovie.CustomFormats) ?? 0;
 
                             _logger.Trace("Custom Format Score of '{0}' [{1}] calculated for '{2}'", remoteMovie.CustomFormatScore, remoteMovie.CustomFormats?.ConcatToString(), report.Title);
 
@@ -174,6 +203,90 @@ namespace NzbDrone.Core.DecisionEngine
                     yield return decision;
                 }
             }
+        }
+
+        private void StampExplicitEditionSlotContext(RemoteMovie remoteMovie, MovieSearchCriteria searchCriteria)
+        {
+            var requestedSlotId = searchCriteria.MovieEditionSlotId.Value;
+            var slot = _editionSlotService.GetForMovie(remoteMovie.Movie.Id)
+                ?.FirstOrDefault(s => s.Id == requestedSlotId && s.MovieId == remoteMovie.Movie.Id);
+
+            if (slot == null)
+            {
+                return;
+            }
+
+            StampEditionSlotContext(remoteMovie, slot, searchCriteria.OverrideQualityProfile);
+        }
+
+        private void StampRssEditionSlotContext(RemoteMovie remoteMovie)
+        {
+            var monitoredSlots = _editionSlotService.GetForMovie(remoteMovie.Movie.Id)
+                ?.Where(s => s.Monitored)
+                .ToList();
+
+            if (monitoredSlots?.Any() != true)
+            {
+                return;
+            }
+
+            var normalizedParsedEdition = EditionNormalizer.Normalize(remoteMovie.ParsedMovieInfo?.Edition);
+            MovieEditionSlot slot;
+
+            if (!normalizedParsedEdition.IsNullOrWhiteSpace())
+            {
+                // A parsed edition is authoritative. Prefer an exact slot match across all
+                // monitored slots and never fall back to a shorter overlapping title term.
+                slot = monitoredSlots.FirstOrDefault(s => MatchesParsedEditionSlot(normalizedParsedEdition, s));
+            }
+            else
+            {
+                slot = monitoredSlots.FirstOrDefault(s => MatchesRssEditionTitle(remoteMovie, s));
+            }
+
+            if (slot == null)
+            {
+                return;
+            }
+
+            _logger.Debug("RSS release '{0}' matched edition slot '{1}' (id={2})", remoteMovie.Release.Title, slot.EditionName, slot.Id);
+
+            StampEditionSlotContext(remoteMovie, slot);
+        }
+
+        private void StampEditionSlotContext(RemoteMovie remoteMovie, MovieEditionSlot slot, QualityProfile overrideQualityProfile = null)
+        {
+            remoteMovie.MovieEditionSlotId = slot.Id;
+            remoteMovie.SlotContextStamped = true;
+            remoteMovie.SlotMovieFile = null;
+            remoteMovie.SlotQualityProfile = overrideQualityProfile;
+            remoteMovie.SlotMinimumCustomFormatScore = slot.MinimumCustomFormatScore;
+
+            if (remoteMovie.SlotQualityProfile == null && slot.QualityProfileId.HasValue)
+            {
+                remoteMovie.SlotQualityProfile = _qualityProfileService.Get(slot.QualityProfileId.Value);
+            }
+
+            if (slot.MovieFileId.HasValue)
+            {
+                remoteMovie.SlotMovieFile = _mediaFileService.GetFilesByMovies(new[] { remoteMovie.Movie.Id })
+                    .FirstOrDefault(f => f.Id == slot.MovieFileId.Value);
+            }
+        }
+
+        private static bool MatchesParsedEditionSlot(string normalizedParsedEdition, MovieEditionSlot slot)
+        {
+            var normalizedEditionName = EditionNormalizer.Normalize(slot.EditionName);
+            var normalizedSearchTerm = EditionNormalizer.Normalize(slot.SearchTerm);
+
+            return normalizedParsedEdition == normalizedEditionName || normalizedParsedEdition == normalizedSearchTerm;
+        }
+
+        private static bool MatchesRssEditionTitle(RemoteMovie remoteMovie, MovieEditionSlot slot)
+        {
+            var releaseTitle = remoteMovie.Release?.Title;
+            return (!slot.EditionName.IsNullOrWhiteSpace() && MovieEditionSpecification.TitleContainsEditionTerm(releaseTitle, slot.EditionName)) ||
+                   (!slot.SearchTerm.IsNullOrWhiteSpace() && MovieEditionSpecification.TitleContainsEditionTerm(releaseTitle, slot.SearchTerm));
         }
 
         private DownloadDecision GetDecisionForReport(RemoteMovie remoteMovie, SearchCriteriaBase searchCriteria = null)

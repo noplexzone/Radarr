@@ -14,6 +14,7 @@ using NzbDrone.Core.Languages;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Profiles.Qualities;
 using NzbDrone.Core.Qualities;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Queue;
 using NzbDrone.SignalR;
 using Radarr.Http;
@@ -36,6 +37,7 @@ namespace Radarr.Api.V3.Queue
         private readonly IIgnoredDownloadService _ignoredDownloadService;
         private readonly IProvideDownloadClient _downloadClientProvider;
         private readonly IBlocklistService _blocklistService;
+        private readonly IMovieEditionSlotService _movieEditionSlotService;
 
         public QueueController(IBroadcastSignalRMessage broadcastSignalRMessage,
                            IQueueService queueService,
@@ -45,7 +47,8 @@ namespace Radarr.Api.V3.Queue
                            IFailedDownloadService failedDownloadService,
                            IIgnoredDownloadService ignoredDownloadService,
                            IProvideDownloadClient downloadClientProvider,
-                           IBlocklistService blocklistService)
+                           IBlocklistService blocklistService,
+                           IMovieEditionSlotService movieEditionSlotService)
             : base(broadcastSignalRMessage)
         {
             _queueService = queueService;
@@ -55,6 +58,7 @@ namespace Radarr.Api.V3.Queue
             _ignoredDownloadService = ignoredDownloadService;
             _downloadClientProvider = downloadClientProvider;
             _blocklistService = blocklistService;
+            _movieEditionSlotService = movieEditionSlotService;
 
             _qualityComparer = new QualityModelComparer(qualityProfileService.GetDefaultProfile(string.Empty));
         }
@@ -160,7 +164,10 @@ namespace Radarr.Api.V3.Queue
                 "timeleft",
                 SortDirection.Ascending);
 
-            return pagingSpec.ApplyToPage((spec) => GetQueue(spec, movieIds?.ToHashSet(), protocol, languages?.ToHashSet(), quality?.ToHashSet(), status?.ToHashSet(), includeUnknownMovieItems), (q) => MapToResource(q, includeMovie));
+            var page = pagingSpec.ApplyToPage((spec) => GetQueue(spec, movieIds?.ToHashSet(), protocol, languages?.ToHashSet(), quality?.ToHashSet(), status?.ToHashSet(), includeUnknownMovieItems), (q) => MapToResource(q, includeMovie));
+            EnrichMovieEditionSlotNames(page.Records);
+
+            return page;
         }
 
         private PagingSpec<NzbDrone.Core.Queue.Queue> GetQueue(PagingSpec<NzbDrone.Core.Queue.Queue> pagingSpec, HashSet<int> movieIds, DownloadProtocol? protocol, HashSet<int> languages, HashSet<int> quality, HashSet<QueueStatus> status, bool includeUnknownMovieItems)
@@ -379,6 +386,29 @@ namespace Radarr.Api.V3.Queue
         private QueueResource MapToResource(NzbDrone.Core.Queue.Queue queueItem, bool includeMovie)
         {
             return queueItem.ToResource(includeMovie);
+        }
+
+        private void EnrichMovieEditionSlotNames(List<QueueResource> resources)
+        {
+            var slotIds = resources
+                .Where(r => r.MovieEditionSlotId.HasValue)
+                .Select(r => r.MovieEditionSlotId.Value)
+                .Distinct()
+                .ToList();
+
+            if (!slotIds.Any())
+            {
+                return;
+            }
+
+            var slotsById = _movieEditionSlotService.GetByIds(slotIds);
+
+            foreach (var resource in resources.Where(r => r.MovieEditionSlotId.HasValue))
+            {
+                resource.MovieEditionSlotName = slotsById.TryGetValue(resource.MovieEditionSlotId.Value, out var slot)
+                    ? slot.EditionName
+                    : $"Edition slot #{resource.MovieEditionSlotId.Value}";
+            }
         }
 
         [NonAction]

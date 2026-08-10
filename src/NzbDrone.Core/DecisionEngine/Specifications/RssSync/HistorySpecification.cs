@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using NLog;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Configuration;
@@ -42,12 +43,16 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.RssSync
             }
 
             var cdhEnabled = _configService.EnableCompletedDownloadHandling;
-            var qualityProfile = subject.Movie.QualityProfile;
+            var qualityProfile = subject.SlotQualityProfile ?? subject.Movie.QualityProfile;
 
             _logger.Debug("Performing history status check on report");
 
             _logger.Debug("Checking current status of movie [{0}] in history", subject.Movie.Id);
-            var mostRecent = _historyService.MostRecentForMovie(subject.Movie.Id);
+            var mostRecent = subject.MovieEditionSlotId.HasValue
+                ? _historyService.GetByMovieId(subject.Movie.Id, MovieHistoryEventType.Grabbed)
+                    .Where(h => h.Data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var slotId) && slotId == subject.MovieEditionSlotId.Value.ToString())
+                    .MaxBy(h => h.Date)
+                : _historyService.MostRecentForMovie(subject.Movie.Id);
 
             if (mostRecent != null && mostRecent.EventType == MovieHistoryEventType.Grabbed)
             {
@@ -61,13 +66,13 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.RssSync
                 var customFormats = _formatService.ParseCustomFormat(mostRecent, subject.Movie);
 
                 var cutoffUnmet = _upgradableSpecification.CutoffNotMet(
-                    subject.Movie.QualityProfile,
+                    qualityProfile,
                     mostRecent.Quality,
                     customFormats,
                     subject.ParsedMovieInfo.Quality);
 
                 var upgradeableRejectReason = _upgradableSpecification.IsUpgradable(
-                    subject.Movie.QualityProfile,
+                    qualityProfile,
                     mostRecent.Quality,
                     customFormats,
                     subject.ParsedMovieInfo.Quality,

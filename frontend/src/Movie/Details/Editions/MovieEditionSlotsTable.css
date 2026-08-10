@@ -5,14 +5,15 @@
 .addForm {
   display: flex;
   gap: 8px;
+
   align-items: center;
   margin-bottom: 12px;
 }
 
 .addInput {
   flex: 1;
-  min-width: 0;
   padding: 4px 8px;
+  min-width: 0;
   border: 1px solid var(--inputBorderColor);
   border-radius: 4px;
   background: var(--inputBackgroundColor);
@@ -20,8 +21,8 @@
 }
 
 .editInput {
-  width: 100%;
   padding: 2px 6px;
+  width: 100%;
   border: 1px solid var(--inputBorderColor);
   border-radius: 4px;
   background: var(--inputBackgroundColor);
@@ -58,8 +59,8 @@
 }
 
 .smallEditInput {
-  width: 90px;
   padding: 2px 6px;
+  width: 90px;
   border: 1px solid var(--inputBorderColor);
   border-radius: 4px;
   background: var(--inputBackgroundColor);

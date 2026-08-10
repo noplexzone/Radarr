@@ -39,13 +39,14 @@ namespace NzbDrone.Core.DecisionEngine.Specifications
         {
             var queue = _queueService.GetQueue();
             var matchingMovies = queue.Where(q => q.RemoteMovie?.Movie != null &&
-                                                   q.RemoteMovie.Movie.Id == subject.Movie.Id)
+                                                   q.RemoteMovie.Movie.Id == subject.Movie.Id &&
+                                                   (!subject.MovieEditionSlotId.HasValue || q.RemoteMovie.MovieEditionSlotId == subject.MovieEditionSlotId))
                                        .ToList();
 
             foreach (var queueItem in matchingMovies)
             {
                 var remoteMovie = queueItem.RemoteMovie;
-                var qualityProfile = subject.Movie.QualityProfile;
+                var qualityProfile = subject.SlotQualityProfile ?? subject.Movie.QualityProfile;
 
                 // To avoid a race make sure it's not FailedPending (failed awaiting removal/search).
                 // Failed items (already searching for a replacement) won't be part of the queue since

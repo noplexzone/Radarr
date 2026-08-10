@@ -27,3 +27,9 @@
 
   width: 30px;
 }
+
+.editionSlot {
+  margin-top: 3px;
+  color: var(--dimColor);
+  font-size: 12px;
+}

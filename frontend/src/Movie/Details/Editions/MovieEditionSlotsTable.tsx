@@ -20,6 +20,7 @@ import MovieQuality from 'Movie/MovieQuality';
 import MovieEditionSlotInteractiveSearchModal from 'Movie/Search/MovieEditionSlotInteractiveSearchModal';
 import { QualityModel } from 'Quality/Quality';
 import { executeCommand } from 'Store/Actions/commandActions';
+import { fetchQualityProfiles } from 'Store/Actions/settingsActions';
 import createCommandsSelector from 'Store/Selectors/createCommandsSelector';
 import createSortedSectionSelector from 'Store/Selectors/createSortedSectionSelector';
 import CustomFormat from 'typings/CustomFormat';
@@ -377,6 +378,11 @@ interface MovieEditionSlotsTableProps {
 function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
   const dispatch = useDispatch();
   const commands = useSelector(createCommandsSelector());
+
+  // Ensure quality profile options are loaded even when navigating directly to movie details.
+  useEffect(() => {
+    dispatch(fetchQualityProfiles());
+  }, [dispatch]);
 
   const [isFetching, setIsFetching] = useState(false);
   const [isPopulated, setIsPopulated] = useState(false);

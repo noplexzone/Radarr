@@ -10,6 +10,7 @@ using NzbDrone.Core.Indexers;
 using NzbDrone.Core.IndexerSearch;
 using NzbDrone.Core.IndexerSearch.Definitions;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Movies.Translations;
 using NzbDrone.Core.Test.Framework;
 
@@ -155,6 +156,30 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
             var criteria = allCriteria.OfType<MovieSearchCriteria>().ToList();
 
             criteria.Count.Should().Be(0);
+        }
+
+        [Test]
+        public async Task edition_search_should_fall_back_to_edition_name_when_search_term_is_blank()
+        {
+            _movie.MovieMetadata = new MovieMetadata
+            {
+                Title = "Movie",
+                OriginalTitle = "Original Movie"
+            };
+            var allCriteria = WatchForSearchCriteria();
+            var slot = new MovieEditionSlot
+            {
+                Id = 12,
+                EditionName = "Director's Cut",
+                SearchTerm = "  "
+            };
+
+            await Subject.MovieEditionSearch(_movie, slot, true, false);
+
+            var criteria = allCriteria.OfType<MovieSearchCriteria>().Single();
+            criteria.EditionSearchTerm.Should().Be("Director's Cut");
+            criteria.SceneTitles.Should().Contain("Movie Director's Cut");
+            criteria.SceneTitles.Should().Contain("Original Movie Director's Cut");
         }
     }
 }

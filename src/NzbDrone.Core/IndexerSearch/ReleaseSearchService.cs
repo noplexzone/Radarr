@@ -73,20 +73,22 @@ namespace NzbDrone.Core.IndexerSearch
 
             var searchSpec = Get<MovieSearchCriteria>(movie, userInvokedSearch, interactiveSearch);
 
-            if (slot.SearchTerm.IsNotNullOrWhiteSpace())
+            var editionSearchTerm = slot.SearchTerm.IsNotNullOrWhiteSpace() ? slot.SearchTerm.Trim() : slot.EditionName;
+
+            if (editionSearchTerm.IsNotNullOrWhiteSpace())
             {
                 // Prepend edition-specific variants (e.g. "Dune IMAX") before base titles for manual fallback
                 var editionVariants = searchSpec.SceneTitles
-                    .Select(t => $"{t} {slot.SearchTerm.Trim()}")
+                    .Select(t => $"{t} {editionSearchTerm}")
                     .ToList();
 
                 searchSpec.SceneTitles = editionVariants
                     .Concat(searchSpec.SceneTitles)
                     .Distinct(StringComparer.InvariantCultureIgnoreCase)
                     .ToList();
-
-                searchSpec.EditionSearchTerm = slot.SearchTerm;
             }
+
+            searchSpec.EditionSearchTerm = editionSearchTerm;
 
             searchSpec.MovieEditionSlotId = slot.Id;
 

@@ -44,6 +44,8 @@ interface Queue extends ModelBase {
   outputPath: string;
   movieHasFile: boolean;
   movieId?: number;
+  movieEditionSlotId?: number;
+  movieEditionSlotName?: string;
   downloadClientHasPostImportCategory: boolean;
   movie?: Movie;
 }

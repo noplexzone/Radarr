@@ -15,6 +15,8 @@ interface MovieStatusCellProps {
   movieId: number;
   monitored: boolean;
   status: MovieStatus;
+  monitoredEditionSlotCount?: number;
+  missingEditionSlotCount?: number;
   isSelectMode: boolean;
   isSaving: boolean;
   component?: React.ElementType;
@@ -26,6 +28,8 @@ function MovieStatusCell(props: MovieStatusCellProps) {
     movieId,
     monitored,
     status,
+    monitoredEditionSlotCount,
+    missingEditionSlotCount,
     isSelectMode,
     isSaving,
     component: Component = VirtualTableRowCell,
@@ -33,6 +37,11 @@ function MovieStatusCell(props: MovieStatusCellProps) {
   } = props;
 
   const statusDetails = getMovieStatusDetails(status);
+  const hasEditionSlots = !!monitoredEditionSlotCount;
+  const missingEditionSlots = missingEditionSlotCount ?? 0;
+  const availableEditionSlots = hasEditionSlots
+    ? monitoredEditionSlotCount - missingEditionSlots
+    : 0;
 
   const dispatch = useDispatch();
 
@@ -66,6 +75,16 @@ function MovieStatusCell(props: MovieStatusCellProps) {
         name={statusDetails.icon}
         title={`${statusDetails.title}: ${statusDetails.message}`}
       />
+
+      {hasEditionSlots ? (
+        <Icon
+          className={styles.statusIcon}
+          name={missingEditionSlots > 0 ? icons.MISSING : icons.MOVIE_FILE}
+          title={`Edition slots: ${availableEditionSlots}/${monitoredEditionSlotCount} available${
+            missingEditionSlots > 0 ? `, ${missingEditionSlots} missing` : ''
+          }`}
+        />
+      ) : null}
     </Component>
   );
 }

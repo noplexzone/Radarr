@@ -3,12 +3,17 @@ using System.Linq;
 using FluentAssertions;
 using Moq;
 using NUnit.Framework;
+using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.DecisionEngine;
 using NzbDrone.Core.DecisionEngine.Specifications;
 using NzbDrone.Core.IndexerSearch.Definitions;
+using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
+using NzbDrone.Core.Profiles;
+using NzbDrone.Core.Profiles.Qualities;
 using NzbDrone.Core.Test.Framework;
 using NzbDrone.Test.Common;
 
@@ -47,10 +52,10 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
             _fail2.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), null)).Returns(DownloadSpecDecision.Reject(DownloadRejectionReason.Unknown, "fail2"));
             _fail3.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), null)).Returns(DownloadSpecDecision.Reject(DownloadRejectionReason.Unknown, "fail3"));
 
-            _reports = new List<ReleaseInfo> { new ReleaseInfo { Title = "Trolls.2016.720p.WEB-DL.DD5.1.H264-FGT" } };
+            _reports = new List<ReleaseInfo> { new ReleaseInfo { Title = "Movie.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG" } };
             _remoteEpisode = new RemoteMovie
             {
-                Movie = new Movie(),
+                Movie = new Movie { Id = 7 },
                 ParsedMovieInfo = new ParsedMovieInfo()
             };
 
@@ -158,6 +163,231 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
         }
 
         [Test]
+        public void should_stamp_explicit_edition_slot_context_before_specifications_run()
+        {
+            var slotFile = new MovieFile { Id = 99, MovieId = _remoteEpisode.Movie.Id };
+            var slotProfile = new QualityProfile { Id = 12, Name = "Slot Profile" };
+            var criteria = new MovieSearchCriteria { MovieEditionSlotId = 42 };
+            var specification = new Mock<IDownloadDecisionEngineSpecification>();
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(new List<MovieEditionSlot>
+                {
+                    new MovieEditionSlot
+                    {
+                        Id = 42,
+                        MovieId = _remoteEpisode.Movie.Id,
+                        EditionName = "IMAX",
+                        MovieFileId = slotFile.Id,
+                        QualityProfileId = slotProfile.Id,
+                        MinimumCustomFormatScore = 25
+                    }
+                });
+
+            Mocker.GetMock<IMediaFileService>()
+                .Setup(s => s.GetFilesByMovies(It.Is<IEnumerable<int>>(ids => ids.SequenceEqual(new[] { _remoteEpisode.Movie.Id }))))
+                .Returns(new List<MovieFile> { slotFile });
+
+            Mocker.GetMock<IQualityProfileService>()
+                .Setup(s => s.Get(slotProfile.Id))
+                .Returns(slotProfile);
+
+            specification.SetupGet(s => s.Priority).Returns(0);
+            specification
+                .Setup(s => s.IsSatisfiedBy(It.IsAny<RemoteMovie>(), criteria))
+                .Callback<RemoteMovie, SearchCriteriaBase>((remoteMovie, _) =>
+                {
+                    remoteMovie.MovieEditionSlotId.Should().Be(42);
+                    remoteMovie.SlotContextStamped.Should().BeTrue();
+                    remoteMovie.SlotMovieFile.Should().BeSameAs(slotFile);
+                    remoteMovie.SlotQualityProfile.Should().BeSameAs(slotProfile);
+                    remoteMovie.SlotMinimumCustomFormatScore.Should().Be(25);
+                })
+                .Returns(DownloadSpecDecision.Accept);
+
+            GivenSpecifications(specification);
+
+            Subject.GetSearchDecision(_reports, criteria).Single().Approved.Should().BeTrue();
+
+            specification.Verify(s => s.IsSatisfiedBy(_remoteEpisode, criteria), Times.Once);
+        }
+
+        [Test]
+        public void should_calculate_search_custom_format_score_using_criteria_override_profile()
+        {
+            GivenSpecifications(_pass1);
+
+            var customFormat = new CustomFormat { Id = 7, Name = "Override Format" };
+            var overrideProfile = new QualityProfile
+            {
+                FormatItems = new List<ProfileFormatItem>
+                {
+                    new ProfileFormatItem { Format = customFormat, Score = 75 }
+                }
+            };
+            var criteria = new MovieSearchCriteria { OverrideQualityProfile = overrideProfile };
+
+            Mocker.GetMock<ICustomFormatCalculationService>()
+                .Setup(s => s.ParseCustomFormat(_remoteEpisode, It.IsAny<long>()))
+                .Returns(new List<CustomFormat> { customFormat });
+
+            Subject.GetSearchDecision(_reports, criteria).Single().RemoteMovie.CustomFormatScore.Should().Be(75);
+        }
+
+        [Test]
+        public void should_stamp_matching_monitored_edition_slot_on_rss_decision()
+        {
+            GivenSpecifications(_pass1);
+
+            var slotFile = new MovieFile { Id = 99 };
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(new List<MovieEditionSlot>
+                {
+                    new MovieEditionSlot
+                    {
+                        Id = 42,
+                        MovieId = _remoteEpisode.Movie.Id,
+                        EditionName = "IMAX",
+                        SearchTerm = "IMAX",
+                        Monitored = true,
+                        MovieFileId = slotFile.Id
+                    }
+                });
+
+            Mocker.GetMock<IMediaFileService>()
+                .Setup(s => s.GetFilesByMovies(It.Is<IEnumerable<int>>(ids => ids.SequenceEqual(new[] { _remoteEpisode.Movie.Id }))))
+                .Returns(new List<MovieFile> { slotFile });
+
+            _reports[0].Title = "Movie.Title.Imax.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG";
+
+            var result = Subject.GetRssDecision(_reports);
+
+            result.Single().RemoteMovie.MovieEditionSlotId.Should().Be(42);
+            result.Single().RemoteMovie.SlotContextStamped.Should().BeTrue();
+            result.Single().RemoteMovie.SlotMovieFile.Should().Be(slotFile);
+        }
+
+        [Test]
+        public void should_prefer_exact_parsed_edition_slot_when_rss_slot_names_overlap()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.Edition = "Extended Director's Cut";
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(new List<MovieEditionSlot>
+                {
+                    new MovieEditionSlot
+                    {
+                        Id = 41,
+                        MovieId = _remoteEpisode.Movie.Id,
+                        EditionName = "Director's Cut",
+                        Monitored = true
+                    },
+                    new MovieEditionSlot
+                    {
+                        Id = 42,
+                        MovieId = _remoteEpisode.Movie.Id,
+                        EditionName = "Extended Director's Cut",
+                        Monitored = true
+                    }
+                });
+
+            _reports[0].Title = "Movie.Title.Extended.Directors.Cut.2018.1080p.BluRay";
+
+            var result = Subject.GetRssDecision(_reports).Single();
+
+            result.RemoteMovie.MovieEditionSlotId.Should().Be(42);
+            result.RemoteMovie.SlotContextStamped.Should().BeTrue();
+        }
+
+        [Test]
+        public void should_preserve_rss_slot_context_when_slot_movie_file_is_stale()
+        {
+            GivenSpecifications(_pass1);
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(new List<MovieEditionSlot>
+                {
+                    new MovieEditionSlot
+                    {
+                        Id = 42,
+                        MovieId = _remoteEpisode.Movie.Id,
+                        EditionName = "IMAX",
+                        Monitored = true,
+                        MovieFileId = 999
+                    }
+                });
+
+            Mocker.GetMock<IMediaFileService>()
+                .Setup(s => s.GetFilesByMovies(It.Is<IEnumerable<int>>(ids => ids.SequenceEqual(new[] { _remoteEpisode.Movie.Id }))))
+                .Returns(new List<MovieFile>());
+
+            _reports[0].Title = "Movie.Title.Imax.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG";
+
+            var result = Subject.GetRssDecision(_reports).Single();
+
+            result.Rejections.Should().NotContain(r => r.Reason == DownloadRejectionReason.Error);
+            result.RemoteMovie.MovieEditionSlotId.Should().Be(42);
+            result.RemoteMovie.SlotContextStamped.Should().BeTrue();
+            result.RemoteMovie.SlotMovieFile.Should().BeNull();
+        }
+
+        [Test]
+        public void should_calculate_rss_custom_format_score_using_slot_quality_profile()
+        {
+            GivenSpecifications(_pass1);
+
+            var customFormat = new CustomFormat { Id = 7, Name = "Slot Format" };
+            var movieProfile = new QualityProfile
+            {
+                FormatItems = new List<ProfileFormatItem>
+                {
+                    new ProfileFormatItem { Format = customFormat, Score = 5 }
+                }
+            };
+            var slotProfile = new QualityProfile
+            {
+                Id = 12,
+                FormatItems = new List<ProfileFormatItem>
+                {
+                    new ProfileFormatItem { Format = customFormat, Score = 50 }
+                }
+            };
+            _remoteEpisode.Movie.QualityProfile = movieProfile;
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(new List<MovieEditionSlot>
+                {
+                    new MovieEditionSlot
+                    {
+                        Id = 42,
+                        MovieId = _remoteEpisode.Movie.Id,
+                        EditionName = "IMAX",
+                        Monitored = true,
+                        QualityProfileId = slotProfile.Id
+                    }
+                });
+
+            Mocker.GetMock<IQualityProfileService>()
+                .Setup(s => s.Get(slotProfile.Id))
+                .Returns(slotProfile);
+
+            Mocker.GetMock<ICustomFormatCalculationService>()
+                .Setup(s => s.ParseCustomFormat(_remoteEpisode, It.IsAny<long>()))
+                .Returns(new List<CustomFormat> { customFormat });
+
+            _reports[0].Title = "Movie.Title.Imax.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG";
+
+            Subject.GetRssDecision(_reports).Single().RemoteMovie.CustomFormatScore.Should().Be(50);
+        }
+
+        [Test]
         public void should_not_attempt_to_make_decision_if_series_is_unknown()
         {
             GivenSpecifications(_pass1, _pass2, _pass3);
@@ -181,16 +411,14 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
 
             _reports = new List<ReleaseInfo>
                 {
-                    new ReleaseInfo { Title = "Trolls.2016.720p.WEB-DL.DD5.1.H264-FGT" },
-                    new ReleaseInfo { Title = "Trolls.2016.720p.WEB-DL.DD5.1.H264-FGT" },
-                    new ReleaseInfo { Title = "Trolls.2016.720p.WEB-DL.DD5.1.H264-FGT" }
+                    new ReleaseInfo { Title = "Movie.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG" },
+                    new ReleaseInfo { Title = "Movie.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG" },
+                    new ReleaseInfo { Title = "Movie.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG" }
                 };
 
             Subject.GetRssDecision(_reports);
 
             Mocker.GetMock<IParsingService>().Verify(c => c.Map(It.IsAny<ParsedMovieInfo>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<SearchCriteriaBase>()), Times.Exactly(_reports.Count));
-
-            ExceptionVerification.ExpectedErrors(3);
         }
 
         [Test]
@@ -244,12 +472,10 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
 
             _reports = new List<ReleaseInfo>
                 {
-                    new ReleaseInfo { Title = "Trolls.2016.720p.WEB-DL.DD5.1.H264-FGT" },
+                    new ReleaseInfo { Title = "Movie.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG" },
                 };
 
             Subject.GetRssDecision(_reports).Should().HaveCount(1);
-
-            ExceptionVerification.ExpectedErrors(1);
         }
     }
 }

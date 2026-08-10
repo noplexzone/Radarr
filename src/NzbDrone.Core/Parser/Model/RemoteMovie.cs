@@ -2,7 +2,9 @@ using System.Collections.Generic;
 using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.Download.Clients;
 using NzbDrone.Core.Languages;
+using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Profiles.Qualities;
 
 namespace NzbDrone.Core.Parser.Model
 {
@@ -20,6 +22,14 @@ namespace NzbDrone.Core.Parser.Model
         public List<Language> Languages { get; set; }
         public ReleaseSourceType ReleaseSource { get; set; }
         public int? MovieEditionSlotId { get; set; }
+
+        // Set by DownloadDecisionMaker when an RSS release is matched to a monitored
+        // edition slot via parsed edition. When true, SlotMovieFile (not Movie.MovieFile)
+        // is the authoritative file for disk-comparison specs.
+        public bool SlotContextStamped { get; set; }
+        public MovieFile SlotMovieFile { get; set; }
+        public QualityProfile SlotQualityProfile { get; set; }
+        public int? SlotMinimumCustomFormatScore { get; set; }
 
         public RemoteMovie()
         {

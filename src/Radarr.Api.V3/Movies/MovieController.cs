@@ -17,6 +17,7 @@ using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.Commands;
 using NzbDrone.Core.Movies.Events;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Movies.Translations;
 using NzbDrone.Core.MovieStats;
 using NzbDrone.Core.RootFolders;
@@ -47,6 +48,7 @@ namespace Radarr.Api.V3.Movies
         private readonly IRootFolderService _rootFolderService;
         private readonly IUpgradableSpecification _qualityUpgradableSpecification;
         private readonly IConfigService _configService;
+        private readonly IMovieEditionSlotService _movieEditionSlotService;
 
         public MovieController(IBroadcastSignalRMessage signalRBroadcaster,
                            IMovieService moviesService,
@@ -58,6 +60,7 @@ namespace Radarr.Api.V3.Movies
                            IRootFolderService rootFolderService,
                            IUpgradableSpecification qualityUpgradableSpecification,
                            IConfigService configService,
+                           IMovieEditionSlotService movieEditionSlotService,
                            RootFolderValidator rootFolderValidator,
                            MappedNetworkDriveValidator mappedNetworkDriveValidator,
                            MoviePathValidator moviesPathValidator,
@@ -78,6 +81,7 @@ namespace Radarr.Api.V3.Movies
             _coverMapper = coverMapper;
             _commandQueueManager = commandQueueManager;
             _rootFolderService = rootFolderService;
+            _movieEditionSlotService = movieEditionSlotService;
 
             SharedValidator.RuleFor(s => s.Path).Cascade(CascadeMode.Stop)
                 .IsValidPath()
@@ -177,6 +181,8 @@ namespace Radarr.Api.V3.Movies
                 var rootFolders = _rootFolderService.All();
 
                 moviesResources.ForEach(m => m.RootFolderPath = _rootFolderService.GetBestRootFolderPath(m.Path, rootFolders));
+
+                LinkEditionSlotStatus(moviesResources);
             }
 
             return moviesResources;
@@ -324,6 +330,21 @@ namespace Radarr.Api.V3.Movies
             resource.Statistics = movieStatistics.ToResource();
             resource.HasFile = movieStatistics.MovieFileCount > 0;
             resource.SizeOnDisk = movieStatistics.SizeOnDisk;
+        }
+
+        private void LinkEditionSlotStatus(List<MovieResource> resources)
+        {
+            var movieIds = resources.Select(r => r.Id);
+            var summary = _movieEditionSlotService.GetSlotStatusSummary(movieIds);
+
+            foreach (var resource in resources)
+            {
+                if (summary.TryGetValue(resource.Id, out var counts) && counts.Monitored > 0)
+                {
+                    resource.MonitoredEditionSlotCount = counts.Monitored;
+                    resource.MissingEditionSlotCount = counts.Missing;
+                }
+            }
         }
 
         [NonAction]

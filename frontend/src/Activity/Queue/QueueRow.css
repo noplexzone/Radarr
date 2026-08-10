@@ -28,3 +28,9 @@
   width: 70px;
   text-align: right;
 }
+
+.editionSlot {
+  margin-top: 3px;
+  color: var(--dimColor);
+  font-size: 12px;
+}

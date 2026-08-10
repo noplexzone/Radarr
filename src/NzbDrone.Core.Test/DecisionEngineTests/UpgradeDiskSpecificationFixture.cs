@@ -108,6 +108,26 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
         }
 
         [Test]
+        public void should_return_true_if_rss_edition_slot_has_no_existing_file_even_when_movie_has_file()
+        {
+            _parseResultSingle.SlotContextStamped = true;
+            _parseResultSingle.MovieEditionSlotId = 42;
+            _parseResultSingle.SlotMovieFile = null;
+
+            _upgradeDisk.IsSatisfiedBy(_parseResultSingle, null).Accepted.Should().BeTrue();
+        }
+
+        [Test]
+        public void should_compare_rss_edition_slot_file_instead_of_movie_file()
+        {
+            _parseResultSingle.SlotContextStamped = true;
+            _parseResultSingle.MovieEditionSlotId = 42;
+            _parseResultSingle.SlotMovieFile = new MovieFile { Quality = new QualityModel(Quality.SDTV), DateAdded = DateTime.Now };
+
+            _upgradeDisk.IsSatisfiedBy(_parseResultSingle, null).Accepted.Should().BeTrue();
+        }
+
+        [Test]
         public void should_be_upgradable_if_only_movie_is_upgradable()
         {
             WithFirstFileUpgradable();

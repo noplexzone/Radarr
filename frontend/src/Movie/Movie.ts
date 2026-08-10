@@ -92,6 +92,8 @@ interface Movie extends ModelBase {
   movieFileId: number;
   movieFile?: MovieFile;
   hasFile: boolean;
+  monitoredEditionSlotCount?: number;
+  missingEditionSlotCount?: number;
   grabbed?: boolean;
   lastSearchTime?: string;
   isAvailable: boolean;

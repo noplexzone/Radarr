@@ -20,10 +20,10 @@ namespace NzbDrone.Core.DecisionEngine.Specifications
         public virtual DownloadSpecDecision IsSatisfiedBy(RemoteMovie subject, SearchCriteriaBase searchCriteria)
         {
             var movieCriteria = searchCriteria as IndexerSearch.Definitions.MovieSearchCriteria;
-            var effectiveProfile = movieCriteria?.OverrideQualityProfile ?? subject.Movie.QualityProfile;
+            var effectiveProfile = movieCriteria?.OverrideQualityProfile ?? subject.SlotQualityProfile ?? subject.Movie.QualityProfile;
 
             // Slot-level flat override takes priority; otherwise use the effective profile's threshold.
-            var minScore = movieCriteria?.SlotMinimumCustomFormatScore ?? effectiveProfile.MinFormatScore;
+            var minScore = movieCriteria?.SlotMinimumCustomFormatScore ?? subject.SlotMinimumCustomFormatScore ?? effectiveProfile.MinFormatScore;
             var score = subject.CustomFormatScore;
 
             if (score < minScore)

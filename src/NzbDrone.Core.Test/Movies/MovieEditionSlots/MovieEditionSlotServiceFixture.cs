@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Linq;
+using FluentAssertions;
 using Moq;
 using NUnit.Framework;
 using NzbDrone.Core.MediaFiles;
@@ -260,6 +262,20 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
 
             Mocker.GetMock<IMovieEditionSlotRepository>()
                 .Verify(s => s.Update(It.IsAny<MovieEditionSlot>()), Times.Never);
+        }
+
+        [Test]
+        public void get_by_ids_should_omit_stale_ids()
+        {
+            var slot = new MovieEditionSlot { Id = 1, MovieId = MovieId, EditionName = "IMAX" };
+
+            Mocker.GetMock<IMovieEditionSlotRepository>()
+                .Setup(s => s.FindByIds(It.Is<IEnumerable<int>>(ids => ids.SequenceEqual(new[] { 1, 999 }))))
+                .Returns(new List<MovieEditionSlot> { slot });
+
+            var result = Subject.GetByIds(new[] { 1, 999 });
+
+            result.Should().ContainSingle().Which.Should().Be(new KeyValuePair<int, MovieEditionSlot>(slot.Id, slot));
         }
 
         [Test]

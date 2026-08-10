@@ -83,6 +83,8 @@ function MovieIndexRow(props: MovieIndexRowProps) {
     hasFile,
     movieFile,
     youTubeTrailerId,
+    monitoredEditionSlotCount,
+    missingEditionSlotCount,
     isSaving = false,
   } = movie;
 
@@ -166,6 +168,8 @@ function MovieIndexRow(props: MovieIndexRowProps) {
               movieId={movieId}
               monitored={monitored}
               status={status}
+              monitoredEditionSlotCount={monitoredEditionSlotCount}
+              missingEditionSlotCount={missingEditionSlotCount}
               isSelectMode={isSelectMode}
               isSaving={isSaving}
               component={VirtualTableRowCell}

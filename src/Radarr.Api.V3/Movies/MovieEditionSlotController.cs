@@ -46,8 +46,13 @@ namespace Radarr.Api.V3.Movies
         }
 
         [HttpGet]
-        public List<MovieEditionSlotResource> GetSlots([FromQuery] int movieId)
+        public ActionResult<List<MovieEditionSlotResource>> GetSlots([FromQuery] int movieId)
         {
+            if (movieId <= 0)
+            {
+                return BadRequest("movieId query parameter is required and must be a positive integer.");
+            }
+
             var slots = _slotService.GetForMovie(movieId);
             var resources = slots.Select(s => s.ToResource()).ToList();
 

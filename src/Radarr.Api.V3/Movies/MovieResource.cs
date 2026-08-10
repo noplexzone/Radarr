@@ -86,6 +86,10 @@ namespace Radarr.Api.V3.Movies
         public DateTime? LastSearchTime { get; set; }
         public MovieStatisticsResource Statistics { get; set; }
 
+        // Edition slot summary — null when the movie has no edition slots
+        public int? MonitoredEditionSlotCount { get; set; }
+        public int? MissingEditionSlotCount { get; set; }
+
         // Hiding this so people don't think its usable (only used to set the initial state)
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         [SwaggerIgnore]

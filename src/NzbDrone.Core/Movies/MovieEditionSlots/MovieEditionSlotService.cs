@@ -17,6 +17,12 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
         MovieEditionSlot Update(MovieEditionSlot slot);
         void Delete(int id);
         void ReconcileForMovie(int movieId, IReadOnlyList<MovieFile> existingFiles);
+
+        // Bulk helpers used by search commands and movie list enrichment
+        Dictionary<int, (int Monitored, int Missing)> GetSlotStatusSummary(IEnumerable<int> movieIds);
+        List<MovieEditionSlot> GetMonitoredMissingSlots();
+        List<MovieEditionSlot> GetMonitoredSlotsWithFiles();
+        Dictionary<int, MovieEditionSlot> GetByIds(IEnumerable<int> ids);
     }
 
     public class MovieEditionSlotService : IMovieEditionSlotService,
@@ -64,6 +70,41 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
         public void Delete(int id)
         {
             _repo.Delete(id);
+        }
+
+        public Dictionary<int, (int Monitored, int Missing)> GetSlotStatusSummary(IEnumerable<int> movieIds)
+        {
+            var slots = _repo.FindByMovieIds(movieIds);
+            return slots
+                .GroupBy(s => s.MovieId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => (
+                        Monitored: g.Count(s => s.Monitored),
+                        Missing: g.Count(s => s.Monitored && !s.MovieFileId.HasValue)
+                    ));
+        }
+
+        public List<MovieEditionSlot> GetMonitoredMissingSlots()
+        {
+            return _repo.FindMonitoredWithoutFiles();
+        }
+
+        public List<MovieEditionSlot> GetMonitoredSlotsWithFiles()
+        {
+            return _repo.FindMonitoredWithFiles();
+        }
+
+        public Dictionary<int, MovieEditionSlot> GetByIds(IEnumerable<int> ids)
+        {
+            var slotIds = ids?.Distinct().ToList() ?? new List<int>();
+
+            if (!slotIds.Any())
+            {
+                return new Dictionary<int, MovieEditionSlot>();
+            }
+
+            return _repo.FindByIds(slotIds).ToDictionary(s => s.Id);
         }
 
         public void HandleAsync(MoviesDeletedEvent message)

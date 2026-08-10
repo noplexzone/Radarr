@@ -40,6 +40,8 @@ namespace Radarr.Api.V3.Queue
         public bool DownloadClientHasPostImportCategory { get; set; }
         public string Indexer { get; set; }
         public string OutputPath { get; set; }
+        public int? MovieEditionSlotId { get; set; }
+        public string MovieEditionSlotName { get; set; }
 
         [Obsolete("Will be replaced by SizeLeft")]
         public decimal Sizeleft { get; set; }
@@ -89,6 +91,7 @@ namespace Radarr.Api.V3.Queue
                 DownloadClientHasPostImportCategory = model.DownloadClientHasPostImportCategory,
                 Indexer = model.Indexer,
                 OutputPath = model.OutputPath,
+                MovieEditionSlotId = model.MovieEditionSlotId,
 
                 #pragma warning disable CS0618
                 Sizeleft = model.SizeLeft,

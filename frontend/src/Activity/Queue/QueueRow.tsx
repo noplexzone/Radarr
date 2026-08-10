@@ -65,6 +65,8 @@ interface QueueRowProps {
   isGrabbing?: boolean;
   grabError?: Error;
   isRemoving?: boolean;
+  movieEditionSlotId?: number;
+  movieEditionSlotName?: string;
   isSelected?: boolean;
   columns: Column[];
   onSelectedChange: (options: SelectStateInputProps) => void;
@@ -99,6 +101,8 @@ function QueueRow(props: QueueRowProps) {
     isGrabbing = false,
     grabError,
     isRemoving = false,
+    movieEditionSlotId,
+    movieEditionSlotName,
     isSelected,
     columns,
     onSelectedChange,
@@ -155,6 +159,9 @@ function QueueRow(props: QueueRowProps) {
     status === 'completed' && trackedDownloadStatus === 'warning';
   const isPending =
     status === 'delay' || status === 'downloadClientUnavailable';
+  const editionSlotLabel = movieEditionSlotId
+    ? movieEditionSlotName ?? `Edition slot #${movieEditionSlotId}`
+    : null;
 
   return (
     <TableRow>
@@ -189,12 +196,22 @@ function QueueRow(props: QueueRowProps) {
           return (
             <TableRowCell key={name}>
               {movie ? (
-                <MovieTitleLink
-                  titleSlug={movie.titleSlug}
-                  title={movie.title}
-                />
+                <>
+                  <MovieTitleLink
+                    titleSlug={movie.titleSlug}
+                    title={movie.title}
+                  />
+                  {editionSlotLabel ? (
+                    <div className={styles.editionSlot}>{editionSlotLabel}</div>
+                  ) : null}
+                </>
               ) : (
-                title
+                <>
+                  {title}
+                  {editionSlotLabel ? (
+                    <div className={styles.editionSlot}>{editionSlotLabel}</div>
+                  ) : null}
+                </>
               )}
             </TableRowCell>
           );
@@ -262,7 +279,14 @@ function QueueRow(props: QueueRowProps) {
         }
 
         if (name === 'title') {
-          return <TableRowCell key={name}>{title}</TableRowCell>;
+          return (
+            <TableRowCell key={name}>
+              {title}
+              {editionSlotLabel ? (
+                <div className={styles.editionSlot}>{editionSlotLabel}</div>
+              ) : null}
+            </TableRowCell>
+          );
         }
 
         if (name === 'size') {

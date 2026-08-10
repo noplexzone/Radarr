@@ -33,5 +33,6 @@ namespace NzbDrone.Core.Queue
         public string Indexer { get; set; }
         public string OutputPath { get; set; }
         public string ErrorMessage { get; set; }
+        public int? MovieEditionSlotId { get; set; }
     }
 }
