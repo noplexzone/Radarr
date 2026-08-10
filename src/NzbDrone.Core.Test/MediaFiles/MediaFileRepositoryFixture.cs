@@ -48,6 +48,51 @@ namespace NzbDrone.Core.Test.MediaFiles
             movieFiles.Should().OnlyContain(c => c.MovieId == 12);
         }
 
+
+        [Test]
+        public void should_find_files_by_durable_edition_slot_id()
+        {
+            var files = Builder<MovieFile>.CreateListOfSize(3)
+                .All()
+                .With(file => file.Id = 0)
+                .With(file => file.MovieId = _movie1.Id)
+                .With(file => file.MovieEditionSlotId = null)
+                .With(file => file.Quality = new QualityModel())
+                .With(file => file.Languages = new List<Language> { Language.English })
+                .TheFirst(1)
+                .With(file => file.MovieEditionSlotId = 41)
+                .TheNext(1)
+                .With(file => file.MovieEditionSlotId = 42)
+                .BuildListOfNew();
+
+            Db.InsertMany(files);
+
+            Subject.FindByEditionSlotId(41).Id.Should().Be(files[0].Id);
+            Subject.GetFilesByEditionSlotIds(new[] { 42 }).Should().ContainSingle(file => file.Id == files[1].Id);
+        }
+
+        [Test]
+        public void should_return_only_non_main_unassigned_files()
+        {
+            var movie = Builder<Movie>.CreateNew().With(item => item.MovieFileId = 0).BuildNew();
+            Db.Insert(movie);
+            var files = Builder<MovieFile>.CreateListOfSize(3)
+                .All()
+                .With(file => file.Id = 0)
+                .With(file => file.MovieId = movie.Id)
+                .With(file => file.MovieEditionSlotId = null)
+                .With(file => file.Quality = new QualityModel())
+                .With(file => file.Languages = new List<Language> { Language.English })
+                .TheLast(1)
+                .With(file => file.MovieEditionSlotId = 77)
+                .BuildListOfNew();
+            Db.InsertMany(files);
+            movie.MovieFileId = files[0].Id;
+            Db.Update(movie);
+
+            Subject.GetUnassignedFiles(movie.Id).Should().ContainSingle(file => file.Id == files[1].Id);
+        }
+
         [Test]
         public void should_delete_files_by_movieId()
         {

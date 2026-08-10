@@ -17,6 +17,9 @@ namespace NzbDrone.Core.MediaFiles
         void Delete(MovieFile movieFile, DeleteMediaFileReason reason);
         List<MovieFile> GetFilesByMovie(int movieId);
         List<MovieFile> GetFilesByMovies(IEnumerable<int> movieIds);
+        MovieFile FindByEditionSlotId(int movieEditionSlotId);
+        List<MovieFile> GetFilesByEditionSlotIds(IEnumerable<int> movieEditionSlotIds);
+        List<MovieFile> GetUnassignedFiles(int movieId);
         List<MovieFile> GetFilesWithoutMediaInfo();
         List<string> FilterExistingFiles(List<string> files, Movie movie);
         MovieFile GetMovie(int id);
@@ -84,6 +87,21 @@ namespace NzbDrone.Core.MediaFiles
         public List<MovieFile> GetFilesByMovies(IEnumerable<int> movieIds)
         {
             return _mediaFileRepository.GetFilesByMovies(movieIds);
+        }
+
+        public MovieFile FindByEditionSlotId(int movieEditionSlotId)
+        {
+            return _mediaFileRepository.FindByEditionSlotId(movieEditionSlotId);
+        }
+
+        public List<MovieFile> GetFilesByEditionSlotIds(IEnumerable<int> movieEditionSlotIds)
+        {
+            return _mediaFileRepository.GetFilesByEditionSlotIds(movieEditionSlotIds);
+        }
+
+        public List<MovieFile> GetUnassignedFiles(int movieId)
+        {
+            return _mediaFileRepository.GetUnassignedFiles(movieId);
         }
 
         public List<MovieFile> GetFilesWithoutMediaInfo()

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using FluentValidation;
+using FluentValidation.Results;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.Events;
@@ -17,8 +19,6 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
         MovieEditionSlot Update(MovieEditionSlot slot);
         void Delete(int id);
         void ReconcileForMovie(int movieId, IReadOnlyList<MovieFile> existingFiles);
-
-        // Bulk helpers used by search commands and movie list enrichment
         Dictionary<int, (int Monitored, int Missing)> GetSlotStatusSummary(IEnumerable<int> movieIds);
         List<MovieEditionSlot> GetMonitoredMissingSlots();
         List<MovieEditionSlot> GetMonitoredSlotsWithFiles();
@@ -33,193 +33,231 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
         IHandle<MovieFileDeletedEvent>
     {
         private readonly IMovieEditionSlotRepository _repo;
+        private readonly IMovieEditionSlotAliasRepository _aliasRepo;
+        private readonly IMediaFileService _mediaFileService;
 
-        public MovieEditionSlotService(IMovieEditionSlotRepository repo)
+        public MovieEditionSlotService(IMovieEditionSlotRepository repo,
+                                       IMovieEditionSlotAliasRepository aliasRepo,
+                                       IMediaFileService mediaFileService)
         {
             _repo = repo;
+            _aliasRepo = aliasRepo;
+            _mediaFileService = mediaFileService;
         }
 
         public List<MovieEditionSlot> GetForMovie(int movieId)
         {
-            return _repo.FindByMovieId(movieId);
+            return LoadAliases(_repo.FindByMovieId(movieId));
         }
 
         public MovieEditionSlot GetById(int id)
         {
-            return _repo.Get(id);
+            return LoadAliases(new List<MovieEditionSlot> { _repo.Get(id) }).Single();
         }
 
         public MovieEditionSlot Add(MovieEditionSlot slot)
         {
             Normalize(slot);
-
+            ValidateTerms(slot);
             if (slot.DateAdded == default)
             {
                 slot.DateAdded = DateTime.UtcNow;
             }
 
-            return _repo.Insert(slot);
+            var aliases = slot.Aliases.ToList();
+            var added = _repo.Insert(slot);
+            SaveAliases(added.Id, aliases);
+            added.Aliases = aliases;
+            return added;
         }
 
         public MovieEditionSlot Update(MovieEditionSlot slot)
         {
+            var persisted = _repo.Get(slot.Id);
+            if (persisted.MovieId != slot.MovieId)
+            {
+                throw new ValidationException(new[]
+                {
+                    new ValidationFailure("MovieId", "An edition cannot be moved to another movie.")
+                });
+            }
+
+            var attachedFile = _mediaFileService.FindByEditionSlotId(slot.Id);
+            if (attachedFile != null && attachedFile.MovieId != persisted.MovieId)
+            {
+                throw new InvalidOperationException($"Edition '{persisted.EditionName}' is attached to a file from another movie.");
+            }
+
             Normalize(slot);
-            return _repo.Update(slot);
+            ValidateTerms(slot);
+            var aliases = slot.Aliases.ToList();
+            var updated = _repo.Update(slot);
+            SaveAliases(updated.Id, aliases);
+            updated.Aliases = aliases;
+            return updated;
         }
 
         public void Delete(int id)
         {
+            var slot = _repo.Get(id);
+            if (_mediaFileService.FindByEditionSlotId(id) != null)
+            {
+                throw new InvalidOperationException($"Edition '{slot.EditionName}' still has an assigned movie file. Remove it through the movie file assignment service.");
+            }
+
+            _aliasRepo.DeleteForSlot(id);
             _repo.Delete(id);
         }
 
         public Dictionary<int, (int Monitored, int Missing)> GetSlotStatusSummary(IEnumerable<int> movieIds)
         {
-            var slots = _repo.FindByMovieIds(movieIds);
-            return slots
-                .GroupBy(s => s.MovieId)
-                .ToDictionary(
-                    g => g.Key,
-                    g => (
-                        Monitored: g.Count(s => s.Monitored),
-                        Missing: g.Count(s => s.Monitored && !s.MovieFileId.HasValue)
-                    ));
+            var ids = movieIds?.Distinct().ToList() ?? new List<int>();
+            var slots = _repo.FindByMovieIds(ids);
+            var attachedSlotIds = _mediaFileService.GetFilesByMovies(ids)
+                .Where(f => f.MovieEditionSlotId.HasValue)
+                .Select(f => f.MovieEditionSlotId.Value)
+                .ToHashSet();
+
+            return slots.GroupBy(s => s.MovieId).ToDictionary(
+                g => g.Key,
+                g => (g.Count(s => s.Monitored), g.Count(s => s.Monitored && !attachedSlotIds.Contains(s.Id))));
         }
 
         public List<MovieEditionSlot> GetMonitoredMissingSlots()
         {
-            return _repo.FindMonitoredWithoutFiles();
+            var slots = _repo.All().Where(s => s.Monitored).ToList();
+            var files = _mediaFileService.GetFilesByMovies(slots.Select(s => s.MovieId).Distinct());
+            var attached = files.Where(f => f.MovieEditionSlotId.HasValue).Select(f => f.MovieEditionSlotId.Value).ToHashSet();
+            return LoadAliases(slots.Where(s => !attached.Contains(s.Id)).ToList());
         }
 
         public List<MovieEditionSlot> GetMonitoredSlotsWithFiles()
         {
-            return _repo.FindMonitoredWithFiles();
+            var slots = _repo.All().Where(s => s.Monitored).ToList();
+            var files = _mediaFileService.GetFilesByMovies(slots.Select(s => s.MovieId).Distinct());
+            var attached = files.Where(f => f.MovieEditionSlotId.HasValue).Select(f => f.MovieEditionSlotId.Value).ToHashSet();
+            return LoadAliases(slots.Where(s => attached.Contains(s.Id)).ToList());
         }
 
         public Dictionary<int, MovieEditionSlot> GetByIds(IEnumerable<int> ids)
         {
             var slotIds = ids?.Distinct().ToList() ?? new List<int>();
-
-            if (!slotIds.Any())
-            {
-                return new Dictionary<int, MovieEditionSlot>();
-            }
-
-            return _repo.FindByIds(slotIds).ToDictionary(s => s.Id);
+            return slotIds.Count == 0
+                ? new Dictionary<int, MovieEditionSlot>()
+                : LoadAliases(_repo.FindByIds(slotIds)).ToDictionary(s => s.Id);
         }
 
         public void HandleAsync(MoviesDeletedEvent message)
         {
             foreach (var movie in message.Movies)
             {
+                foreach (var slot in _repo.FindByMovieId(movie.Id))
+                {
+                    _aliasRepo.DeleteForSlot(slot.Id);
+                }
+
                 _repo.DeleteForMovie(movie.Id);
             }
         }
 
-        public void Handle(MovieFileAddedEvent message)
-        {
-            LinkMovieFileToEditionSlot(message.MovieFile);
-        }
+        // Durable assignments are explicit. Parser/event text never creates slots or remaps files.
+        public void Handle(MovieFileAddedEvent message) { }
+        public void Handle(MovieFileUpdatedEvent message) { }
+        public void Handle(MovieFileImportedEvent message) { }
+        public void Handle(MovieFileDeletedEvent message) { }
+        public void ReconcileForMovie(int movieId, IReadOnlyList<MovieFile> existingFiles) { }
 
-        public void Handle(MovieFileUpdatedEvent message)
+        private void ValidateTerms(MovieEditionSlot candidate)
         {
-            LinkMovieFileToEditionSlot(message.MovieFile);
-        }
-
-        public void Handle(MovieFileImportedEvent message)
-        {
-            LinkMovieFileToEditionSlot(message.ImportedMovie);
-        }
-
-        public void Handle(MovieFileDeletedEvent message)
-        {
-            if (message.MovieFile == null)
+            var candidateTerms = GetTerms(candidate).ToHashSet();
+            foreach (var existing in LoadAliases(_repo.FindByMovieId(candidate.MovieId)).Where(s => s.Id != candidate.Id))
             {
-                return;
-            }
-
-            foreach (var slot in _repo.FindByMovieFileId(message.MovieFile.Id))
-            {
-                slot.MovieFileId = null;
-                _repo.Update(slot);
+                if (GetTerms(existing).Any(candidateTerms.Contains))
+                {
+                    throw new ValidationException(new[]
+                    {
+                        new ValidationFailure("EditionName", $"Edition terms conflict with existing edition '{existing.EditionName}'.")
+                    });
+                }
             }
         }
 
-        public void ReconcileForMovie(int movieId, IReadOnlyList<MovieFile> existingFiles)
+        private static IEnumerable<string> GetTerms(MovieEditionSlot slot)
         {
-            var slots = _repo.FindByMovieId(movieId);
+            return new[] { slot.EditionName, slot.SearchTerm }
+                .Concat(slot.Aliases ?? new List<string>())
+                .Select(EditionNormalizer.Normalize)
+                .Where(x => x.IsNotNullOrWhiteSpace());
+        }
+
+        private List<MovieEditionSlot> LoadAliases(List<MovieEditionSlot> slots)
+        {
             if (slots.Count == 0)
             {
-                return;
+                return slots;
             }
 
-            var fileIds = new HashSet<int>(existingFiles.Select(f => f.Id));
-
-            // Clear slot references whose file no longer exists (belt-and-suspenders;
-            // MovieFileDeletedEvent normally handles this during cleanup).
-            foreach (var slot in slots.Where(s => s.MovieFileId.HasValue && !fileIds.Contains(s.MovieFileId.Value)))
+            var aliases = _aliasRepo.FindBySlotIds(slots.Select(s => s.Id)).ToLookup(a => a.MovieEditionSlotId);
+            foreach (var slot in slots)
             {
-                slot.MovieFileId = null;
-                _repo.Update(slot);
+                slot.Aliases = aliases[slot.Id].Select(a => a.Alias).ToList();
             }
 
-            // Build set of file IDs already linked to a slot so we skip them.
-            var linkedFileIds = new HashSet<int>(slots.Where(s => s.MovieFileId.HasValue).Select(s => s.MovieFileId.Value));
-
-            // Link each unlinked edition file to its matching slot (conservative: no slot creation).
-            foreach (var file in existingFiles.Where(f => !f.Edition.IsNullOrWhiteSpace() && !linkedFileIds.Contains(f.Id)))
-            {
-                var normalizedEdition = EditionNormalizer.Normalize(file.Edition);
-                var matchingSlot = slots.FirstOrDefault(s =>
-                    s.MovieFileId == null &&
-                    (EditionNormalizer.Normalize(s.EditionName) == normalizedEdition ||
-                     EditionNormalizer.Normalize(s.SearchTerm) == normalizedEdition));
-
-                if (matchingSlot == null)
-                {
-                    continue;
-                }
-
-                matchingSlot.MovieFileId = file.Id;
-                linkedFileIds.Add(file.Id);
-                _repo.Update(matchingSlot);
-            }
+            return slots;
         }
 
-        private void LinkMovieFileToEditionSlot(MovieFile movieFile)
+        private void SaveAliases(int slotId, IEnumerable<string> aliases)
         {
-            if (movieFile == null || movieFile.MovieId <= 0 || movieFile.Edition.IsNullOrWhiteSpace())
+            _aliasRepo.DeleteForSlot(slotId);
+            foreach (var alias in aliases)
             {
-                return;
-            }
-
-            var slots = _repo.FindByMovieId(movieFile.MovieId);
-            var normalizedEdition = EditionNormalizer.Normalize(movieFile.Edition);
-            var matchingSlot = slots.FirstOrDefault(slot =>
-                EditionNormalizer.Normalize(slot.EditionName) == normalizedEdition ||
-                EditionNormalizer.Normalize(slot.SearchTerm) == normalizedEdition);
-
-            if (matchingSlot == null)
-            {
-                Add(new MovieEditionSlot
+                _aliasRepo.Insert(new MovieEditionSlotAlias
                 {
-                    MovieId = movieFile.MovieId,
-                    EditionName = movieFile.Edition,
-                    SearchTerm = movieFile.Edition,
-                    Monitored = true,
-                    MovieFileId = movieFile.Id
+                    MovieEditionSlotId = slotId,
+                    Alias = alias,
+                    NormalizedAlias = EditionNormalizer.Normalize(alias)
                 });
-
-                return;
             }
-
-            matchingSlot.MovieFileId = movieFile.Id;
-            _repo.Update(matchingSlot);
         }
 
         private static void Normalize(MovieEditionSlot slot)
         {
             slot.EditionName = slot.EditionName?.Trim() ?? string.Empty;
+            slot.CanonicalEditionKey = EditionNormalizer.Normalize(slot.EditionName);
             slot.SearchTerm = slot.SearchTerm.IsNullOrWhiteSpace() ? null : slot.SearchTerm.Trim();
+            slot.Aliases = (slot.Aliases ?? new List<string>())
+                .Where(a => a.IsNotNullOrWhiteSpace())
+                .Select(a => a.Trim())
+                .ToList();
+
+            if (slot.CanonicalEditionKey.IsNullOrWhiteSpace())
+            {
+                throw new ValidationException(new[]
+                {
+                    new ValidationFailure("EditionName", "Edition name must contain letters or numbers.")
+                });
+            }
+
+            if (slot.SearchTerm != null && EditionNormalizer.Normalize(slot.SearchTerm).IsNullOrWhiteSpace())
+            {
+                throw new ValidationException(new[]
+                {
+                    new ValidationFailure("SearchTerm", "Search term must contain letters or numbers.")
+                });
+            }
+
+            if (slot.Aliases.Any(alias => EditionNormalizer.Normalize(alias).IsNullOrWhiteSpace()))
+            {
+                throw new ValidationException(new[]
+                {
+                    new ValidationFailure("Aliases", "Aliases must contain letters or numbers.")
+                });
+            }
+
+            slot.Aliases = slot.Aliases
+                .GroupBy(EditionNormalizer.Normalize)
+                .Select(g => g.First())
+                .ToList();
         }
     }
 }

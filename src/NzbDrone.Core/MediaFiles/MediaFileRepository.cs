@@ -9,6 +9,9 @@ namespace NzbDrone.Core.MediaFiles
     {
         List<MovieFile> GetFilesByMovie(int movieId);
         List<MovieFile> GetFilesByMovies(IEnumerable<int> movieIds);
+        MovieFile FindByEditionSlotId(int movieEditionSlotId);
+        List<MovieFile> GetFilesByEditionSlotIds(IEnumerable<int> movieEditionSlotIds);
+        List<MovieFile> GetUnassignedFiles(int movieId);
         List<MovieFile> GetFilesWithoutMediaInfo();
         void DeleteForMovies(List<int> movieIds);
 
@@ -30,6 +33,27 @@ namespace NzbDrone.Core.MediaFiles
         public List<MovieFile> GetFilesByMovies(IEnumerable<int> movieIds)
         {
             return Query(x => movieIds.Contains(x.MovieId));
+        }
+
+        public MovieFile FindByEditionSlotId(int movieEditionSlotId)
+        {
+            return Query(x => x.MovieEditionSlotId == movieEditionSlotId).SingleOrDefault();
+        }
+
+        public List<MovieFile> GetFilesByEditionSlotIds(IEnumerable<int> movieEditionSlotIds)
+        {
+            var ids = movieEditionSlotIds?.Distinct().Select(id => (int?)id).ToList() ?? new List<int?>();
+            return ids.Count == 0 ? new List<MovieFile>() : Query(x => ids.Contains(x.MovieEditionSlotId));
+        }
+
+        public List<MovieFile> GetUnassignedFiles(int movieId)
+        {
+            var builder = Builder()
+                .LeftJoin<MovieFile, Movies.Movie>((file, movie) => file.MovieId == movie.Id)
+                .Where<MovieFile>(file => file.MovieId == movieId && file.MovieEditionSlotId == null)
+                .Where("\"MovieFiles\".\"Id\" != \"Movies\".\"MovieFileId\"", new { });
+
+            return Query(builder);
         }
 
         public List<MovieFile> GetFilesWithoutMediaInfo()

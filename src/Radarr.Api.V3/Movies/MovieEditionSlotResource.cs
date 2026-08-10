@@ -13,6 +13,7 @@ namespace Radarr.Api.V3.Movies
         public int MovieId { get; set; }
         public string EditionName { get; set; }
         public string SearchTerm { get; set; }
+        public List<string> Aliases { get; set; }
         public bool Monitored { get; set; }
         public int? MovieFileId { get; set; }
         public int? QualityProfileId { get; set; }
@@ -41,8 +42,8 @@ namespace Radarr.Api.V3.Movies
                 MovieId = model.MovieId,
                 EditionName = model.EditionName,
                 SearchTerm = model.SearchTerm,
+                Aliases = model.Aliases,
                 Monitored = model.Monitored,
-                MovieFileId = model.MovieFileId,
                 QualityProfileId = model.QualityProfileId,
                 MinimumCustomFormatScore = model.MinimumCustomFormatScore,
                 LastSearchTime = model.LastSearchTime,
@@ -63,8 +64,8 @@ namespace Radarr.Api.V3.Movies
                 MovieId = resource.MovieId,
                 EditionName = resource.EditionName?.Trim() ?? string.Empty,
                 SearchTerm = string.IsNullOrWhiteSpace(resource.SearchTerm) ? null : resource.SearchTerm.Trim(),
+                Aliases = resource.Aliases ?? new List<string>(),
                 Monitored = resource.Monitored,
-                MovieFileId = resource.MovieFileId,
                 QualityProfileId = resource.QualityProfileId,
                 MinimumCustomFormatScore = resource.MinimumCustomFormatScore,
                 LastSearchTime = resource.LastSearchTime,

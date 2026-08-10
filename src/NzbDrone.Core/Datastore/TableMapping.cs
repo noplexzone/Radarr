@@ -179,7 +179,10 @@ namespace NzbDrone.Core.Datastore
 
             Mapper.Entity<MovieCollection>("Collections").RegisterModel();
 
-            Mapper.Entity<MovieEditionSlot>("MovieEditionSlots").RegisterModel();
+            Mapper.Entity<MovieEditionSlot>("MovieEditionSlots").RegisterModel()
+                .Ignore(s => s.Aliases);
+
+            Mapper.Entity<MovieEditionSlotAlias>("MovieEditionSlotAliases").RegisterModel();
 
             Mapper.Entity<AutoTagging.AutoTag>("AutoTagging").RegisterModel();
         }
