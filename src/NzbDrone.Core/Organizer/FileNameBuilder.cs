@@ -13,6 +13,7 @@ using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.MediaInfo;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Movies.Translations;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Qualities;
@@ -30,15 +31,18 @@ namespace NzbDrone.Core.Organizer
     {
         private const string MediaInfoVideoDynamicRangeToken = "{MediaInfo VideoDynamicRange}";
         private const string MediaInfoVideoDynamicRangeTypeToken = "{MediaInfo VideoDynamicRangeType}";
+        private const string EditionNameToken = "{Edition Name}";
+        private const string EditionSearchTermToken = "{Edition Search Term}";
 
         private readonly INamingConfigService _namingConfigService;
         private readonly IQualityDefinitionService _qualityDefinitionService;
         private readonly IUpdateMediaInfo _mediaInfoUpdater;
         private readonly IMovieTranslationService _movieTranslationService;
         private readonly ICustomFormatCalculationService _formatCalculator;
+        private readonly IMovieEditionSlotService _editionSlotService;
         private readonly Logger _logger;
 
-        private static readonly Regex TitleRegex = new Regex(@"(?<tag>\{(?<prefix>[-{ ._\[(]*)(?:imdb(?:id)?-|edition-))?\{(?<prefix>[-{ ._\[(]*)(?<token>(?:[a-z0-9]+)(?:(?<separator>[- ._]+)(?:[a-z0-9]+))?)(?::(?<customFormat>[ ,a-z0-9|+-]+(?<![- ])))?(?<suffix>[-} ._)\]]*)\}",
+        private static readonly Regex TitleRegex = new Regex(@"(?<tag>\{(?<prefix>[-{ ._\[(]*)(?:imdb(?:id)?-|edition-))?\{(?<prefix>[-{ ._\[(]*)(?<token>(?:edition(?<separator>[- ._]+)search(?<separator>[- ._]+)term|(?:[a-z0-9]+)(?:(?<separator>[- ._]+)(?:[a-z0-9]+))?))(?::(?<customFormat>[ ,a-z0-9|+-]+(?<![- ])))?(?<suffix>[-} ._)\]]*)\}",
                                                              RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         public static readonly Regex ReleaseYearRegex = new Regex(@"\{[-{ ._\[(]*Release[- ._]Year[-} ._)\]]*\}", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -92,6 +96,7 @@ namespace NzbDrone.Core.Organizer
                                IUpdateMediaInfo mediaInfoUpdater,
                                IMovieTranslationService movieTranslationService,
                                ICustomFormatCalculationService formatCalculator,
+                               IMovieEditionSlotService editionSlotService,
                                Logger logger)
         {
             _namingConfigService = namingConfigService;
@@ -99,6 +104,7 @@ namespace NzbDrone.Core.Organizer
             _mediaInfoUpdater = mediaInfoUpdater;
             _movieTranslationService = movieTranslationService;
             _formatCalculator = formatCalculator;
+            _editionSlotService = editionSlotService;
             _logger = logger;
         }
 
@@ -109,9 +115,23 @@ namespace NzbDrone.Core.Organizer
                 namingConfig = _namingConfigService.GetConfig();
             }
 
+            var editionSlot = GetEditionSlot(movie, movieFile);
+
             if (!namingConfig.RenameMovies)
             {
-                return GetOriginalTitle(movieFile, false);
+                var originalTitle = GetOriginalTitle(movieFile, false);
+                if (editionSlot == null)
+                {
+                    return originalTitle;
+                }
+
+                var existingSuffixStart = originalTitle.LastIndexOf($" [edition-{editionSlot.Id.ToString(CultureInfo.InvariantCulture)}-", StringComparison.OrdinalIgnoreCase);
+                if (existingSuffixStart >= 0 && originalTitle.EndsWith("]", StringComparison.Ordinal))
+                {
+                    originalTitle = originalTitle.Substring(0, existingSuffixStart);
+                }
+
+                return originalTitle + GetEditionSlotSuffix(editionSlot, namingConfig);
             }
 
             if (namingConfig.StandardMovieFormat.IsNullOrWhiteSpace())
@@ -132,6 +152,7 @@ namespace NzbDrone.Core.Organizer
             AddQualityTokens(tokenHandlers, movie, movieFile);
             AddMediaInfoTokens(tokenHandlers, movieFile);
             AddMovieFileTokens(tokenHandlers, movieFile, multipleTokens);
+            AddEditionSlotTokens(tokenHandlers, editionSlot);
             AddEditionTagsTokens(tokenHandlers, movieFile);
             AddCustomFormats(tokenHandlers, movie, movieFile, customFormats);
 
@@ -152,6 +173,19 @@ namespace NzbDrone.Core.Organizer
                 if (component.IsNotNullOrWhiteSpace())
                 {
                     components.Add(component);
+                }
+            }
+
+            if (editionSlot != null && !HasDurableEditionToken(pattern))
+            {
+                var suffix = GetEditionSlotSuffix(editionSlot, namingConfig);
+                if (components.Any())
+                {
+                    components[components.Count - 1] += suffix;
+                }
+                else
+                {
+                    components.Add(suffix.TrimStart());
                 }
             }
 
@@ -307,6 +341,52 @@ namespace NzbDrone.Core.Organizer
             }
 
             return movie.Title;
+        }
+
+        // Durable edition naming tokens. Main and unassigned files intentionally render both as empty.
+        private void AddEditionSlotTokens(Dictionary<string, Func<TokenMatch, string>> tokenHandlers, MovieEditionSlot editionSlot)
+        {
+            tokenHandlers[EditionNameToken] = m => Truncate(editionSlot?.EditionName, m.CustomFormat);
+            tokenHandlers[EditionSearchTermToken] = m => Truncate(editionSlot?.SearchTerm, m.CustomFormat);
+        }
+
+        private MovieEditionSlot GetEditionSlot(Movie movie, MovieFile movieFile)
+        {
+            if (!movieFile.MovieEditionSlotId.HasValue)
+            {
+                return null;
+            }
+
+            var editionSlot = _editionSlotService.GetById(movieFile.MovieEditionSlotId.Value);
+            if (editionSlot == null)
+            {
+                throw new NamingFormatException($"Edition slot {movieFile.MovieEditionSlotId.Value} does not exist for movie {movie.Id}.");
+            }
+
+            if (editionSlot.MovieId != movie.Id)
+            {
+                throw new NamingFormatException($"Edition slot {editionSlot.Id} belongs to movie {editionSlot.MovieId}, not movie {movie.Id}.");
+            }
+
+            return editionSlot;
+        }
+
+        private static bool HasDurableEditionToken(string pattern)
+        {
+            return TitleRegex.Matches(pattern)
+                .Select(match => match.Groups["token"].Value)
+                .Any(token => FileNameBuilderTokenEqualityComparer.Instance.Equals(token, EditionNameToken) ||
+                              FileNameBuilderTokenEqualityComparer.Instance.Equals(token, EditionSearchTermToken));
+        }
+
+        private string GetEditionSlotSuffix(MovieEditionSlot editionSlot, NamingConfig namingConfig)
+        {
+            var identity = $"edition-{editionSlot.Id.ToString(CultureInfo.InvariantCulture)}-{editionSlot.EditionName}";
+            identity = CleanFileName(identity, namingConfig);
+            identity = FileNameCleanupRegex.Replace(identity, match => match.Captures[0].Value[0].ToString());
+            identity = TrimSeparatorsRegex.Replace(identity, string.Empty);
+
+            return $" [{ReplaceReservedDeviceNames(identity)}]";
         }
 
         private void AddEditionTagsTokens(Dictionary<string, Func<TokenMatch, string>> tokenHandlers, MovieFile movieFile)

@@ -86,9 +86,20 @@ namespace NzbDrone.Core.MediaFiles
             }
         }
 
+        private void ValidateRenameFiles(Movie movie, IEnumerable<MovieFile> movieFiles)
+        {
+            foreach (var movieFile in movieFiles)
+            {
+                _filenameBuilder.BuildFileName(movie, movieFile);
+            }
+        }
+
         private List<RenamedMovieFile> RenameFiles(List<MovieFile> movieFiles, Movie movie)
         {
             var renamed = new List<RenamedMovieFile>();
+
+            // Resolve every durable edition assignment before any file can be moved.
+            ValidateRenameFiles(movie, movieFiles);
 
             foreach (var movieFile in movieFiles)
             {
@@ -153,10 +164,18 @@ namespace NzbDrone.Core.MediaFiles
         {
             _logger.Debug("Renaming movie files for selected movie");
             var moviesToRename = _movieService.GetMovies(message.MovieIds);
+            var filesByMovie = moviesToRename.ToDictionary(movie => movie.Id, movie => _mediaFileService.GetFilesByMovie(movie.Id));
+
+            // Validate the complete command before moving the first file. A corrupt slot
+            // on a later movie must not leave an earlier movie partially renamed.
+            foreach (var movie in moviesToRename)
+            {
+                ValidateRenameFiles(movie, filesByMovie[movie.Id]);
+            }
 
             foreach (var movie in moviesToRename)
             {
-                var movieFiles = _mediaFileService.GetFilesByMovie(movie.Id);
+                var movieFiles = filesByMovie[movie.Id];
                 _logger.ProgressInfo("Renaming movie files for {0}", movie.Title);
                 var renamedFiles = RenameFiles(movieFiles, movie);
                 _logger.ProgressInfo("{0} movie files renamed for {1}", renamedFiles.Count, movie.Title);

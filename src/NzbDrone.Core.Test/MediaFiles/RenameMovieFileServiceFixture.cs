@@ -8,6 +8,7 @@ using NzbDrone.Core.MediaFiles.Commands;
 using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Organizer;
 using NzbDrone.Core.Test.Framework;
 
 namespace NzbDrone.Core.Test.MediaFiles
@@ -116,6 +117,108 @@ namespace NzbDrone.Core.Test.MediaFiles
 
             Mocker.GetMock<IMediaFileService>()
                   .Verify(v => v.GetMovies(files), Times.Once());
+        }
+
+        [Test]
+        public void should_preview_main_slot_and_unassigned_files_with_distinct_destinations()
+        {
+            _movie.Path = "/movies/test";
+            _movie.MovieFileId = 1;
+            _movieFiles = new List<MovieFile>
+            {
+                new MovieFile { Id = 1, MovieId = _movie.Id, RelativePath = "main-old.mkv" },
+                new MovieFile { Id = 2, MovieId = _movie.Id, MovieEditionSlotId = 42, RelativePath = "slot-old.mkv" },
+                new MovieFile { Id = 3, MovieId = _movie.Id, RelativePath = "unassigned-old.mkv" }
+            };
+
+            Mocker.GetMock<IMovieService>()
+                .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
+                .Returns(new List<Movie> { _movie });
+            Mocker.GetMock<IMediaFileService>()
+                .Setup(s => s.GetFilesByMovies(It.IsAny<IEnumerable<int>>()))
+                .Returns(_movieFiles);
+            Mocker.GetMock<IBuildFileNames>()
+                .Setup(s => s.BuildFileName(_movie, It.IsAny<MovieFile>(), null, null))
+                .Returns<Movie, MovieFile, NamingConfig, List<NzbDrone.Core.CustomFormats.CustomFormat>>((_, file, _, _) => $"new-{file.Id}");
+            Mocker.GetMock<IBuildFileNames>()
+                .Setup(s => s.BuildFilePath(_movie, It.IsAny<string>(), ".mkv"))
+                .Returns<Movie, string, string>((_, name, extension) => $"/movies/test/{name}{extension}");
+
+            var previews = Subject.GetRenamePreviews(new List<int> { _movie.Id });
+
+            Assert.That(previews.Select(p => p.MovieFileId), Is.EquivalentTo(new[] { 1, 2, 3 }));
+            Assert.That(previews.Select(p => p.NewPath).Distinct().Count(), Is.EqualTo(3));
+            Assert.That(_movieFiles.Single(f => f.Id == 2).MovieEditionSlotId, Is.EqualTo(42));
+        }
+
+        [Test]
+        public void should_rename_main_slot_and_unassigned_files_without_changing_slot_assignment()
+        {
+            _movie.MovieFileId = 1;
+            _movieFiles = new List<MovieFile>
+            {
+                new MovieFile { Id = 1, MovieId = _movie.Id, RelativePath = "main.mkv" },
+                new MovieFile { Id = 2, MovieId = _movie.Id, MovieEditionSlotId = 42, RelativePath = "slot.mkv" },
+                new MovieFile { Id = 3, MovieId = _movie.Id, RelativePath = "unassigned.mkv" }
+            };
+            Mocker.GetMock<IMovieService>()
+                .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
+                .Returns(new List<Movie> { _movie });
+            Mocker.GetMock<IMediaFileService>()
+                .Setup(s => s.GetFilesByMovie(_movie.Id))
+                .Returns(_movieFiles);
+            GivenMovedFiles();
+
+            Subject.Execute(new RenameMovieCommand { MovieIds = new List<int> { _movie.Id } });
+
+            foreach (var file in _movieFiles)
+            {
+                Mocker.GetMock<IMoveMovieFiles>()
+                    .Verify(s => s.MoveMovieFile(file, _movie), Times.Once());
+            }
+
+            Assert.That(_movieFiles.Single(f => f.Id == 2).MovieEditionSlotId, Is.EqualTo(42));
+        }
+
+        [Test]
+        public void should_validate_every_movie_in_a_bulk_command_before_moving_any_file()
+        {
+            var firstMovie = new Movie { Id = 10, Title = "First" };
+            var secondMovie = new Movie { Id = 20, Title = "Second" };
+            var firstFile = new MovieFile { Id = 100, MovieId = firstMovie.Id, RelativePath = "first.mkv" };
+            var invalidSecondFile = new MovieFile { Id = 200, MovieId = secondMovie.Id, MovieEditionSlotId = 42, RelativePath = "second.mkv" };
+
+            Mocker.GetMock<IMovieService>()
+                .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
+                .Returns(new List<Movie> { firstMovie, secondMovie });
+            Mocker.GetMock<IMediaFileService>().Setup(s => s.GetFilesByMovie(firstMovie.Id)).Returns(new List<MovieFile> { firstFile });
+            Mocker.GetMock<IMediaFileService>().Setup(s => s.GetFilesByMovie(secondMovie.Id)).Returns(new List<MovieFile> { invalidSecondFile });
+            Mocker.GetMock<IBuildFileNames>()
+                .Setup(s => s.BuildFileName(secondMovie, invalidSecondFile, null, null))
+                .Throws(new NamingFormatException("Missing edition slot"));
+
+            Assert.Throws<NamingFormatException>(() => Subject.Execute(new RenameMovieCommand
+            {
+                MovieIds = new List<int> { firstMovie.Id, secondMovie.Id }
+            }));
+
+            Mocker.GetMock<IMoveMovieFiles>()
+                .Verify(s => s.MoveMovieFile(It.IsAny<MovieFile>(), It.IsAny<Movie>()), Times.Never());
+        }
+
+        [Test]
+        public void should_validate_all_names_before_moving_any_file()
+        {
+            GivenMovieFiles();
+            GivenMovedFiles();
+            Mocker.GetMock<IBuildFileNames>()
+                .Setup(s => s.BuildFileName(_movie, _movieFiles[1], null, null))
+                .Throws(new NamingFormatException("Missing edition slot"));
+
+            Assert.Throws<NamingFormatException>(() => Subject.Execute(new RenameFilesCommand(_movie.Id, _movieFiles.Select(f => f.Id).ToList())));
+
+            Mocker.GetMock<IMoveMovieFiles>()
+                .Verify(s => s.MoveMovieFile(It.IsAny<MovieFile>(), It.IsAny<Movie>()), Times.Never());
         }
     }
 }

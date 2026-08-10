@@ -12,6 +12,7 @@ using NzbDrone.Core.Languages;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.MediaInfo;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Movies.Translations;
 using NzbDrone.Core.Organizer;
 using NzbDrone.Core.Qualities;
@@ -344,6 +345,153 @@ namespace NzbDrone.Core.Test.OrganizerTests.FileNameBuilderTests
 
             Subject.BuildFileName(_movie, _movieFile)
                    .Should().Be("30 Rock - 30.Rock.S01E01.xvid-LOL");
+        }
+
+        [Test]
+        public void should_use_durable_edition_slot_tokens_instead_of_parser_metadata()
+        {
+            _movie.Id = 12;
+            _movieFile.MovieEditionSlotId = 42;
+            _movieFile.Edition = "Parser Edition";
+            _namingConfig.StandardMovieFormat = "{Movie Title} - {Edition Name} - {Edition Search Term}";
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetById(42))
+                .Returns(new MovieEditionSlot
+                {
+                    Id = 42,
+                    MovieId = _movie.Id,
+                    EditionName = "Director's Cut",
+                    SearchTerm = "directors cut"
+                });
+
+            Subject.BuildFileName(_movie, _movieFile)
+                .Should().Be("South Park - Director's Cut - directors cut");
+        }
+
+        [Test]
+        public void should_render_durable_edition_tokens_empty_for_unassigned_files()
+        {
+            _namingConfig.StandardMovieFormat = "{Movie Title}{ - Edition Name}{ - Edition Search Term}";
+
+            Subject.BuildFileName(_movie, _movieFile)
+                .Should().Be("South Park");
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Verify(s => s.GetById(It.IsAny<int>()), Times.Never());
+        }
+
+        [Test]
+        public void should_append_deterministic_slot_suffix_when_durable_tokens_are_omitted()
+        {
+            _movie.Id = 12;
+            _movieFile.MovieEditionSlotId = 42;
+            _namingConfig.StandardMovieFormat = "{Movie Title}";
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetById(42))
+                .Returns(new MovieEditionSlot
+                {
+                    Id = 42,
+                    MovieId = _movie.Id,
+                    EditionName = "Director's/Cut"
+                });
+
+            Subject.BuildFileName(_movie, _movieFile)
+                .Should().Be("South Park [edition-42-Director's+Cut]");
+        }
+
+        [TestCase("{Movie Title} - {Edition Name}")]
+        [TestCase("{Movie Title} - {Edition Search Term}")]
+        public void should_not_append_slot_suffix_when_a_durable_token_is_present(string format)
+        {
+            _movie.Id = 12;
+            _movieFile.MovieEditionSlotId = 42;
+            _namingConfig.StandardMovieFormat = format;
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetById(42))
+                .Returns(new MovieEditionSlot
+                {
+                    Id = 42,
+                    MovieId = _movie.Id,
+                    EditionName = "IMAX",
+                    SearchTerm = "imax"
+                });
+
+            Subject.BuildFileName(_movie, _movieFile)
+                .Should().NotContain("edition-42");
+        }
+
+        [Test]
+        public void should_validate_and_suffix_a_slot_even_when_movie_renaming_is_disabled()
+        {
+            _movie.Id = 12;
+            _movieFile.MovieEditionSlotId = 42;
+            _movieFile.RelativePath = "Original.mkv";
+            _namingConfig.RenameMovies = false;
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetById(42))
+                .Returns(new MovieEditionSlot { Id = 42, MovieId = _movie.Id, EditionName = "IMAX" });
+
+            Subject.BuildFileName(_movie, _movieFile)
+                .Should().Be("Original [edition-42-IMAX]");
+        }
+
+        [Test]
+        public void should_not_accumulate_slot_suffixes_when_movie_renaming_is_disabled()
+        {
+            _movie.Id = 12;
+            _movieFile.MovieEditionSlotId = 42;
+            _movieFile.RelativePath = "Original [edition-42-IMAX].mkv";
+            _namingConfig.RenameMovies = false;
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetById(42))
+                .Returns(new MovieEditionSlot { Id = 42, MovieId = _movie.Id, EditionName = "IMAX" });
+
+            Subject.BuildFileName(_movie, _movieFile)
+                .Should().Be("Original [edition-42-IMAX]");
+        }
+
+        [Test]
+        public void should_reject_a_missing_slot_even_when_movie_renaming_is_disabled()
+        {
+            _movie.Id = 12;
+            _movieFile.MovieEditionSlotId = 42;
+            _movieFile.RelativePath = "Original.mkv";
+            _namingConfig.RenameMovies = false;
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(42)).Returns((MovieEditionSlot)null);
+
+            Assert.Throws<NamingFormatException>(() => Subject.BuildFileName(_movie, _movieFile));
+        }
+
+        [Test]
+        public void should_reject_an_edition_slot_from_another_movie()
+        {
+            _movie.Id = 12;
+            _movieFile.MovieEditionSlotId = 42;
+            _movieFile.Edition = "Parser Fallback";
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetById(42))
+                .Returns(new MovieEditionSlot { Id = 42, MovieId = 99, EditionName = "IMAX" });
+
+            Assert.Throws<NamingFormatException>(() => Subject.BuildFileName(_movie, _movieFile));
+        }
+
+        [Test]
+        public void should_reject_a_missing_edition_slot_without_using_parser_metadata()
+        {
+            _movie.Id = 12;
+            _movieFile.MovieEditionSlotId = 42;
+            _movieFile.Edition = "Parser Fallback";
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetById(42))
+                .Returns((MovieEditionSlot)null);
+
+            Assert.Throws<NamingFormatException>(() => Subject.BuildFileName(_movie, _movieFile));
         }
 
         // TODO: Update this test or fix the underlying issue!
