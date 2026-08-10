@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using FizzWare.NBuilder;
+using FluentAssertions;
 using Moq;
 using NUnit.Framework;
 using NzbDrone.Common.Disk;
@@ -108,6 +110,53 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieFileMovingServiceTests
             Mocker.GetMock<IEventAggregator>()
                   .Verify(s => s.PublishEvent<MovieFolderCreatedEvent>(It.Is<MovieFolderCreatedEvent>(p =>
                       p.MovieFolder.IsNotNullOrWhiteSpace())), Times.Never());
+        }
+
+        [Test]
+        public void should_preflight_the_exact_destination_without_creating_folders()
+        {
+            var destination = @"C:\Test\Movies\Movie\File Name.avi".AsOsAgnostic();
+            Mocker.GetMock<IDiskProvider>().Setup(s => s.FileExists(destination)).Returns(false);
+
+            Subject.PreflightMovieFile(_movieFile, _localMovie, null).Should().Be(destination);
+
+            Mocker.GetMock<IDiskProvider>().Verify(s => s.CreateFolder(It.IsAny<string>()), Times.Never);
+            Mocker.GetMock<IDiskTransferService>().VerifyNoOtherCalls();
+        }
+
+        [Test]
+        public void should_reject_a_destination_collision_during_preflight()
+        {
+            var destination = @"C:\Test\Movies\Movie\File Name.avi".AsOsAgnostic();
+            Mocker.GetMock<IDiskProvider>().Setup(s => s.FileExists(destination)).Returns(true);
+
+            Assert.Throws<DestinationAlreadyExistsException>(() => Subject.PreflightMovieFile(_movieFile, _localMovie, null));
+
+            Mocker.GetMock<IDiskProvider>().Verify(s => s.CreateFolder(It.IsAny<string>()), Times.Never);
+            Mocker.GetMock<IDiskTransferService>().VerifyNoOtherCalls();
+        }
+
+        [Test]
+        public void should_allow_the_exact_replaced_file_as_the_preflight_destination()
+        {
+            var destination = @"C:\Test\Movies\Movie\File Name.avi".AsOsAgnostic();
+            Mocker.GetMock<IDiskProvider>().Setup(s => s.FileExists(destination)).Returns(true);
+
+            Subject.PreflightMovieFile(_movieFile, _localMovie, destination).Should().Be(destination);
+        }
+
+        [Test]
+        public void should_reject_a_missing_source_during_preflight()
+        {
+            var source = Path.Combine(_movie.Path, _movieFile.RelativePath);
+            var destination = @"C:\Test\Movies\Movie\File Name.avi".AsOsAgnostic();
+            Mocker.GetMock<IDiskProvider>().Setup(s => s.FileExists(source)).Returns(false);
+            Mocker.GetMock<IDiskProvider>().Setup(s => s.FileExists(destination)).Returns(false);
+
+            Assert.Throws<FileNotFoundException>(() => Subject.PreflightMovieFile(_movieFile, _localMovie, null));
+
+            Mocker.GetMock<IDiskProvider>().Verify(s => s.CreateFolder(It.IsAny<string>()), Times.Never);
+            Mocker.GetMock<IDiskTransferService>().VerifyNoOtherCalls();
         }
     }
 }

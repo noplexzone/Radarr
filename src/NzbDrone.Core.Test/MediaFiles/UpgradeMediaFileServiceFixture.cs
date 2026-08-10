@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -32,6 +33,9 @@ namespace NzbDrone.Core.Test.MediaFiles
 
             _movieFile = Builder<MovieFile>
                   .CreateNew()
+                  .With(f => f.MovieId = _localMovie.Movie.Id)
+                  .With(f => f.ImportTarget = _localMovie.ImportTarget)
+                  .With(f => f.MovieEditionSlotId = null)
                   .Build();
 
             Mocker.GetMock<IDiskProvider>()
@@ -59,8 +63,13 @@ namespace NzbDrone.Core.Test.MediaFiles
                 new MovieFile
                 {
                     Id = 1,
+                    MovieId = _localMovie.Movie.Id,
                     RelativePath = @"A.Movie.2019.avi",
                 };
+
+            Mocker.GetMock<IMediaFileService>()
+                .Setup(s => s.GetMovie(_localMovie.Movie.MovieFileId))
+                .Returns(_localMovie.Movie.MovieFile);
         }
 
         [Test]
@@ -133,233 +142,169 @@ namespace NzbDrone.Core.Test.MediaFiles
             Mocker.GetMock<IMediaFileService>().Verify(v => v.Delete(_localMovie.Movie.MovieFile, DeleteMediaFileReason.Upgrade), Times.Never());
         }
 
-        // --- Edition-slot-aware upgrade tests ---
+        // --- Durable edition-slot-aware upgrade tests ---
 
         [Test]
-        public void should_use_slot_file_as_existing_file_when_upgrading_edition()
-        {
-            // Movie.MovieFile points to IMAX (slot B), but we're upgrading Director's Cut (slot A)
-            _localMovie.Movie.MovieFileId = 2;
-            _localMovie.Movie.MovieFile = new MovieFile { Id = 2, RelativePath = "IMAX.mkv" };
-            _localMovie.Edition = "Director's Cut";
-
-            var slotA = new MovieEditionSlot { Id = 1, MovieId = _localMovie.Movie.Id, EditionName = "Director's Cut", MovieFileId = 1 };
-            var slotAFile = new MovieFile { Id = 1, RelativePath = "DirectorsCut.mkv" };
-
-            Mocker.GetMock<IMovieEditionSlotService>()
-                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
-                  .Returns(new List<MovieEditionSlot> { slotA });
-
-            Mocker.GetMock<IMediaFileService>()
-                  .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
-                  .Returns(new List<MovieFile> { slotAFile });
-
-            Subject.UpgradeMovieFile(_movieFile, _localMovie);
-
-            // Only Director's Cut file should be deleted
-            Mocker.GetMock<IMediaFileService>()
-                  .Verify(v => v.Delete(It.Is<MovieFile>(f => f.Id == 1), DeleteMediaFileReason.Upgrade), Times.Once);
-        }
-
-        [Test]
-        public void should_not_delete_other_edition_slot_file_when_upgrading()
-        {
-            // Movie.MovieFile points to IMAX (slot B), we're upgrading Director's Cut (slot A)
-            _localMovie.Movie.MovieFileId = 2;
-            _localMovie.Movie.MovieFile = new MovieFile { Id = 2, RelativePath = "IMAX.mkv" };
-            _localMovie.Edition = "Director's Cut";
-
-            var slotA = new MovieEditionSlot { Id = 1, MovieId = _localMovie.Movie.Id, EditionName = "Director's Cut", MovieFileId = 1 };
-            var slotAFile = new MovieFile { Id = 1, RelativePath = "DirectorsCut.mkv" };
-
-            Mocker.GetMock<IMovieEditionSlotService>()
-                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
-                  .Returns(new List<MovieEditionSlot> { slotA });
-
-            Mocker.GetMock<IMediaFileService>()
-                  .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
-                  .Returns(new List<MovieFile> { slotAFile });
-
-            Subject.UpgradeMovieFile(_movieFile, _localMovie);
-
-            // IMAX file (id=2) must not be touched
-            Mocker.GetMock<IMediaFileService>()
-                  .Verify(v => v.Delete(It.Is<MovieFile>(f => f.Id == 2), It.IsAny<DeleteMediaFileReason>()), Times.Never);
-            Mocker.GetMock<IRecycleBinProvider>()
-                  .Verify(v => v.DeleteFile(It.Is<string>(p => p.Contains("IMAX")), It.IsAny<string>()), Times.Never);
-        }
-
-        [Test]
-        public void should_not_delete_any_file_when_edition_slot_has_no_existing_file()
-        {
-            // Slot exists but has no file yet (first import for this edition)
-            _localMovie.Movie.MovieFileId = 1;
-            _localMovie.Movie.MovieFile = new MovieFile { Id = 1, RelativePath = "Existing.mkv" };
-            _localMovie.Edition = "Director's Cut";
-
-            var slot = new MovieEditionSlot { Id = 1, MovieId = _localMovie.Movie.Id, EditionName = "Director's Cut", MovieFileId = null };
-
-            Mocker.GetMock<IMovieEditionSlotService>()
-                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
-                  .Returns(new List<MovieEditionSlot> { slot });
-
-            Subject.UpgradeMovieFile(_movieFile, _localMovie);
-
-            Mocker.GetMock<IMediaFileService>()
-                  .Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
-        }
-
-        [Test]
-        public void should_not_delete_any_file_when_no_matching_edition_slot_exists()
-        {
-            // Edition is specified but no slot matches — do not fall back to Movie.MovieFile
-            _localMovie.Movie.MovieFileId = 1;
-            _localMovie.Movie.MovieFile = new MovieFile { Id = 1, RelativePath = "Existing.mkv" };
-            _localMovie.Edition = "Director's Cut";
-
-            // No slots at all
-            Mocker.GetMock<IMovieEditionSlotService>()
-                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
-                  .Returns(new List<MovieEditionSlot>());
-
-            Subject.UpgradeMovieFile(_movieFile, _localMovie);
-
-            Mocker.GetMock<IMediaFileService>()
-                  .Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
-        }
-
-        [Test]
-        public void should_return_slot_file_in_oldFiles_when_upgrading_edition()
-        {
-            _localMovie.Edition = "Director's Cut";
-
-            var slot = new MovieEditionSlot { Id = 1, MovieId = _localMovie.Movie.Id, EditionName = "Director's Cut", MovieFileId = 5 };
-            var slotFile = new MovieFile { Id = 5, RelativePath = "DirectorsCut.mkv" };
-
-            Mocker.GetMock<IMovieEditionSlotService>()
-                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
-                  .Returns(new List<MovieEditionSlot> { slot });
-
-            Mocker.GetMock<IMediaFileService>()
-                  .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
-                  .Returns(new List<MovieFile> { slotFile });
-
-            var result = Subject.UpgradeMovieFile(_movieFile, _localMovie);
-
-            result.OldFiles.Should().ContainSingle(f => f.MovieFile.Id == 5);
-        }
-
-        // --- Slot ID-based resolution tests (slot id wins over edition name) ---
-
-        [Test]
-        public void should_resolve_slot_by_id_when_movie_edition_slot_id_set()
+        public void should_replace_only_the_file_assigned_to_the_explicit_slot()
         {
             _localMovie.MovieEditionSlotId = 7;
+            _movieFile.ImportTarget = MovieFileImportTarget.EditionSlot;
+            _movieFile.MovieEditionSlotId = 7;
+            var slot = new MovieEditionSlot { Id = 7, MovieId = _localMovie.Movie.Id, EditionName = "IMAX" };
+            var slotFile = new MovieFile { Id = 10, MovieId = _localMovie.Movie.Id, MovieEditionSlotId = 7, RelativePath = "IMAX.mkv" };
 
-            var slot = new MovieEditionSlot { Id = 7, MovieId = _localMovie.Movie.Id, EditionName = "IMAX", MovieFileId = 10 };
-            var slotFile = new MovieFile { Id = 10, RelativePath = "IMAX.mkv" };
-
-            Mocker.GetMock<IMovieEditionSlotService>()
-                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
-                  .Returns(new List<MovieEditionSlot> { slot });
-
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(slot.Id)).Returns(slot);
             Mocker.GetMock<IMediaFileService>()
-                  .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
-                  .Returns(new List<MovieFile> { slotFile });
+                .Setup(s => s.FindByEditionSlotId(slot.Id))
+                .Returns(slotFile);
 
             var result = Subject.UpgradeMovieFile(_movieFile, _localMovie);
 
-            result.OldFiles.Should().ContainSingle(f => f.MovieFile.Id == 10);
+            result.OldFiles.Should().ContainSingle(f => f.MovieFile.Id == slotFile.Id);
         }
 
         [Test]
-        public void should_prefer_slot_id_over_edition_name_when_both_set()
+        public void should_not_replace_a_file_from_a_different_slot()
         {
-            // slot id = 2 (IMAX), edition name = "Director's Cut" (slot id = 1)
-            // slot id should win
-            _localMovie.MovieEditionSlotId = 2;
-            _localMovie.Edition = "Director's Cut";
+            _localMovie.MovieEditionSlotId = 7;
+            _movieFile.ImportTarget = MovieFileImportTarget.EditionSlot;
+            _movieFile.MovieEditionSlotId = 7;
+            var slot = new MovieEditionSlot { Id = 7, MovieId = _localMovie.Movie.Id, EditionName = "IMAX" };
+            var otherSlotFile = new MovieFile { Id = 20, MovieId = _localMovie.Movie.Id, MovieEditionSlotId = 8, RelativePath = "Other.mkv" };
 
-            var slotA = new MovieEditionSlot { Id = 1, MovieId = _localMovie.Movie.Id, EditionName = "Director's Cut", MovieFileId = 10 };
-            var slotB = new MovieEditionSlot { Id = 2, MovieId = _localMovie.Movie.Id, EditionName = "IMAX", MovieFileId = 20 };
-            var slotBFile = new MovieFile { Id = 20, RelativePath = "IMAX.mkv" };
-
-            Mocker.GetMock<IMovieEditionSlotService>()
-                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
-                  .Returns(new List<MovieEditionSlot> { slotA, slotB });
-
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(slot.Id)).Returns(slot);
             Mocker.GetMock<IMediaFileService>()
-                  .Setup(s => s.GetMovies(It.Is<IEnumerable<int>>(ids => ids.Contains(20))))
-                  .Returns(new List<MovieFile> { slotBFile });
-
-            var result = Subject.UpgradeMovieFile(_movieFile, _localMovie);
-
-            result.OldFiles.Should().ContainSingle(f => f.MovieFile.Id == 20);
-            Mocker.GetMock<IMediaFileService>()
-                  .Verify(v => v.GetMovies(It.Is<IEnumerable<int>>(ids => ids.Contains(10))), Times.Never);
-        }
-
-        [Test]
-        public void should_not_fall_back_to_edition_name_when_slot_id_not_found()
-        {
-            // slot id points to a non-existent slot; explicit slot context wins over fuzzy name matching.
-            _localMovie.MovieEditionSlotId = 99;
-            _localMovie.Edition = "Director's Cut";
-
-            var slot = new MovieEditionSlot { Id = 1, MovieId = _localMovie.Movie.Id, EditionName = "Director's Cut", MovieFileId = 5 };
-
-            Mocker.GetMock<IMovieEditionSlotService>()
-                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
-                  .Returns(new List<MovieEditionSlot> { slot });
-
-            var result = Subject.UpgradeMovieFile(_movieFile, _localMovie);
-
-            result.OldFiles.Should().BeEmpty();
-            Mocker.GetMock<IMediaFileService>()
-                  .Verify(v => v.GetMovies(It.IsAny<IEnumerable<int>>()), Times.Never);
-            Mocker.GetMock<IMediaFileService>()
-                  .Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
-        }
-
-        [Test]
-        public void should_not_delete_any_file_when_slot_id_set_but_slot_has_no_file()
-        {
-            _localMovie.MovieEditionSlotId = 3;
-
-            var slot = new MovieEditionSlot { Id = 3, MovieId = _localMovie.Movie.Id, EditionName = "Extended", MovieFileId = null };
-
-            Mocker.GetMock<IMovieEditionSlotService>()
-                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
-                  .Returns(new List<MovieEditionSlot> { slot });
+                .Setup(s => s.FindByEditionSlotId(slot.Id))
+                .Returns((MovieFile)null);
 
             Subject.UpgradeMovieFile(_movieFile, _localMovie);
 
             Mocker.GetMock<IMediaFileService>()
-                  .Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+                .Verify(s => s.Delete(otherSlotFile, It.IsAny<DeleteMediaFileReason>()), Times.Never);
         }
 
         [Test]
-        public void should_not_throw_and_not_delete_when_slot_movie_file_id_is_stale()
+        public void should_reject_a_missing_explicit_slot_before_any_mutation()
         {
-            // Slot holds a MovieFileId that no longer exists in the database (race / missed delete event).
-            // Import must proceed without aborting the whole operation.
-            _localMovie.Edition = "Director's Cut";
+            _localMovie.MovieEditionSlotId = 99;
+            _movieFile.ImportTarget = MovieFileImportTarget.EditionSlot;
+            _movieFile.MovieEditionSlotId = 99;
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(99)).Returns((MovieEditionSlot)null);
 
-            var slot = new MovieEditionSlot { Id = 5, MovieId = _localMovie.Movie.Id, EditionName = "Director's Cut", MovieFileId = 99 };
+            Assert.Throws<InvalidOperationException>(() => Subject.UpgradeMovieFile(_movieFile, _localMovie));
 
+            Mocker.GetMock<IRecycleBinProvider>().VerifyNoOtherCalls();
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+            Mocker.GetMock<IMoveMovieFiles>().VerifyNoOtherCalls();
+        }
+
+        [Test]
+        public void should_reject_an_explicit_slot_owned_by_another_movie_before_any_mutation()
+        {
+            _localMovie.MovieEditionSlotId = 7;
+            _movieFile.ImportTarget = MovieFileImportTarget.EditionSlot;
+            _movieFile.MovieEditionSlotId = 7;
             Mocker.GetMock<IMovieEditionSlotService>()
-                  .Setup(s => s.GetForMovie(_localMovie.Movie.Id))
-                  .Returns(new List<MovieEditionSlot> { slot });
+                .Setup(s => s.GetById(7))
+                .Returns(new MovieEditionSlot { Id = 7, MovieId = _localMovie.Movie.Id + 1 });
 
-            // GetMovies returns empty — file record is gone
+            Assert.Throws<InvalidOperationException>(() => Subject.UpgradeMovieFile(_movieFile, _localMovie));
+
+            Mocker.GetMock<IRecycleBinProvider>().VerifyNoOtherCalls();
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+            Mocker.GetMock<IMoveMovieFiles>().VerifyNoOtherCalls();
+        }
+
+        [Test]
+        public void should_reject_an_edition_slot_target_without_a_slot_id_before_any_mutation()
+        {
+            _localMovie.ImportTarget = MovieFileImportTarget.EditionSlot;
+            _movieFile.ImportTarget = MovieFileImportTarget.EditionSlot;
+
+            Assert.Throws<InvalidOperationException>(() => Subject.UpgradeMovieFile(_movieFile, _localMovie));
+
+            Mocker.GetMock<IRecycleBinProvider>().VerifyNoOtherCalls();
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+            Mocker.GetMock<IMoveMovieFiles>().VerifyNoOtherCalls();
+        }
+
+        [Test]
+        public void should_not_replace_main_or_slot_files_for_an_unassigned_import()
+        {
+            GivenSingleMovieWithSingleMovieFile();
+            _localMovie.ImportTarget = MovieFileImportTarget.Unassigned;
+            _movieFile.ImportTarget = MovieFileImportTarget.Unassigned;
+
+            Subject.UpgradeMovieFile(_movieFile, _localMovie);
+
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.GetMovie(It.IsAny<int>()), Times.Never);
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.FindByEditionSlotId(It.IsAny<int>()), Times.Never);
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+        }
+
+        [Test]
+        public void parser_edition_on_main_target_should_replace_only_the_main_file_id()
+        {
+            GivenSingleMovieWithSingleMovieFile();
+            _localMovie.Edition = "IMAX";
+
+            var result = Subject.UpgradeMovieFile(_movieFile, _localMovie);
+
+            result.OldFiles.Should().ContainSingle(f => f.MovieFile.Id == _localMovie.Movie.MovieFileId);
+            Mocker.GetMock<IMovieEditionSlotService>().Verify(s => s.GetById(It.IsAny<int>()), Times.Never);
+        }
+
+        [Test]
+        public void should_preflight_the_destination_before_deleting_the_existing_file()
+        {
+            GivenSingleMovieWithSingleMovieFile();
+            Mocker.GetMock<IMoveMovieFiles>()
+                .Setup(s => s.PreflightMovieFile(_movieFile, _localMovie, It.IsAny<string>()))
+                .Throws(new DestinationAlreadyExistsException("collision"));
+
+            Assert.Throws<DestinationAlreadyExistsException>(() => Subject.UpgradeMovieFile(_movieFile, _localMovie));
+
+            Mocker.GetMock<IRecycleBinProvider>().VerifyNoOtherCalls();
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+            Mocker.GetMock<IMoveMovieFiles>().Verify(s => s.MoveMovieFile(It.IsAny<MovieFile>(), It.IsAny<LocalMovie>()), Times.Never);
+        }
+
+        [Test]
+        public void should_reject_a_cross_movie_file_attached_to_the_target_slot_before_mutation()
+        {
+            _localMovie.MovieEditionSlotId = 7;
+            _movieFile.ImportTarget = MovieFileImportTarget.EditionSlot;
+            _movieFile.MovieEditionSlotId = 7;
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetById(7))
+                .Returns(new MovieEditionSlot { Id = 7, MovieId = _localMovie.Movie.Id });
             Mocker.GetMock<IMediaFileService>()
-                  .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
-                  .Returns(new List<MovieFile>());
+                .Setup(s => s.FindByEditionSlotId(7))
+                .Returns(new MovieFile { Id = 20, MovieId = _localMovie.Movie.Id + 1, MovieEditionSlotId = 7 });
 
-            Assert.DoesNotThrow(() => Subject.UpgradeMovieFile(_movieFile, _localMovie));
+            Assert.Throws<InvalidOperationException>(() => Subject.UpgradeMovieFile(_movieFile, _localMovie));
 
-            Mocker.GetMock<IMediaFileService>()
-                  .Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+            Mocker.GetMock<IRecycleBinProvider>().VerifyNoOtherCalls();
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+            Mocker.GetMock<IMoveMovieFiles>().VerifyNoOtherCalls();
+        }
+
+        [Test]
+        public void should_preserve_the_edition_slot_id_through_preflight_and_move()
+        {
+            _localMovie.MovieEditionSlotId = 7;
+            _movieFile.ImportTarget = MovieFileImportTarget.EditionSlot;
+            _movieFile.MovieEditionSlotId = 7;
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetById(7))
+                .Returns(new MovieEditionSlot { Id = 7, MovieId = _localMovie.Movie.Id });
+
+            Subject.UpgradeMovieFile(_movieFile, _localMovie);
+
+            Mocker.GetMock<IMoveMovieFiles>()
+                .Verify(s => s.PreflightMovieFile(It.Is<MovieFile>(f => f.MovieEditionSlotId == 7), _localMovie, null), Times.Once);
+            Mocker.GetMock<IMoveMovieFiles>()
+                .Verify(s => s.MoveMovieFile(It.Is<MovieFile>(f => f.MovieEditionSlotId == 7), _localMovie), Times.Once);
         }
     }
 }

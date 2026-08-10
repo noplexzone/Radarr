@@ -18,6 +18,7 @@ namespace NzbDrone.Core.MediaFiles
     public interface IMoveMovieFiles
     {
         MovieFile MoveMovieFile(MovieFile movieFile, Movie movie);
+        string PreflightMovieFile(MovieFile movieFile, LocalMovie localMovie, string replacedFilePath);
         MovieFile MoveMovieFile(MovieFile movieFile, LocalMovie localMovie);
         MovieFile CopyMovieFile(MovieFile movieFile, LocalMovie localMovie);
     }
@@ -58,6 +59,60 @@ namespace NzbDrone.Core.MediaFiles
             _logger = logger;
         }
 
+        public string PreflightMovieFile(MovieFile movieFile, LocalMovie localMovie, string replacedFilePath)
+        {
+            Ensure.That(movieFile, () => movieFile).IsNotNull();
+            Ensure.That(localMovie, () => localMovie).IsNotNull();
+            Ensure.That(localMovie.Movie, () => localMovie.Movie).IsNotNull();
+
+            var destinationFilePath = GetDestinationFilePath(movieFile, localMovie);
+            Ensure.That(destinationFilePath, () => destinationFilePath).IsValidPath(PathValidationType.CurrentOs);
+
+            var sourceFilePath = movieFile.Path ?? Path.Combine(localMovie.Movie.Path, movieFile.RelativePath);
+            Ensure.That(sourceFilePath, () => sourceFilePath).IsValidPath(PathValidationType.CurrentOs);
+
+            if (!_diskProvider.FileExists(sourceFilePath))
+            {
+                throw new FileNotFoundException("Movie file path does not exist", sourceFilePath);
+            }
+
+            if (sourceFilePath.PathEquals(destinationFilePath))
+            {
+                throw new SameFilenameException("File not moved, source and destination are the same", sourceFilePath);
+            }
+
+            var rootFolder = _rootFolderService.GetBestRootFolderPath(localMovie.Movie.Path);
+            if (rootFolder.IsNullOrWhiteSpace())
+            {
+                throw new RootFolderNotFoundException($"Root folder was not found, '{localMovie.Movie.Path}' is not a subdirectory of a defined root folder.");
+            }
+
+            if (!_diskProvider.FolderExists(rootFolder))
+            {
+                throw new RootFolderNotFoundException($"Root folder '{rootFolder}' was not found.");
+            }
+
+            if (!localMovie.Movie.Path.IsParentPath(destinationFilePath))
+            {
+                throw new InvalidOperationException($"Destination '{destinationFilePath}' is outside movie folder '{localMovie.Movie.Path}'.");
+            }
+
+            if (_diskProvider.FolderExists(destinationFilePath) ||
+                (_diskProvider.FileExists(destinationFilePath) &&
+                 (replacedFilePath.IsNullOrWhiteSpace() || !destinationFilePath.PathEquals(replacedFilePath))))
+            {
+                throw new DestinationAlreadyExistsException($"Destination {destinationFilePath} already exists.");
+            }
+
+            return destinationFilePath;
+        }
+
+        private string GetDestinationFilePath(MovieFile movieFile, LocalMovie localMovie)
+        {
+            var newFileName = _buildFileNames.BuildFileName(localMovie.Movie, movieFile, null, localMovie.CustomFormats);
+            return _buildFileNames.BuildFilePath(localMovie.Movie, newFileName, Path.GetExtension(localMovie.Path));
+        }
+
         public MovieFile MoveMovieFile(MovieFile movieFile, Movie movie)
         {
             var newFileName = _buildFileNames.BuildFileName(movie, movieFile);
@@ -72,8 +127,7 @@ namespace NzbDrone.Core.MediaFiles
 
         public MovieFile MoveMovieFile(MovieFile movieFile, LocalMovie localMovie)
         {
-            var newFileName = _buildFileNames.BuildFileName(localMovie.Movie, movieFile, null, localMovie.CustomFormats);
-            var filePath = _buildFileNames.BuildFilePath(localMovie.Movie, newFileName, Path.GetExtension(localMovie.Path));
+            var filePath = GetDestinationFilePath(movieFile, localMovie);
 
             EnsureMovieFolder(movieFile, localMovie, filePath);
 
@@ -84,8 +138,7 @@ namespace NzbDrone.Core.MediaFiles
 
         public MovieFile CopyMovieFile(MovieFile movieFile, LocalMovie localMovie)
         {
-            var newFileName = _buildFileNames.BuildFileName(localMovie.Movie, movieFile, null, localMovie.CustomFormats);
-            var filePath = _buildFileNames.BuildFilePath(localMovie.Movie, newFileName, Path.GetExtension(localMovie.Path));
+            var filePath = GetDestinationFilePath(movieFile, localMovie);
 
             EnsureMovieFolder(movieFile, localMovie, filePath);
 

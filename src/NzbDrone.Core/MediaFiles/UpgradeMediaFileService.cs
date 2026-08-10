@@ -1,5 +1,5 @@
+using System;
 using System.IO;
-using System.Linq;
 using NLog;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
@@ -44,7 +44,9 @@ namespace NzbDrone.Core.MediaFiles
 
             var moveFileResult = new MovieFileMoveResult();
 
+            ValidateIncomingTarget(movieFile, localMovie);
             var existingFile = ResolveExistingFile(localMovie);
+            var existingFilePath = existingFile == null ? null : Path.Combine(localMovie.Movie.Path, existingFile.RelativePath);
 
             var rootFolder = _diskProvider.GetParentFolder(localMovie.Movie.Path);
 
@@ -54,9 +56,11 @@ namespace NzbDrone.Core.MediaFiles
                 throw new RootFolderNotFoundException($"Root folder '{rootFolder}' was not found.");
             }
 
+            _movieFileMover.PreflightMovieFile(movieFile, localMovie, existingFilePath);
+
             if (existingFile != null)
             {
-                var movieFilePath = Path.Combine(localMovie.Movie.Path, existingFile.RelativePath);
+                var movieFilePath = existingFilePath;
                 var subfolder = rootFolder.GetRelativePath(_diskProvider.GetParentFolder(movieFilePath));
                 string recycleBinPath = null;
 
@@ -88,51 +92,82 @@ namespace NzbDrone.Core.MediaFiles
             return moveFileResult;
         }
 
-        // When importing an edition-specific file, only replace the file that belongs to the
-        // matching edition slot — never touch a different slot's file.
-        // Slot ID (from grab history) wins over fuzzy edition-name matching.
-        private MovieFile ResolveExistingFile(LocalMovie localMovie)
+        private static void ValidateIncomingTarget(MovieFile movieFile, LocalMovie localMovie)
         {
-            if (localMovie.MovieEditionSlotId.HasValue || localMovie.Edition.IsNotNullOrWhiteSpace())
+            if (movieFile.MovieId != localMovie.Movie.Id)
             {
-                var slots = _editionSlotService.GetForMovie(localMovie.Movie.Id);
-
-                MovieEditionSlot matchingSlot = null;
-
-                if (localMovie.MovieEditionSlotId.HasValue)
-                {
-                    matchingSlot = slots.FirstOrDefault(s => s.Id == localMovie.MovieEditionSlotId.Value);
-
-                    if (matchingSlot == null)
-                    {
-                        _logger.Warn("Movie edition slot {0} was specified for import of '{1}', but no matching slot exists for movie {2}; no existing file will be replaced", localMovie.MovieEditionSlotId.Value, localMovie.Path, localMovie.Movie.Id);
-                        return null;
-                    }
-                }
-
-                if (matchingSlot == null && localMovie.Edition.IsNotNullOrWhiteSpace())
-                {
-                    var normalizedEdition = EditionNormalizer.Normalize(localMovie.Edition);
-                    matchingSlot = slots.FirstOrDefault(s =>
-                        EditionNormalizer.Normalize(s.EditionName) == normalizedEdition ||
-                        EditionNormalizer.Normalize(s.SearchTerm) == normalizedEdition);
-                }
-
-                if (matchingSlot?.MovieFileId > 0)
-                {
-                    var file = (_mediaFileService.GetMovies(new[] { matchingSlot.MovieFileId.Value }) ?? Enumerable.Empty<MovieFile>()).FirstOrDefault();
-                    if (file == null)
-                    {
-                        _logger.Warn("Edition slot {0} references movie file {1} which no longer exists; skipping replacement", matchingSlot.Id, matchingSlot.MovieFileId.Value);
-                    }
-
-                    return file;
-                }
-
-                return null;
+                throw new InvalidOperationException($"Movie file target {movieFile.MovieId} does not match movie {localMovie.Movie.Id}.");
             }
 
-            return localMovie.Movie.MovieFileId > 0 ? localMovie.Movie.MovieFile : null;
+            if (movieFile.ImportTarget != localMovie.ImportTarget)
+            {
+                throw new InvalidOperationException("Movie file import target does not match the local movie target.");
+            }
+
+            if (localMovie.ImportTarget == MovieFileImportTarget.EditionSlot)
+            {
+                if (!localMovie.MovieEditionSlotId.HasValue || movieFile.MovieEditionSlotId != localMovie.MovieEditionSlotId)
+                {
+                    throw new InvalidOperationException("Movie file edition slot does not match the explicit import target.");
+                }
+            }
+            else if (movieFile.MovieEditionSlotId.HasValue)
+            {
+                throw new InvalidOperationException("Main and unassigned imports cannot carry an edition slot id.");
+            }
+        }
+
+        private MovieFile ResolveExistingFile(LocalMovie localMovie)
+        {
+            switch (localMovie.ImportTarget)
+            {
+                case MovieFileImportTarget.EditionSlot:
+                    if (!localMovie.MovieEditionSlotId.HasValue)
+                    {
+                        throw new InvalidOperationException("An explicit edition slot import requires a slot id.");
+                    }
+
+                    var slotId = localMovie.MovieEditionSlotId.Value;
+                    var slot = _editionSlotService.GetById(slotId);
+
+                    if (slot == null)
+                    {
+                        throw new InvalidOperationException($"Edition slot {slotId} does not exist.");
+                    }
+
+                    if (slot.MovieId != localMovie.Movie.Id)
+                    {
+                        throw new InvalidOperationException($"Edition slot {slotId} does not belong to movie {localMovie.Movie.Id}.");
+                    }
+
+                    var editionFile = _mediaFileService.FindByEditionSlotId(slotId);
+                    if (editionFile != null && editionFile.MovieId != localMovie.Movie.Id)
+                    {
+                        throw new InvalidOperationException($"Edition slot {slotId} is attached to a file owned by movie {editionFile.MovieId}.");
+                    }
+
+                    return editionFile;
+
+                case MovieFileImportTarget.Main:
+                    if (localMovie.Movie.MovieFileId <= 0)
+                    {
+                        return null;
+                    }
+
+                    var mainFile = _mediaFileService.GetMovie(localMovie.Movie.MovieFileId);
+                    if (mainFile.MovieId != localMovie.Movie.Id || mainFile.MovieEditionSlotId.HasValue)
+                    {
+                        throw new InvalidOperationException($"Movie file {mainFile.Id} is not a valid main file for movie {localMovie.Movie.Id}.");
+                    }
+
+                    return mainFile;
+
+                case MovieFileImportTarget.Unassigned:
+                    return null;
+
+                default:
+                    throw new InvalidOperationException($"Unsupported movie file import target: {localMovie.ImportTarget}.");
+            }
         }
     }
 }
