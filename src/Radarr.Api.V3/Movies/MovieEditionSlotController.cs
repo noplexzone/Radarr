@@ -18,6 +18,7 @@ namespace Radarr.Api.V3.Movies
     public class MovieEditionSlotController : RestController<MovieEditionSlotResource>
     {
         private readonly IMovieEditionSlotService _slotService;
+        private readonly IMovieFileAssignmentService _fileAssignmentService;
         private readonly IMediaFileService _mediaFileService;
         private readonly IMovieService _movieService;
         private readonly IQualityProfileService _qualityProfileService;
@@ -25,12 +26,14 @@ namespace Radarr.Api.V3.Movies
 
         public MovieEditionSlotController(
             IMovieEditionSlotService slotService,
+            IMovieFileAssignmentService fileAssignmentService,
             IMediaFileService mediaFileService,
             IMovieService movieService,
             IQualityProfileService qualityProfileService,
             ICustomFormatCalculationService formatCalculationService)
         {
             _slotService = slotService;
+            _fileAssignmentService = fileAssignmentService;
             _mediaFileService = mediaFileService;
             _movieService = movieService;
             _qualityProfileService = qualityProfileService;
@@ -56,25 +59,22 @@ namespace Radarr.Api.V3.Movies
             var slots = _slotService.GetForMovie(movieId);
             var resources = slots.Select(s => s.ToResource()).ToList();
 
-            var fileIds = slots
-                .Where(s => s.MovieFileId.HasValue)
-                .Select(s => s.MovieFileId.Value)
-                .Distinct()
-                .ToList();
+            var filesBySlotId = _mediaFileService.GetFilesByMovie(movieId)
+                .Where(f => f.MovieEditionSlotId.HasValue)
+                .ToDictionary(f => f.MovieEditionSlotId.Value);
 
-            if (fileIds.Count == 0)
+            if (filesBySlotId.Count == 0)
             {
                 return resources;
             }
 
             var movie = _movieService.GetMovie(movieId);
-            var filesById = _mediaFileService.GetMovies(fileIds).ToDictionary(f => f.Id);
 
             var resourcesById = resources.ToDictionary(r => r.Id);
 
             foreach (var slot in slots)
             {
-                if (!slot.MovieFileId.HasValue || !filesById.TryGetValue(slot.MovieFileId.Value, out var file))
+                if (!filesBySlotId.TryGetValue(slot.Id, out var file))
                 {
                     continue;
                 }
@@ -84,6 +84,7 @@ namespace Radarr.Api.V3.Movies
                     continue;
                 }
 
+                resource.MovieFileId = file.Id;
                 resource.MovieFileQuality = file.Quality;
 
                 var effectiveProfile = slot.QualityProfileId.HasValue
@@ -116,7 +117,7 @@ namespace Radarr.Api.V3.Movies
         [RestDeleteById]
         public void Delete(int id)
         {
-            _slotService.Delete(id);
+            _fileAssignmentService.RemoveEdition(id, AttachedEditionFileAction.KeepUnassigned);
         }
     }
 }
