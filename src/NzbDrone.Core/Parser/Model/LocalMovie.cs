@@ -14,7 +14,11 @@ namespace NzbDrone.Core.Parser.Model
         public LocalMovie()
         {
             CustomFormats = new List<CustomFormat>();
+            ImportTarget = MovieFileImportTarget.Main;
         }
+
+        private int? _movieEditionSlotId;
+        private MovieFileImportTarget _importTarget;
 
         public string Path { get; set; }
         public long Size { get; set; }
@@ -32,7 +36,30 @@ namespace NzbDrone.Core.Parser.Model
         public bool SceneSource { get; set; }
         public string ReleaseGroup { get; set; }
         public string Edition { get; set; }
-        public int? MovieEditionSlotId { get; set; }
+        public MovieFileImportTarget ImportTarget
+        {
+            get => _importTarget;
+            set
+            {
+                _importTarget = value;
+                if (value != MovieFileImportTarget.EditionSlot)
+                {
+                    _movieEditionSlotId = null;
+                }
+            }
+        }
+        public int? MovieEditionSlotId
+        {
+            get => _movieEditionSlotId;
+            set
+            {
+                _movieEditionSlotId = value;
+                if (value.HasValue)
+                {
+                    ImportTarget = MovieFileImportTarget.EditionSlot;
+                }
+            }
+        }
         public string SceneName { get; set; }
         public bool OtherVideoFiles { get; set; }
         public List<CustomFormat> CustomFormats { get; set; }
@@ -48,5 +75,13 @@ namespace NzbDrone.Core.Parser.Model
         {
             return Path;
         }
+    }
+
+    public enum MovieFileImportTarget
+    {
+        Unknown = 0,
+        Main = 1,
+        EditionSlot = 2,
+        Unassigned = 3
     }
 }

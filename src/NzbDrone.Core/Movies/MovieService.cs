@@ -11,6 +11,7 @@ using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies.Events;
 using NzbDrone.Core.Parser;
+using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Parser.RomanNumerals;
 
 namespace NzbDrone.Core.Movies
@@ -442,11 +443,17 @@ namespace NzbDrone.Core.Movies
         public void Handle(MovieFileAddedEvent message)
         {
             var movie = message.MovieFile.Movie;
+
+            // Null slot identity alone is not a main claim. Imports carry explicit
+            // transient intent through the MovieFileAddedEvent.
+            if (message.MovieFile.MovieEditionSlotId.HasValue || message.MovieFile.ImportTarget != MovieFileImportTarget.Main)
+            {
+                return;
+            }
+
             movie.MovieFileId = message.MovieFile.Id;
             _movieRepository.Update(movie);
-
-            // _movieRepository.SetFileId(message.MovieFile.Id, message.MovieFile.Movie.Value.Id);
-            _logger.Info("Assigning file [{0}] to movie [{1}]", message.MovieFile.RelativePath, message.MovieFile.Movie);
+            _logger.Info("Assigning explicitly targeted file [{0}] to movie [{1}] as main", message.MovieFile.RelativePath, message.MovieFile.Movie);
         }
 
         public void Handle(MovieFileDeletedEvent message)

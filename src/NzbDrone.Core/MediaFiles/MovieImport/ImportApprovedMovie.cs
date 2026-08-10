@@ -14,6 +14,7 @@ using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser.Model;
+using NzbDrone.Core.Profiles.Qualities;
 using NzbDrone.Core.Qualities;
 
 namespace NzbDrone.Core.MediaFiles.MovieImport
@@ -33,6 +34,8 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
         private readonly IHistoryService _historyService;
         private readonly IEventAggregator _eventAggregator;
         private readonly IManageCommandQueue _commandQueueManager;
+        private readonly IMovieEditionSlotService _movieEditionSlotService;
+        private readonly IQualityProfileService _qualityProfileService;
         private readonly Logger _logger;
 
         public ImportApprovedMovie(IUpgradeMediaFiles movieFileUpgrader,
@@ -43,6 +46,8 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                                    IHistoryService historyService,
                                    IEventAggregator eventAggregator,
                                    IManageCommandQueue commandQueueManager,
+                                   IMovieEditionSlotService movieEditionSlotService,
+                                   IQualityProfileService qualityProfileService,
                                    Logger logger)
         {
             _movieFileUpgrader = movieFileUpgrader;
@@ -53,6 +58,8 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
             _historyService = historyService;
             _eventAggregator = eventAggregator;
             _commandQueueManager = commandQueueManager;
+            _movieEditionSlotService = movieEditionSlotService;
+            _qualityProfileService = qualityProfileService;
             _logger = logger;
         }
 
@@ -60,29 +67,78 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
         {
             _logger.Debug("Decisions: {0}", decisions.Count);
 
-            // I added a null op for the rare case that the quality is null. TODO: find out why that would even happen in the first place.
-            // Group by (movie, edition) so that multiple edition slots for the same movie are treated independently.
-            var qualifiedImports = decisions
-                .Where(decision => decision.Approved)
-                .GroupBy(decision => (decision.LocalMovie.Movie.Id, NormalizeEdition(decision.LocalMovie.Edition)))
-                .SelectMany(group => group
-                    .OrderByDescending(decision => decision.LocalMovie.Quality ?? new QualityModel { Quality = Quality.Unknown }, new QualityModelComparer(group.First().LocalMovie.Movie.QualityProfile))
-                    .ThenByDescending(decision => decision.LocalMovie.Size))
+            var importResults = new List<ImportResult>();
+            var validatedImports = new List<(ImportDecision Decision, MovieEditionSlot Slot)>();
+            var slots = new Dictionary<int, MovieEditionSlot>();
+
+            foreach (var decision in decisions.Where(decision => decision.Approved))
+            {
+                try
+                {
+                    MovieEditionSlot slot = null;
+                    var localMovie = decision.LocalMovie;
+                    if (localMovie.ImportTarget == MovieFileImportTarget.EditionSlot)
+                    {
+                        if (!localMovie.MovieEditionSlotId.HasValue)
+                        {
+                            throw new InvalidOperationException("An explicit edition slot import requires a slot id.");
+                        }
+
+                        var slotId = localMovie.MovieEditionSlotId.Value;
+                        if (!slots.TryGetValue(slotId, out slot))
+                        {
+                            slot = _movieEditionSlotService.GetById(slotId);
+                            slots.Add(slotId, slot);
+                        }
+
+                        if (slot.MovieId != localMovie.Movie.Id)
+                        {
+                            throw new InvalidOperationException($"Edition slot {slotId} does not belong to movie {localMovie.Movie.Id}.");
+                        }
+                    }
+
+                    validatedImports.Add((decision, slot));
+                }
+                catch (Exception e)
+                {
+                    _logger.Warn(e, "Couldn't validate durable import target for {0}", decision.LocalMovie);
+                    importResults.Add(new ImportResult(decision, "Failed to import movie, invalid edition slot target."));
+                }
+            }
+
+            // A parsed edition label is descriptive only. Deduplication follows the durable target.
+            var qualifiedImports = validatedImports
+                .GroupBy(item => (item.Decision.LocalMovie.Movie.Id,
+                                  item.Decision.LocalMovie.ImportTarget,
+                                  GetTargetSlotId(item.Decision.LocalMovie)))
+                .SelectMany(group =>
+                {
+                    var slot = group.First().Slot;
+                    var profile = slot?.QualityProfileId is int profileId
+                        ? _qualityProfileService.Get(profileId)
+                        : group.First().Decision.LocalMovie.Movie.QualityProfile;
+                    var minimumScore = slot?.MinimumCustomFormatScore;
+
+                    return group
+                        .OrderByDescending(item => !minimumScore.HasValue || profile.CalculateCustomFormatScore(item.Decision.LocalMovie.CustomFormats) >= minimumScore.Value)
+                        .ThenByDescending(item => item.Decision.LocalMovie.Quality ?? new QualityModel { Quality = Quality.Unknown }, new QualityModelComparer(profile))
+                        .ThenByDescending(item => item.Decision.LocalMovie.Size)
+                        .Select(item => item.Decision);
+                })
                 .ToList();
 
-            var importResults = new List<ImportResult>();
-
-            foreach (var importDecision in qualifiedImports.OrderByDescending(e => e.LocalMovie.Size))
+            foreach (var importDecision in qualifiedImports)
             {
                 var localMovie = importDecision.LocalMovie;
                 var oldFiles = new List<DeletedMovieFile>();
 
                 try
                 {
-                    // check if already imported — per (movie, edition) so each edition slot gets one file
                     if (importResults.Any(r =>
+                            r.Result == ImportResultType.Imported &&
                             r.ImportDecision.LocalMovie.Movie.Id == localMovie.Movie.Id &&
-                            NormalizeEdition(r.ImportDecision.LocalMovie.Edition) == NormalizeEdition(localMovie.Edition)))
+                            r.ImportDecision.LocalMovie.ImportTarget == localMovie.ImportTarget &&
+                            GetTargetSlotId(r.ImportDecision.LocalMovie) == GetTargetSlotId(localMovie)))
                     {
                         importResults.Add(new ImportResult(importDecision, "Movie has already been imported"));
                         continue;
@@ -99,6 +155,10 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                     movieFile.Movie = localMovie.Movie;
                     movieFile.ReleaseGroup = localMovie.ReleaseGroup;
                     movieFile.Edition = localMovie.Edition;
+                    movieFile.MovieEditionSlotId = localMovie.ImportTarget == MovieFileImportTarget.EditionSlot
+                        ? localMovie.MovieEditionSlotId
+                        : null;
+                    movieFile.ImportTarget = localMovie.ImportTarget;
 
                     if (downloadClientItem?.DownloadId.IsNotNullOrWhiteSpace() == true)
                     {
@@ -154,7 +214,10 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                     movieFile = _mediaFileService.Add(movieFile);
                     importResults.Add(new ImportResult(importDecision));
 
-                    localMovie.Movie.MovieFile = movieFile;
+                    if (localMovie.ImportTarget == MovieFileImportTarget.Main)
+                    {
+                        localMovie.Movie.MovieFile = movieFile;
+                    }
 
                     if (newDownload)
                     {
@@ -211,8 +274,12 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
             return importResults;
         }
 
-        private static string NormalizeEdition(string edition) =>
-            EditionNormalizer.Normalize(edition);
+        private static int? GetTargetSlotId(LocalMovie localMovie)
+        {
+            return localMovie.ImportTarget == MovieFileImportTarget.EditionSlot
+                ? localMovie.MovieEditionSlotId
+                : null;
+        }
 
         private string GetOriginalFilePath(DownloadClientItem downloadClientItem, LocalMovie localMovie)
         {

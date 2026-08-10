@@ -112,7 +112,8 @@ namespace NzbDrone.Core.Datastore
             Mapper.Entity<MovieHistory>("History").RegisterModel();
 
             Mapper.Entity<MovieFile>("MovieFiles").RegisterModel()
-                  .Ignore(f => f.Path);
+                  .Ignore(f => f.Path)
+                  .Ignore(f => f.ImportTarget);
 
             Mapper.Entity<Movie>("Movies").RegisterModel()
                   .Ignore(s => s.RootFolderPath)

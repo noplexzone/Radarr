@@ -14,6 +14,7 @@ namespace NzbDrone.Core.MediaFiles
     {
         public int MovieId { get; set; }
         public int? MovieEditionSlotId { get; set; }
+        public MovieFileImportTarget ImportTarget { get; set; }
         public string RelativePath { get; set; }
         public string Path { get; set; }
         public long Size { get; set; }

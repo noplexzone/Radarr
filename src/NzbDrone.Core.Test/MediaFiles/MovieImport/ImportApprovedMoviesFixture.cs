@@ -7,6 +7,7 @@ using Moq;
 using NUnit.Framework;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
+using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.Download;
 using NzbDrone.Core.History;
 using NzbDrone.Core.MediaFiles;
@@ -14,7 +15,9 @@ using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.MediaFiles.MovieImport;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser.Model;
+using NzbDrone.Core.Profiles;
 using NzbDrone.Core.Profiles.Qualities;
 using NzbDrone.Core.Qualities;
 using NzbDrone.Core.Test.Framework;
@@ -69,6 +72,10 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
             _downloadClientItem = Builder<DownloadClientItem>.CreateNew()
                 .With(d => d.OutputPath = new OsPath(outputPath))
                 .Build();
+
+            Mocker.GetMock<IMediaFileService>()
+                .Setup(s => s.Add(It.IsAny<MovieFile>()))
+                .Returns<MovieFile>(file => file);
         }
 
         private void GivenNewDownload()
@@ -348,9 +355,12 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
         }
 
         [Test]
-        public void should_import_both_when_same_movie_has_different_editions()
+        public void should_import_both_when_same_movie_has_different_explicit_slots_even_with_identical_parsed_editions()
         {
             var movie = _approvedDecisions.First().LocalMovie.Movie;
+
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(10)).Returns(new MovieEditionSlot { Id = 10, MovieId = movie.Id });
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(11)).Returns(new MovieEditionSlot { Id = 11, MovieId = movie.Id });
 
             var directorsDecision = new ImportDecision(
                 new LocalMovie
@@ -359,6 +369,7 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
                     Path = Path.Combine(movie.Path, "30 Rock - Directors Cut.mkv"),
                     Quality = new QualityModel(),
                     Edition = "Director's Cut",
+                    MovieEditionSlotId = 10,
                     ReleaseGroup = "DRONE"
                 });
 
@@ -368,7 +379,8 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
                     Movie = movie,
                     Path = Path.Combine(movie.Path, "30 Rock - IMAX.mkv"),
                     Quality = new QualityModel(),
-                    Edition = "IMAX",
+                    Edition = "Director's Cut",
+                    MovieEditionSlotId = 11,
                     ReleaseGroup = "DRONE"
                 });
 
@@ -378,9 +390,11 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
         }
 
         [Test]
-        public void should_only_import_once_when_same_movie_and_same_edition_appears_twice()
+        public void should_only_import_once_when_same_movie_and_same_explicit_slot_appears_twice()
         {
             var movie = _approvedDecisions.First().LocalMovie.Movie;
+
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(10)).Returns(new MovieEditionSlot { Id = 10, MovieId = movie.Id });
 
             var first = new ImportDecision(
                 new LocalMovie
@@ -389,6 +403,7 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
                     Path = Path.Combine(movie.Path, "30 Rock - Directors Cut 1080p.mkv"),
                     Quality = new QualityModel(Quality.Bluray1080p),
                     Edition = "Director's Cut",
+                    MovieEditionSlotId = 10,
                     ReleaseGroup = "DRONE",
                     Size = 8.Gigabytes()
                 });
@@ -400,6 +415,7 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
                     Path = Path.Combine(movie.Path, "30 Rock - Directors Cut 720p.mkv"),
                     Quality = new QualityModel(Quality.Bluray720p),
                     Edition = "Director's Cut",
+                    MovieEditionSlotId = 10,
                     ReleaseGroup = "DRONE",
                     Size = 4.Gigabytes()
                 });
@@ -408,5 +424,151 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
 
             result.Where(i => i.Result == ImportResultType.Imported).Should().HaveCount(1);
         }
+
+        [Test]
+        public void should_reject_missing_or_cross_movie_explicit_slot_before_media_mutation()
+        {
+            var movie = _approvedDecisions.First().LocalMovie.Movie;
+            var missing = _approvedDecisions.First();
+            missing.LocalMovie.MovieEditionSlotId = 10;
+            var crossMovie = new ImportDecision(new LocalMovie
+            {
+                Movie = movie,
+                Path = Path.Combine(movie.Path, "cross.mkv"),
+                Quality = new QualityModel(),
+                MovieEditionSlotId = 11
+            });
+
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(10)).Throws(new KeyNotFoundException());
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(11)).Returns(new MovieEditionSlot { Id = 11, MovieId = movie.Id + 1 });
+
+            var result = Subject.Import(new List<ImportDecision> { missing, crossMovie }, true);
+
+            result.Should().OnlyContain(r => r.Result == ImportResultType.Skipped);
+            Mocker.GetMock<IUpgradeMediaFiles>().Verify(s => s.UpgradeMovieFile(It.IsAny<MovieFile>(), It.IsAny<LocalMovie>(), It.IsAny<bool>()), Times.Never);
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.Add(It.IsAny<MovieFile>()), Times.Never);
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never);
+        }
+
+        [Test]
+        public void should_use_slot_quality_profile_override_when_selecting_duplicate_slot_candidate()
+        {
+            var movie = _approvedDecisions.First().LocalMovie.Movie;
+            var slotProfile = new QualityProfile
+            {
+                Id = 20,
+                Items = new List<QualityProfileQualityItem>
+                {
+                    new QualityProfileQualityItem { Allowed = true, Quality = Quality.Bluray1080p },
+                    new QualityProfileQualityItem { Allowed = true, Quality = Quality.Bluray720p }
+                }
+            };
+            var slot = new MovieEditionSlot { Id = 10, MovieId = movie.Id, QualityProfileId = slotProfile.Id };
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(slot.Id)).Returns(slot);
+            Mocker.GetMock<IQualityProfileService>().Setup(s => s.Get(slotProfile.Id)).Returns(slotProfile);
+
+            var lowerInSlotProfile = new ImportDecision(new LocalMovie
+            {
+                Movie = movie,
+                Path = Path.Combine(movie.Path, "1080p.mkv"),
+                Quality = new QualityModel(Quality.Bluray1080p),
+                MovieEditionSlotId = slot.Id,
+                Size = 9.Gigabytes()
+            });
+            var higherInSlotProfile = new ImportDecision(new LocalMovie
+            {
+                Movie = movie,
+                Path = Path.Combine(movie.Path, "720p.mkv"),
+                Quality = new QualityModel(Quality.Bluray720p),
+                MovieEditionSlotId = slot.Id,
+                Size = 1.Gigabytes()
+            });
+
+            var result = Subject.Import(new List<ImportDecision> { lowerInSlotProfile, higherInSlotProfile }, true);
+
+            result.Should().ContainSingle(r => r.Result == ImportResultType.Imported && r.ImportDecision == higherInSlotProfile);
+        }
+
+        [Test]
+        public void should_use_slot_profile_and_minimum_score_when_selecting_duplicate_slot_candidate()
+        {
+            var movie = _approvedDecisions.First().LocalMovie.Movie;
+            var slotProfile = new QualityProfile
+            {
+                Id = 20,
+                Items = new List<QualityProfileQualityItem>
+                {
+                    new QualityProfileQualityItem { Allowed = true, Quality = Quality.Bluray1080p },
+                    new QualityProfileQualityItem { Allowed = true, Quality = Quality.Bluray720p }
+                }
+            };
+            var preferredFormat = new CustomFormat { Id = 100, Name = "Preferred" };
+            slotProfile.FormatItems = new List<ProfileFormatItem>
+            {
+                new ProfileFormatItem { Format = preferredFormat, Score = 100 }
+            };
+            var slot = new MovieEditionSlot { Id = 10, MovieId = movie.Id, QualityProfileId = slotProfile.Id, MinimumCustomFormatScore = 100 };
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(slot.Id)).Returns(slot);
+            Mocker.GetMock<IQualityProfileService>().Setup(s => s.Get(slotProfile.Id)).Returns(slotProfile);
+
+            var belowMinimum = new ImportDecision(new LocalMovie
+            {
+                Movie = movie,
+                Path = Path.Combine(movie.Path, "below.mkv"),
+                Quality = new QualityModel(Quality.Bluray720p),
+                CustomFormats = new List<CustomFormat>(),
+                CustomFormatScore = 100,
+                MovieEditionSlotId = slot.Id,
+                Size = 9.Gigabytes()
+            });
+            var eligible = new ImportDecision(new LocalMovie
+            {
+                Movie = movie,
+                Path = Path.Combine(movie.Path, "eligible.mkv"),
+                Quality = new QualityModel(Quality.Bluray1080p),
+                CustomFormats = new List<CustomFormat> { preferredFormat },
+                CustomFormatScore = 0,
+                MovieEditionSlotId = slot.Id,
+                Size = 1.Gigabytes()
+            });
+
+            var result = Subject.Import(new List<ImportDecision> { belowMinimum, eligible }, true);
+
+            result.Should().ContainSingle(r => r.Result == ImportResultType.Imported && r.ImportDecision == eligible);
+        }
+
+        [Test]
+        public void changing_a_slot_target_to_unassigned_should_clear_stale_slot_identity_before_upgrade()
+        {
+            var localMovie = _approvedDecisions.First().LocalMovie;
+            localMovie.MovieEditionSlotId = 10;
+            localMovie.ImportTarget = MovieFileImportTarget.Unassigned;
+
+            Subject.Import(_approvedDecisions, true);
+
+            localMovie.MovieEditionSlotId.Should().BeNull();
+            Mocker.GetMock<IUpgradeMediaFiles>().Verify(s => s.UpgradeMovieFile(
+                It.Is<MovieFile>(file => file.MovieEditionSlotId == null && file.ImportTarget == MovieFileImportTarget.Unassigned),
+                localMovie,
+                false), Times.Once);
+        }
+
+        [TestCase(MovieFileImportTarget.EditionSlot)]
+        [TestCase(MovieFileImportTarget.Unassigned)]
+        public void should_not_assign_movie_file_pointer_for_non_main_targets(MovieFileImportTarget target)
+        {
+            var localMovie = _approvedDecisions.First().LocalMovie;
+            localMovie.ImportTarget = target;
+            if (target == MovieFileImportTarget.EditionSlot)
+            {
+                localMovie.MovieEditionSlotId = 10;
+                Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(10)).Returns(new MovieEditionSlot { Id = 10, MovieId = localMovie.Movie.Id });
+            }
+
+            Subject.Import(_approvedDecisions, true);
+
+            localMovie.Movie.MovieFile.Should().BeNull();
+        }
+
     }
 }
