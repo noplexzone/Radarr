@@ -79,7 +79,7 @@ namespace NzbDrone.Core.IndexerSearch
             var movies = _movieService.MoviesWithoutFiles(pagingSpec).Records.ToList();
 
             var queue = _queueService.GetQueue();
-            var queuedMovieIds = queue.Where(q => q.Movie != null).Select(q => q.Movie.Id).ToHashSet();
+            var queuedMovieIds = queue.Where(q => q.Movie != null && !q.MovieEditionSlotId.HasValue).Select(q => q.Movie.Id).ToHashSet();
             var queuedEditionSlotIds = queue.Where(q => q.MovieEditionSlotId.HasValue).Select(q => q.MovieEditionSlotId.Value).ToHashSet();
             var missing = movies.Where(e => !queuedMovieIds.Contains(e.Id)).ToList();
 
@@ -104,7 +104,7 @@ namespace NzbDrone.Core.IndexerSearch
             var movies = _movieCutoffService.MoviesWhereCutoffUnmet(pagingSpec).Records.ToList();
 
             var queue = _queueService.GetQueue();
-            var queuedMovieIds = queue.Where(q => q.Movie != null).Select(q => q.Movie.Id).ToHashSet();
+            var queuedMovieIds = queue.Where(q => q.Movie != null && !q.MovieEditionSlotId.HasValue).Select(q => q.Movie.Id).ToHashSet();
             var queuedEditionSlotIds = queue.Where(q => q.MovieEditionSlotId.HasValue).Select(q => q.MovieEditionSlotId.Value).ToHashSet();
             var missing = movies.Where(e => !queuedMovieIds.Contains(e.Id)).ToList();
 
@@ -134,8 +134,9 @@ namespace NzbDrone.Core.IndexerSearch
             }
 
             var movieIds = allSlots.Select(s => s.MovieId).Distinct().ToList();
-            var filesById = _mediaFileService.GetFilesByMovies(movieIds)
-                .ToDictionary(f => f.Id);
+            var filesBySlotId = _mediaFileService.GetFilesByMovies(movieIds)
+                .Where(f => f.MovieEditionSlotId.HasValue)
+                .ToDictionary(f => f.MovieEditionSlotId.Value);
             var moviesById = _movieService.GetMovies(movieIds).ToDictionary(m => m.Id);
             var profiles = _qualityProfileService.All().ToDictionary(p => p.Id);
 
@@ -153,7 +154,7 @@ namespace NzbDrone.Core.IndexerSearch
 
                 foreach (var slot in group)
                 {
-                    if (!slot.MovieFileId.HasValue || !filesById.TryGetValue(slot.MovieFileId.Value, out var file))
+                    if (!filesBySlotId.TryGetValue(slot.Id, out var file))
                     {
                         continue;
                     }
@@ -242,8 +243,12 @@ namespace NzbDrone.Core.IndexerSearch
             else
             {
                 // Automatic: monitored slots that are still missing a file. Manual trigger also includes unmonitored missing slots.
+                var attachedSlotIds = _mediaFileService.GetFilesByMovie(message.MovieId)
+                    .Where(f => f.MovieEditionSlotId.HasValue)
+                    .Select(f => f.MovieEditionSlotId.Value)
+                    .ToHashSet();
                 slots = allSlots
-                    .Where(s => (s.Monitored || userInvokedSearch) && !s.MovieFileId.HasValue)
+                    .Where(s => (s.Monitored || userInvokedSearch) && !attachedSlotIds.Contains(s.Id))
                     .ToList();
             }
 

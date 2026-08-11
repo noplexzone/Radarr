@@ -10,6 +10,7 @@ using NzbDrone.Core.Download;
 using NzbDrone.Core.Indexers;
 using NzbDrone.Core.IndexerSearch;
 using NzbDrone.Core.IndexerSearch.Definitions;
+using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.MovieEditionSlots;
@@ -183,10 +184,10 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
 
             _slots = new List<MovieEditionSlot>
             {
-                new MovieEditionSlot { Id = 1, MovieId = _movie.Id, Monitored = true,  MovieFileId = null },
-                new MovieEditionSlot { Id = 2, MovieId = _movie.Id, Monitored = true,  MovieFileId = null },
-                new MovieEditionSlot { Id = 3, MovieId = _movie.Id, Monitored = true,  MovieFileId = 10  },  // has file
-                new MovieEditionSlot { Id = 4, MovieId = _movie.Id, Monitored = false, MovieFileId = null }  // unmonitored
+                new MovieEditionSlot { Id = 1, MovieId = _movie.Id, Monitored = true },
+                new MovieEditionSlot { Id = 2, MovieId = _movie.Id, Monitored = true },
+                new MovieEditionSlot { Id = 3, MovieId = _movie.Id, Monitored = true },  // has file
+                new MovieEditionSlot { Id = 4, MovieId = _movie.Id, Monitored = false }  // unmonitored
             };
 
             Mocker.GetMock<IMovieService>()
@@ -196,6 +197,13 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
             Mocker.GetMock<IMovieEditionSlotService>()
                 .Setup(s => s.GetForMovie(_movie.Id))
                 .Returns(_slots);
+
+            Mocker.GetMock<IMediaFileService>()
+                .Setup(s => s.GetFilesByMovie(_movie.Id))
+                .Returns(new List<MovieFile>
+                {
+                    new MovieFile { Id = 10, MovieId = _movie.Id, MovieEditionSlotId = 3 }
+                });
 
             Mocker.GetMock<ISearchForReleases>()
                 .Setup(s => s.MovieEditionSearch(It.IsAny<Movie>(), It.IsAny<MovieEditionSlot>(), It.IsAny<bool>(), It.IsAny<bool>()))
@@ -274,6 +282,17 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
 
             Mocker.GetMock<IMovieEditionSlotService>()
                 .Verify(s => s.Update(It.Is<MovieEditionSlot>(sl => sl.Id == 2 && sl.LastSearchTime.HasValue)), Times.Once);
+        }
+
+        [Test]
+        public void Execute_with_explicit_slot_updates_only_that_slots_last_search_time()
+        {
+            Subject.Execute(new MovieEditionSearchCommand { MovieId = _movie.Id, MovieEditionSlotId = 2 });
+
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Verify(s => s.Update(It.Is<MovieEditionSlot>(sl => sl.Id == 2 && sl.LastSearchTime.HasValue)), Times.Once);
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Verify(s => s.Update(It.Is<MovieEditionSlot>(sl => sl.Id != 2)), Times.Never);
         }
     }
 }

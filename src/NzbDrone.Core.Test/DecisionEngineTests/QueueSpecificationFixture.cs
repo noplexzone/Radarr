@@ -135,6 +135,43 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
             Subject.IsSatisfiedBy(_remoteMovie, null).Accepted.Should().BeFalse();
         }
 
+        [TestCase(null, 42)]
+        [TestCase(42, null)]
+        [TestCase(42, 43)]
+        public void should_ignore_queued_downloads_for_a_different_exact_target(int? subjectSlotId, int? queuedSlotId)
+        {
+            _remoteMovie.MovieEditionSlotId = subjectSlotId;
+
+            var queuedRemoteMovie = Builder<RemoteMovie>.CreateNew()
+                .With(r => r.Movie = _movie)
+                .With(r => r.MovieEditionSlotId = queuedSlotId)
+                .With(r => r.ParsedMovieInfo = new ParsedMovieInfo { Quality = new QualityModel(Quality.DVD) })
+                .With(r => r.CustomFormats = new List<CustomFormat>())
+                .Build();
+
+            GivenQueue(new[] { queuedRemoteMovie });
+
+            Subject.IsSatisfiedBy(_remoteMovie, null).Accepted.Should().BeTrue();
+        }
+
+        [TestCase(null)]
+        [TestCase(42)]
+        public void should_compete_with_queued_download_for_the_same_exact_target(int? slotId)
+        {
+            _remoteMovie.MovieEditionSlotId = slotId;
+
+            var queuedRemoteMovie = Builder<RemoteMovie>.CreateNew()
+                .With(r => r.Movie = _movie)
+                .With(r => r.MovieEditionSlotId = slotId)
+                .With(r => r.ParsedMovieInfo = new ParsedMovieInfo { Quality = new QualityModel(Quality.DVD) })
+                .With(r => r.CustomFormats = new List<CustomFormat>())
+                .Build();
+
+            GivenQueue(new[] { queuedRemoteMovie });
+
+            Subject.IsSatisfiedBy(_remoteMovie, null).Accepted.Should().BeFalse();
+        }
+
         [Test]
         public void should_return_false_when_quality_in_queue_is_better()
         {

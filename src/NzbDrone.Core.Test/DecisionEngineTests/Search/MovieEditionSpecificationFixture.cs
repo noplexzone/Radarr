@@ -125,6 +125,45 @@ namespace NzbDrone.Core.Test.DecisionEngineTests.Search
             result.Reason.Should().Be(DownloadRejectionReason.WrongEdition);
         }
 
+        [TestCase("Movie.2001.CLIMAX.1080p", "IMAX")]
+        [TestCase("Movie.2001.ABCD.1080p", "DC")]
+        [TestCase("Movie.2001.IMAX.Enhanced.1080p", "IMAX")]
+        public void should_reject_release_title_terms_without_an_exact_phrase_boundary(string releaseTitle, string searchTerm)
+        {
+            var remote = BuildRemote(parsedEdition: null, releaseTitle: releaseTitle);
+            var result = Subject.IsSatisfiedBy(remote, EditionCriteria(searchTerm));
+
+            result.Accepted.Should().BeFalse();
+            result.Reason.Should().Be(DownloadRejectionReason.WrongEdition);
+        }
+
+        [Test]
+        public void should_accept_a_parsed_configured_alias_for_an_explicit_slot_search()
+        {
+            var criteria = EditionCriteria("Director's Cut");
+            criteria.EditionMatchTerms = new System.Collections.Generic.List<string> { "Director's Cut", "DC" };
+
+            Subject.IsSatisfiedBy(BuildRemote(parsedEdition: "DC"), criteria).Accepted.Should().BeTrue();
+        }
+
+        [Test]
+        public void should_not_match_an_edition_term_that_only_appears_in_the_movie_title()
+        {
+            var remote = BuildRemote(parsedEdition: null, releaseTitle: "IMAX.2024.1080p.BluRay");
+            remote.ParsedMovieInfo.MovieTitles = new System.Collections.Generic.List<string> { "IMAX" };
+
+            Subject.IsSatisfiedBy(remote, EditionCriteria("IMAX")).Accepted.Should().BeFalse();
+        }
+
+        [Test]
+        public void should_not_match_an_edition_term_that_only_appears_in_the_release_group()
+        {
+            var remote = BuildRemote(parsedEdition: null, releaseTitle: "[IMAX].Movie.2024.1080p.BluRay");
+            remote.ParsedMovieInfo.ReleaseGroup = "IMAX";
+
+            Subject.IsSatisfiedBy(remote, EditionCriteria("IMAX")).Accepted.Should().BeFalse();
+        }
+
         [TestCase("IMAX", "IMAX")]
         [TestCase("Extended Edition", "Extended Edition")]
         [TestCase("Director's Cut", "Directors Cut")]

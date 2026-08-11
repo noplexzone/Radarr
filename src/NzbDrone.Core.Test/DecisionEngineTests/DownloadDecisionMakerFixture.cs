@@ -61,6 +61,10 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
 
             Mocker.GetMock<IParsingService>()
                   .Setup(c => c.Map(It.IsAny<ParsedMovieInfo>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<SearchCriteriaBase>())).Returns(_remoteEpisode);
+
+            Mocker.GetMock<IMediaFileService>()
+                .Setup(s => s.GetFilesByMovie(It.IsAny<int>()))
+                .Returns(new List<MovieFile>());
         }
 
         private void GivenSpecifications(params Mock<IDownloadDecisionEngineSpecification>[] mocks)
@@ -165,7 +169,7 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
         [Test]
         public void should_stamp_explicit_edition_slot_context_before_specifications_run()
         {
-            var slotFile = new MovieFile { Id = 99, MovieId = _remoteEpisode.Movie.Id };
+            var slotFile = new MovieFile { Id = 99, MovieId = _remoteEpisode.Movie.Id, MovieEditionSlotId = 42 };
             var slotProfile = new QualityProfile { Id = 12, Name = "Slot Profile" };
             var criteria = new MovieSearchCriteria { MovieEditionSlotId = 42 };
             var specification = new Mock<IDownloadDecisionEngineSpecification>();
@@ -179,14 +183,13 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
                         Id = 42,
                         MovieId = _remoteEpisode.Movie.Id,
                         EditionName = "IMAX",
-                        MovieFileId = slotFile.Id,
                         QualityProfileId = slotProfile.Id,
                         MinimumCustomFormatScore = 25
                     }
                 });
 
             Mocker.GetMock<IMediaFileService>()
-                .Setup(s => s.GetFilesByMovies(It.Is<IEnumerable<int>>(ids => ids.SequenceEqual(new[] { _remoteEpisode.Movie.Id }))))
+                .Setup(s => s.GetFilesByMovie(_remoteEpisode.Movie.Id))
                 .Returns(new List<MovieFile> { slotFile });
 
             Mocker.GetMock<IQualityProfileService>()
@@ -240,7 +243,7 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
         {
             GivenSpecifications(_pass1);
 
-            var slotFile = new MovieFile { Id = 99 };
+            var slotFile = new MovieFile { Id = 99, MovieId = _remoteEpisode.Movie.Id, MovieEditionSlotId = 42 };
 
             Mocker.GetMock<IMovieEditionSlotService>()
                 .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
@@ -253,12 +256,11 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
                         EditionName = "IMAX",
                         SearchTerm = "IMAX",
                         Monitored = true,
-                        MovieFileId = slotFile.Id
                     }
                 });
 
             Mocker.GetMock<IMediaFileService>()
-                .Setup(s => s.GetFilesByMovies(It.Is<IEnumerable<int>>(ids => ids.SequenceEqual(new[] { _remoteEpisode.Movie.Id }))))
+                .Setup(s => s.GetFilesByMovie(_remoteEpisode.Movie.Id))
                 .Returns(new List<MovieFile> { slotFile });
 
             _reports[0].Title = "Movie.Title.Imax.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG";
@@ -319,12 +321,11 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
                         MovieId = _remoteEpisode.Movie.Id,
                         EditionName = "IMAX",
                         Monitored = true,
-                        MovieFileId = 999
                     }
                 });
 
             Mocker.GetMock<IMediaFileService>()
-                .Setup(s => s.GetFilesByMovies(It.Is<IEnumerable<int>>(ids => ids.SequenceEqual(new[] { _remoteEpisode.Movie.Id }))))
+                .Setup(s => s.GetFilesByMovie(_remoteEpisode.Movie.Id))
                 .Returns(new List<MovieFile>());
 
             _reports[0].Title = "Movie.Title.Imax.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG";
@@ -385,6 +386,127 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
             _reports[0].Title = "Movie.Title.Imax.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG";
 
             Subject.GetRssDecision(_reports).Single().RemoteMovie.CustomFormatScore.Should().Be(50);
+        }
+
+        [Test]
+        public void should_reject_unconfigured_parsed_edition_from_rss_main_target()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.Edition = "IMAX Enhanced";
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(new List<MovieEditionSlot>());
+
+            var result = Subject.GetRssDecision(_reports).Single();
+
+            result.Approved.Should().BeFalse();
+            result.Rejections.Should().Contain(r => r.Reason == DownloadRejectionReason.WrongEdition);
+            result.RemoteMovie.MovieEditionSlotId.Should().BeNull();
+        }
+
+        [Test]
+        public void should_reject_configured_unmonitored_edition_from_rss_main_target()
+        {
+            GivenSpecifications(_pass1);
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(new List<MovieEditionSlot>
+                {
+                    new MovieEditionSlot { Id = 42, MovieId = _remoteEpisode.Movie.Id, EditionName = "IMAX", Monitored = false }
+                });
+            _reports[0].Title = "Movie.2018.IMAX.1080p.BluRay";
+
+            var result = Subject.GetRssDecision(_reports).Single();
+
+            result.Approved.Should().BeFalse();
+            result.Rejections.Should().Contain(r => r.Reason == DownloadRejectionReason.WrongEdition);
+        }
+
+        [TestCase("Movie.2018.CLIMAX.1080p.BluRay")]
+        [TestCase("Movie.2018.ABCD.1080p.BluRay")]
+        public void should_not_match_rss_slot_terms_inside_larger_tokens(string title)
+        {
+            GivenSpecifications(_pass1);
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(new List<MovieEditionSlot>
+                {
+                    new MovieEditionSlot
+                    {
+                        Id = 42,
+                        MovieId = _remoteEpisode.Movie.Id,
+                        EditionName = title.Contains("CLIMAX") ? "IMAX" : "DC",
+                        Monitored = true,
+                        Aliases = null
+                    }
+                });
+            _reports[0].Title = title;
+
+            var result = Subject.GetRssDecision(_reports).Single();
+
+            result.Approved.Should().BeTrue();
+            result.RemoteMovie.MovieEditionSlotId.Should().BeNull();
+        }
+
+        [Test]
+        public void should_match_rss_slot_alias_with_exact_parsed_identity()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.Edition = "DC";
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(new List<MovieEditionSlot>
+                {
+                    new MovieEditionSlot
+                    {
+                        Id = 42,
+                        MovieId = _remoteEpisode.Movie.Id,
+                        EditionName = "Director's Cut",
+                        Aliases = new List<string> { "DC" },
+                        Monitored = true
+                    }
+                });
+
+            Subject.GetRssDecision(_reports).Single().RemoteMovie.MovieEditionSlotId.Should().Be(42);
+        }
+
+        [Test]
+        public void should_not_treat_movie_title_as_configured_rss_edition()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.MovieTitles = new List<string> { "IMAX" };
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(new List<MovieEditionSlot>
+                {
+                    new MovieEditionSlot { Id = 42, MovieId = _remoteEpisode.Movie.Id, EditionName = "IMAX", Monitored = true }
+                });
+            _reports[0].Title = "IMAX.2018.1080p.BluRay";
+
+            var result = Subject.GetRssDecision(_reports).Single();
+
+            result.Approved.Should().BeTrue();
+            result.RemoteMovie.MovieEditionSlotId.Should().BeNull();
+        }
+
+        [Test]
+        public void should_not_match_a_leading_release_group_as_an_rss_edition()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.MovieTitles = new List<string> { "Movie" };
+            _remoteEpisode.ParsedMovieInfo.ReleaseGroup = "IMAX";
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(new List<MovieEditionSlot>
+                {
+                    new MovieEditionSlot { Id = 42, MovieId = _remoteEpisode.Movie.Id, EditionName = "IMAX", Monitored = true }
+                });
+            _reports[0].Title = "[IMAX].Movie.2024.1080p.BluRay";
+
+            var result = Subject.GetRssDecision(_reports).Single();
+
+            result.Approved.Should().BeTrue();
+            result.RemoteMovie.MovieEditionSlotId.Should().BeNull();
         }
 
         [Test]

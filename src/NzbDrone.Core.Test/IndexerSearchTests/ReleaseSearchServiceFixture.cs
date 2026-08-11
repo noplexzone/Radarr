@@ -181,5 +181,36 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
             criteria.SceneTitles.Should().Contain("Movie Director's Cut");
             criteria.SceneTitles.Should().Contain("Original Movie Director's Cut");
         }
+
+        [Test]
+        public async Task edition_search_should_propagate_name_search_term_and_aliases_as_match_identities()
+        {
+            _movie.MovieMetadata = new MovieMetadata { Title = "Movie" };
+            var allCriteria = WatchForSearchCriteria();
+            var slot = new MovieEditionSlot
+            {
+                Id = 12,
+                EditionName = "Director's Cut",
+                SearchTerm = "Directors Cut",
+                Aliases = new List<string> { "DC" }
+            };
+
+            await Subject.MovieEditionSearch(_movie, slot, true, false);
+
+            allCriteria.OfType<MovieSearchCriteria>().Single().EditionMatchTerms
+                .Should().BeEquivalentTo("Director's Cut", "Directors Cut", "DC");
+        }
+
+        [Test]
+        public async Task edition_search_does_not_update_main_movie_last_search_time()
+        {
+            _movie.MovieMetadata = new MovieMetadata { Title = "Movie" };
+            WatchForSearchCriteria();
+
+            await Subject.MovieEditionSearch(_movie, new MovieEditionSlot { Id = 12, EditionName = "IMAX" }, true, false);
+
+            Mocker.GetMock<IMovieService>()
+                .Verify(s => s.UpdateLastSearchTime(It.IsAny<Movie>()), Times.Never);
+        }
     }
 }

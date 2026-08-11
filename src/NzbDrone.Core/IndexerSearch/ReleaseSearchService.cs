@@ -89,6 +89,11 @@ namespace NzbDrone.Core.IndexerSearch
             }
 
             searchSpec.EditionSearchTerm = editionSearchTerm;
+            searchSpec.EditionMatchTerms = new[] { slot.EditionName, slot.SearchTerm }
+                .Concat(slot.Aliases ?? new List<string>())
+                .Where(term => term.IsNotNullOrWhiteSpace())
+                .Distinct(StringComparer.InvariantCultureIgnoreCase)
+                .ToList();
 
             searchSpec.MovieEditionSlotId = slot.Id;
 
@@ -157,8 +162,8 @@ namespace NzbDrone.Core.IndexerSearch
 
             _logger.ProgressDebug("Total of {0} reports were found for {1} from {2} indexers", reports.Count, criteriaBase, indexers.Count);
 
-            // Update the last search time for movie if at least 1 indexer was searched.
-            if (indexers.Any())
+            // Main searches update the movie. Edition searches update only the searched slot in MovieSearchService.
+            if (indexers.Any() && (criteriaBase is not MovieSearchCriteria movieCriteria || !movieCriteria.MovieEditionSlotId.HasValue))
             {
                 var lastSearchTime = DateTime.UtcNow;
                 _logger.Debug("Setting last search time to: {0}", lastSearchTime);

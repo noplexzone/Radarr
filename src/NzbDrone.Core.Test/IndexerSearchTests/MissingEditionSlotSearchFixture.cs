@@ -46,8 +46,7 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
                 Id = 10,
                 MovieId = 1,
                 EditionName = "Extended",
-                Monitored = true,
-                MovieFileId = null
+                Monitored = true
             };
 
             _monitoredSlotWithFile = new MovieEditionSlot
@@ -55,8 +54,7 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
                 Id = 11,
                 MovieId = 1,
                 EditionName = "Theatrical",
-                Monitored = true,
-                MovieFileId = 100
+                Monitored = true
             };
 
             // No movies without files (normal missing search yields nothing)
@@ -104,8 +102,9 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
         {
             var movieFile = new MovieFile
             {
-                Id = slot.MovieFileId.Value,
+                Id = 100,
                 MovieId = slot.MovieId,
+                MovieEditionSlotId = slot.Id,
                 Quality = new QualityModel(fileQuality)
             };
 
@@ -157,7 +156,7 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
                 .With(m => m.Monitored = false)
                 .Build();
 
-            var slot = new MovieEditionSlot { Id = 20, MovieId = 2, Monitored = true, MovieFileId = null };
+            var slot = new MovieEditionSlot { Id = 20, MovieId = 2, Monitored = true };
 
             Mocker.GetMock<IMovieEditionSlotService>()
                 .Setup(s => s.GetMonitoredMissingSlots())
@@ -225,6 +224,31 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
         }
 
         [Test]
+        public void missing_search_searches_main_movie_when_only_an_edition_slot_is_in_queue()
+        {
+            Mocker.GetMock<IMovieService>()
+                .Setup(s => s.MoviesWithoutFiles(It.IsAny<NzbDrone.Core.Datastore.PagingSpec<Movie>>()))
+                .Returns(new NzbDrone.Core.Datastore.PagingSpec<Movie> { Records = new List<Movie> { _monitoredMovie } });
+            Mocker.GetMock<IQueueService>()
+                .Setup(s => s.GetQueue())
+                .Returns(new List<NzbDrone.Core.Queue.Queue>
+                {
+                    new NzbDrone.Core.Queue.Queue { Movie = _monitoredMovie, MovieEditionSlotId = _missingSlot.Id }
+                });
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetMonitoredMissingSlots())
+                .Returns(new List<MovieEditionSlot>());
+            Mocker.GetMock<ISearchForReleases>()
+                .Setup(s => s.MovieSearch(_monitoredMovie.Id, false, false))
+                .ReturnsAsync(new List<DownloadDecision>());
+
+            Subject.Execute(new MissingMoviesSearchCommand { Trigger = CommandTrigger.Scheduled });
+
+            Mocker.GetMock<ISearchForReleases>()
+                .Verify(s => s.MovieSearch(_monitoredMovie.Id, false, false), Times.Once);
+        }
+
+        [Test]
         public void missing_search_normal_movies_behavior_unchanged()
         {
             // When no missing slots exist, no edition search should be triggered
@@ -260,8 +284,7 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
             {
                 Id = 30,
                 MovieId = 1,
-                Monitored = false,
-                MovieFileId = 100
+                Monitored = false
             };
 
             // GetMonitoredSlotsWithFiles already filters to Monitored=true, so this would return empty
@@ -380,7 +403,6 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
                 MovieId = 1,
                 EditionName = "IMAX",
                 Monitored = true,
-                MovieFileId = 101,
                 QualityProfileId = _slotOverrideQualityProfile.Id
             };
 
@@ -435,6 +457,31 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
 
             Mocker.GetMock<ISearchForReleases>()
                 .Verify(s => s.MovieEditionSearch(_monitoredMovie, _monitoredSlotWithFile, false, false), Times.Once);
+        }
+
+        [Test]
+        public void cutoff_unmet_searches_main_movie_when_only_an_edition_slot_is_in_queue()
+        {
+            Mocker.GetMock<IMovieCutoffService>()
+                .Setup(s => s.MoviesWhereCutoffUnmet(It.IsAny<NzbDrone.Core.Datastore.PagingSpec<Movie>>()))
+                .Returns(new NzbDrone.Core.Datastore.PagingSpec<Movie> { Records = new List<Movie> { _monitoredMovie } });
+            Mocker.GetMock<IQueueService>()
+                .Setup(s => s.GetQueue())
+                .Returns(new List<NzbDrone.Core.Queue.Queue>
+                {
+                    new NzbDrone.Core.Queue.Queue { Movie = _monitoredMovie, MovieEditionSlotId = _missingSlot.Id }
+                });
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetMonitoredSlotsWithFiles())
+                .Returns(new List<MovieEditionSlot>());
+            Mocker.GetMock<ISearchForReleases>()
+                .Setup(s => s.MovieSearch(_monitoredMovie.Id, false, false))
+                .ReturnsAsync(new List<DownloadDecision>());
+
+            Subject.Execute(new CutoffUnmetMoviesSearchCommand { Trigger = CommandTrigger.Scheduled });
+
+            Mocker.GetMock<ISearchForReleases>()
+                .Verify(s => s.MovieSearch(_monitoredMovie.Id, false, false), Times.Once);
         }
     }
 }
