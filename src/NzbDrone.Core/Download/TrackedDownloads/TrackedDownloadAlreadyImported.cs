@@ -32,7 +32,8 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
             var movie = trackedDownload.RemoteMovie.Movie;
 
-            var lastHistoryItem = historyItems.FirstOrDefault(h => h.MovieId == movie.Id);
+            var target = trackedDownload.MovieEditionSlotId ?? trackedDownload.RemoteMovie.MovieEditionSlotId;
+            var lastHistoryItem = historyItems.FirstOrDefault(h => h.MovieId == movie.Id && MatchesTarget(h, target));
 
             if (lastHistoryItem == null)
             {
@@ -45,6 +46,16 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
             _logger.Trace("All movies for '{0}' have been imported: {1}", trackedDownload.DownloadItem.Title, allMoviesImportedInHistory);
             return allMoviesImportedInHistory;
+        }
+
+        private static bool MatchesTarget(MovieHistory history, int? movieEditionSlotId)
+        {
+            if (!history.Data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var value))
+            {
+                return !movieEditionSlotId.HasValue;
+            }
+
+            return movieEditionSlotId.HasValue && int.TryParse(value, out var slotId) && slotId == movieEditionSlotId.Value;
         }
     }
 }

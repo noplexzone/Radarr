@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using FluentAssertions;
 using Moq;
 using NUnit.Framework;
 using NzbDrone.Core.Download;
@@ -61,6 +63,32 @@ namespace NzbDrone.Core.Test.Download.DownloadHistoryTests
                 .Verify(r => r.Insert(It.Is<DownloadHistory>(h =>
                     h.EventType == DownloadHistoryEventType.DownloadGrabbed &&
                     !h.Data.ContainsKey(MovieHistory.MOVIE_EDITION_SLOT_ID))));
+        }
+
+        [Test]
+        public void should_select_latest_lifecycle_and_grab_for_exact_nullable_target()
+        {
+            var mainGrab = new DownloadHistory { EventType = DownloadHistoryEventType.DownloadGrabbed };
+            var slotGrab = new DownloadHistory { EventType = DownloadHistoryEventType.DownloadGrabbed };
+            slotGrab.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "42");
+            var otherFailure = new DownloadHistory { EventType = DownloadHistoryEventType.DownloadFailed };
+            otherFailure.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "43");
+            Mocker.GetMock<IDownloadHistoryRepository>().Setup(r => r.FindByDownloadId("shared")).Returns(new List<DownloadHistory> { otherFailure, slotGrab, mainGrab });
+
+            Subject.GetLatestDownloadHistoryItem("shared", 42).Should().BeSameAs(slotGrab);
+            Subject.GetLatestGrab("shared", 42).Should().BeSameAs(slotGrab);
+            Subject.GetLatestDownloadHistoryItem("shared", null).Should().BeSameAs(mainGrab);
+            Subject.GetLatestGrab("shared", null).Should().BeSameAs(mainGrab);
+        }
+
+        [Test]
+        public void malformed_slot_identity_should_not_match_main_download_history()
+        {
+            var malformed = new DownloadHistory { EventType = DownloadHistoryEventType.DownloadFailed };
+            malformed.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "not-an-id");
+            Mocker.GetMock<IDownloadHistoryRepository>().Setup(r => r.FindByDownloadId("corrupt")).Returns(new List<DownloadHistory> { malformed });
+
+            Subject.GetLatestDownloadHistoryItem("corrupt", null).Should().BeNull();
         }
 
         [Test]

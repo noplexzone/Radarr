@@ -133,5 +133,44 @@ namespace NzbDrone.Core.Test.HistoryTests
                     h.EventType == MovieHistoryEventType.Grabbed &&
                     !h.Data.ContainsKey(MovieHistory.MOVIE_EDITION_SLOT_ID))));
         }
+
+        [Test]
+        public void should_store_exact_movie_edition_slot_id_for_ignored_download()
+        {
+            var tracked = new NzbDrone.Core.Download.TrackedDownloads.TrackedDownload
+            {
+                RemoteMovie = new RemoteMovie { MovieEditionSlotId = 42, ParsedMovieInfo = new ParsedMovieInfo(), Release = new ReleaseInfo() },
+                DownloadItem = new DownloadClientItem { DownloadClientInfo = new DownloadClientItemClientInfo(), TotalSize = 1 }
+            };
+            var ignored = new DownloadIgnoredEvent
+            {
+                MovieId = 1,
+                DownloadClientInfo = new DownloadClientItemClientInfo(),
+                TrackedDownload = tracked
+            };
+
+            Subject.Handle(ignored);
+
+            Mocker.GetMock<IHistoryRepository>().Verify(v => v.Insert(It.Is<MovieHistory>(h => h.EventType == MovieHistoryEventType.DownloadIgnored && h.Data[MovieHistory.MOVIE_EDITION_SLOT_ID] == "42")));
+        }
+
+        [Test]
+        public void should_store_exact_movie_edition_slot_id_for_failed_download_without_tracked_state()
+        {
+            Subject.Handle(new DownloadFailedEvent { MovieId = 1, MovieEditionSlotId = 42 });
+
+            Mocker.GetMock<IHistoryRepository>().Verify(v => v.Insert(It.Is<MovieHistory>(h => h.EventType == MovieHistoryEventType.DownloadFailed && h.Data[MovieHistory.MOVIE_EDITION_SLOT_ID] == "42")));
+        }
+
+        [Test]
+        public void should_store_durable_movie_edition_slot_id_for_import()
+        {
+            var movie = Builder<Movie>.CreateNew().Build();
+            Mocker.GetMock<IHistoryRepository>().Setup(r => r.FindDownloadHistory(movie.Id, It.IsAny<QualityModel>())).Returns(new List<MovieHistory>());
+            var movieFile = Builder<MovieFile>.CreateNew().With(f => f.MovieEditionSlotId = 42).Build();
+            var localMovie = new LocalMovie { Movie = movie, Path = @"C:\Test\Movie.mkv" };
+            Subject.Handle(new MovieFileImportedEvent(localMovie, movieFile, new List<DeletedMovieFile>(), true, null));
+            Mocker.GetMock<IHistoryRepository>().Verify(v => v.Insert(It.Is<MovieHistory>(h => h.EventType == MovieHistoryEventType.DownloadFolderImported && h.Data[MovieHistory.MOVIE_EDITION_SLOT_ID] == "42")));
+        }
     }
 }

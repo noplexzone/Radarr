@@ -5,6 +5,7 @@ using NzbDrone.Core.IndexerSearch;
 using NzbDrone.Core.Messaging;
 using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Messaging.Events;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser.Model;
 
 namespace NzbDrone.Core.Download
@@ -13,14 +14,17 @@ namespace NzbDrone.Core.Download
     {
         private readonly IConfigService _configService;
         private readonly IManageCommandQueue _commandQueueManager;
+        private readonly IMovieEditionSlotService _movieEditionSlotService;
         private readonly Logger _logger;
 
         public RedownloadFailedDownloadService(IConfigService configService,
                                                IManageCommandQueue commandQueueManager,
+                                               IMovieEditionSlotService movieEditionSlotService,
                                                Logger logger)
         {
             _configService = configService;
             _commandQueueManager = commandQueueManager;
+            _movieEditionSlotService = movieEditionSlotService;
             _logger = logger;
         }
 
@@ -45,11 +49,28 @@ namespace NzbDrone.Core.Download
                 return;
             }
 
-            if (message.MovieId != 0)
+            if (message.MovieId == 0)
             {
-                _logger.Debug("Failed download contains a movie, searching again.");
-                _commandQueueManager.Push(new MoviesSearchCommand { MovieIds = new List<int> { message.MovieId } });
+                return;
             }
+
+            if (message.MovieEditionSlotId.HasValue)
+            {
+                var slot = _movieEditionSlotService.GetForMovie(message.MovieId)
+                    .Find(s => s.Id == message.MovieEditionSlotId.Value);
+                if (slot == null)
+                {
+                    _logger.Warn("Failed download targets missing or cross-movie edition slot {0}; skipping redownload", message.MovieEditionSlotId.Value);
+                    return;
+                }
+
+                _logger.Debug("Failed download contains an edition slot, searching that edition again.");
+                _commandQueueManager.Push(new MovieEditionSearchCommand { MovieId = message.MovieId, MovieEditionSlotId = slot.Id });
+                return;
+            }
+
+            _logger.Debug("Failed download contains a movie, searching again.");
+            _commandQueueManager.Push(new MoviesSearchCommand { MovieIds = new List<int> { message.MovieId } });
         }
     }
 }

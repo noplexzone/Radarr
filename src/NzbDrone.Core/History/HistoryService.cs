@@ -211,6 +211,7 @@ namespace NzbDrone.Core.History
             history.Data.Add("CustomFormatScore", message.MovieInfo.CustomFormatScore.ToString());
             history.Data.Add("Size", message.MovieInfo.Size.ToString());
             history.Data.Add("IndexerFlags", message.ImportedMovie.IndexerFlags.ToString());
+            AddMovieEditionSlot(history, message.ImportedMovie.MovieEditionSlotId);
 
             _historyRepository.Insert(history);
         }
@@ -288,6 +289,7 @@ namespace NzbDrone.Core.History
             history.Data.Add("ReleaseGroup", message.TrackedDownload?.RemoteMovie?.ParsedMovieInfo?.ReleaseGroup);
             history.Data.Add("Size", message.TrackedDownload?.DownloadItem.TotalSize.ToString());
             history.Data.Add("Indexer", message.TrackedDownload?.RemoteMovie?.Release?.Indexer);
+            AddMovieEditionSlot(history, message.TrackedDownload?.RemoteMovie?.MovieEditionSlotId);
 
             _historyRepository.Insert(history);
         }
@@ -316,8 +318,23 @@ namespace NzbDrone.Core.History
             history.Data.Add("ReleaseGroup", message.TrackedDownload?.RemoteMovie?.ParsedMovieInfo?.ReleaseGroup ?? message.Data.GetValueOrDefault(MovieHistory.RELEASE_GROUP));
             history.Data.Add("Size", message.TrackedDownload?.DownloadItem.TotalSize.ToString() ?? message.Data.GetValueOrDefault(MovieHistory.SIZE));
             history.Data.Add("Indexer", message.TrackedDownload?.RemoteMovie?.Release?.Indexer ?? message.Data.GetValueOrDefault(MovieHistory.INDEXER));
+            AddMovieEditionSlot(history, message.MovieEditionSlotId ?? message.TrackedDownload?.RemoteMovie?.MovieEditionSlotId ?? GetMovieEditionSlotId(message.Data));
 
             _historyRepository.Insert(history);
+        }
+
+
+        private static int? GetMovieEditionSlotId(IReadOnlyDictionary<string, string> data)
+        {
+            return data != null && data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var value) && int.TryParse(value, out var slotId) ? slotId : null;
+        }
+
+        private static void AddMovieEditionSlot(MovieHistory history, int? movieEditionSlotId)
+        {
+            if (movieEditionSlotId.HasValue)
+            {
+                history.Data[MovieHistory.MOVIE_EDITION_SLOT_ID] = movieEditionSlotId.Value.ToString();
+            }
         }
 
         public List<MovieHistory> Since(DateTime date, MovieHistoryEventType? eventType)

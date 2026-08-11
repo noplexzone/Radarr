@@ -12,7 +12,9 @@ namespace NzbDrone.Core.Download.History
     {
         bool DownloadAlreadyImported(string downloadId);
         DownloadHistory GetLatestDownloadHistoryItem(string downloadId);
+        DownloadHistory GetLatestDownloadHistoryItem(string downloadId, int? movieEditionSlotId);
         DownloadHistory GetLatestGrab(string downloadId);
+        DownloadHistory GetLatestGrab(string downloadId, int? movieEditionSlotId);
     }
 
     public class DownloadHistoryService : IDownloadHistoryService,
@@ -85,10 +87,26 @@ namespace NzbDrone.Core.Download.History
             return null;
         }
 
+        public DownloadHistory GetLatestDownloadHistoryItem(string downloadId, int? movieEditionSlotId)
+        {
+            return _repository.FindByDownloadId(downloadId)
+                .Where(history => MatchesTarget(history, movieEditionSlotId))
+                .FirstOrDefault(history => history.EventType == DownloadHistoryEventType.DownloadIgnored ||
+                                           history.EventType == DownloadHistoryEventType.DownloadGrabbed ||
+                                           history.EventType == DownloadHistoryEventType.DownloadImported ||
+                                           history.EventType == DownloadHistoryEventType.DownloadFailed);
+        }
+
         public DownloadHistory GetLatestGrab(string downloadId)
         {
             return _repository.FindByDownloadId(downloadId)
                               .FirstOrDefault(d => d.EventType == DownloadHistoryEventType.DownloadGrabbed);
+        }
+
+        public DownloadHistory GetLatestGrab(string downloadId, int? movieEditionSlotId)
+        {
+            return _repository.FindByDownloadId(downloadId)
+                .FirstOrDefault(history => history.EventType == DownloadHistoryEventType.DownloadGrabbed && MatchesTarget(history, movieEditionSlotId));
         }
 
         public void Handle(MovieGrabbedEvent message)
@@ -160,6 +178,7 @@ namespace NzbDrone.Core.Download.History
 
             history.Data.Add("DownloadClient", message.DownloadClientInfo.Type);
             history.Data.Add("DownloadClientName", message.DownloadClientInfo.Name);
+            AddMovieEditionSlot(history, message.ImportedMovie.MovieEditionSlotId);
 
             _repository.Insert(history);
         }
@@ -181,6 +200,7 @@ namespace NzbDrone.Core.Download.History
 
             history.Data.Add("DownloadClient", downloadItem.DownloadClientInfo.Type);
             history.Data.Add("DownloadClientName", downloadItem.DownloadClientInfo.Name);
+            AddMovieEditionSlot(history, message.TrackedDownload.MovieEditionSlotId ?? message.TrackedDownload.RemoteMovie?.MovieEditionSlotId);
 
             _repository.Insert(history);
         }
@@ -206,6 +226,7 @@ namespace NzbDrone.Core.Download.History
 
             history.Data.Add("DownloadClient", message.TrackedDownload.DownloadItem.DownloadClientInfo.Type);
             history.Data.Add("DownloadClientName", message.TrackedDownload.DownloadItem.DownloadClientInfo.Name);
+            AddMovieEditionSlot(history, message.MovieEditionSlotId ?? message.TrackedDownload.MovieEditionSlotId ?? message.TrackedDownload.RemoteMovie?.MovieEditionSlotId);
 
             _repository.Insert(history);
         }
@@ -225,8 +246,27 @@ namespace NzbDrone.Core.Download.History
 
             history.Data.Add("DownloadClient", message.DownloadClientInfo.Type);
             history.Data.Add("DownloadClientName", message.DownloadClientInfo.Name);
+            AddMovieEditionSlot(history, message.TrackedDownload?.MovieEditionSlotId ?? message.TrackedDownload?.RemoteMovie?.MovieEditionSlotId);
 
             _repository.Insert(history);
+        }
+
+        private static bool MatchesTarget(DownloadHistory history, int? movieEditionSlotId)
+        {
+            if (!history.Data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var value))
+            {
+                return !movieEditionSlotId.HasValue;
+            }
+
+            return movieEditionSlotId.HasValue && int.TryParse(value, out var slotId) && slotId == movieEditionSlotId.Value;
+        }
+
+        private static void AddMovieEditionSlot(DownloadHistory history, int? movieEditionSlotId)
+        {
+            if (movieEditionSlotId.HasValue)
+            {
+                history.Data[MovieHistory.MOVIE_EDITION_SLOT_ID] = movieEditionSlotId.Value.ToString();
+            }
         }
 
         public void Handle(MoviesDeletedEvent message)

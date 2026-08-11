@@ -72,8 +72,9 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
 
         private void GivenMostRecentForEpisode(int episodeId, string downloadId, QualityModel quality, DateTime date, MovieHistoryEventType eventType)
         {
-            Mocker.GetMock<IHistoryService>().Setup(s => s.MostRecentForMovie(episodeId))
-                  .Returns(new MovieHistory { DownloadId = downloadId, Quality = quality, Date = date, EventType = eventType });
+            var history = new MovieHistory { DownloadId = downloadId, Quality = quality, Date = date, EventType = eventType };
+            Mocker.GetMock<IHistoryService>().Setup(s => s.MostRecentForMovie(episodeId)).Returns(history);
+            Mocker.GetMock<IHistoryService>().Setup(s => s.GetByMovieId(episodeId, null)).Returns(new List<MovieHistory> { history });
         }
 
         private void GivenCdhDisabled()
@@ -93,6 +94,7 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
         public void should_return_true_if_latest_history_item_is_null()
         {
             Mocker.GetMock<IHistoryService>().Setup(s => s.MostRecentForMovie(It.IsAny<int>())).Returns((MovieHistory)null);
+            Mocker.GetMock<IHistoryService>().Setup(s => s.GetByMovieId(It.IsAny<int>(), null)).Returns(new List<MovieHistory>());
             _upgradeHistory.IsSatisfiedBy(_parseResultSingle, null).Accepted.Should().BeTrue();
         }
 
@@ -239,6 +241,32 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
             GivenCdhDisabled();
             GivenMostRecentForEpisode(FIRST_EPISODE_ID, "test", _notupgradableQuality, DateTime.UtcNow.AddDays(-100), MovieHistoryEventType.Grabbed);
             _upgradeHistory.IsSatisfiedBy(_parseResultSingle, null).Accepted.Should().BeFalse();
+        }
+
+        [Test]
+        public void should_ignore_non_download_history_when_selecting_latest_main_target_event()
+        {
+            var grab = new MovieHistory { Date = DateTime.UtcNow.AddMinutes(-2), Quality = _notupgradableQuality, EventType = MovieHistoryEventType.Grabbed };
+            var rename = new MovieHistory { Date = DateTime.UtcNow, Quality = _upgradableQuality, EventType = MovieHistoryEventType.MovieFileRenamed };
+            Mocker.GetMock<IHistoryService>().Setup(s => s.GetByMovieId(_fakeMovie.Id, null)).Returns(new List<MovieHistory> { grab, rename });
+
+            _upgradeHistory.IsSatisfiedBy(_parseResultSingle, null).Accepted.Should().BeFalse();
+        }
+
+        [TestCase(MovieHistoryEventType.DownloadFailed)]
+        [TestCase(MovieHistoryEventType.DownloadIgnored)]
+        [TestCase(MovieHistoryEventType.DownloadFolderImported)]
+        public void should_use_latest_lifecycle_event_for_exact_edition_target(MovieHistoryEventType latestEventType)
+        {
+            _parseResultSingle.MovieEditionSlotId = 42;
+            var grab = new MovieHistory { Date = DateTime.UtcNow.AddMinutes(-2), Quality = _notupgradableQuality, EventType = MovieHistoryEventType.Grabbed };
+            grab.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "42");
+            var latest = new MovieHistory { Date = DateTime.UtcNow.AddMinutes(-1), Quality = _notupgradableQuality, EventType = latestEventType };
+            latest.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "42");
+            var other = new MovieHistory { Date = DateTime.UtcNow, Quality = _notupgradableQuality, EventType = MovieHistoryEventType.Grabbed };
+            other.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "43");
+            Mocker.GetMock<IHistoryService>().Setup(s => s.GetByMovieId(_fakeMovie.Id, null)).Returns(new List<MovieHistory> { grab, latest, other });
+            _upgradeHistory.IsSatisfiedBy(_parseResultSingle, null).Accepted.Should().BeTrue();
         }
     }
 }

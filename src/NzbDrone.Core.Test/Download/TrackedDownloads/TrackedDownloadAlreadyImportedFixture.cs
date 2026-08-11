@@ -25,6 +25,7 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
 
             var remoteMovie = Builder<RemoteMovie>.CreateNew()
                                                       .With(r => r.Movie = _movie)
+                                                      .With(r => r.MovieEditionSlotId = null)
                                                       .Build();
 
             var downloadItem = Builder<DownloadClientItem>.CreateNew()
@@ -32,6 +33,7 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
 
             _trackedDownload = Builder<TrackedDownload>.CreateNew()
                                                        .With(t => t.RemoteMovie = remoteMovie)
+                                                       .With(t => t.MovieEditionSlotId = null)
                                                        .With(t => t.DownloadItem = downloadItem)
                                                        .Build();
 
@@ -66,6 +68,26 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
             Subject.IsImported(_trackedDownload, _historyItems)
                    .Should()
                    .BeFalse();
+        }
+
+        [Test]
+        public void should_only_use_history_for_the_exact_nullable_target()
+        {
+            _trackedDownload.MovieEditionSlotId = 42;
+            var otherSlotImport = Builder<MovieHistory>.CreateNew()
+                .With(h => h.MovieId = _movie.Id)
+                .With(h => h.EventType = MovieHistoryEventType.DownloadFolderImported)
+                .Build();
+            otherSlotImport.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "43");
+            var exactGrab = Builder<MovieHistory>.CreateNew()
+                .With(h => h.MovieId = _movie.Id)
+                .With(h => h.EventType = MovieHistoryEventType.Grabbed)
+                .Build();
+            exactGrab.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "42");
+            _historyItems.Add(otherSlotImport);
+            _historyItems.Add(exactGrab);
+
+            Subject.IsImported(_trackedDownload, _historyItems).Should().BeFalse();
         }
 
         [Test]

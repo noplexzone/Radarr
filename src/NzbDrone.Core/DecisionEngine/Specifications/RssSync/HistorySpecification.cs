@@ -48,11 +48,10 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.RssSync
             _logger.Debug("Performing history status check on report");
 
             _logger.Debug("Checking current status of movie [{0}] in history", subject.Movie.Id);
-            var mostRecent = subject.MovieEditionSlotId.HasValue
-                ? _historyService.GetByMovieId(subject.Movie.Id, MovieHistoryEventType.Grabbed)
-                    .Where(h => h.Data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var slotId) && slotId == subject.MovieEditionSlotId.Value.ToString())
-                    .MaxBy(h => h.Date)
-                : _historyService.MostRecentForMovie(subject.Movie.Id);
+            var mostRecent = _historyService.GetByMovieId(subject.Movie.Id, null)
+                .Where(IsDownloadLifecycleEvent)
+                .Where(h => MatchesTarget(h, subject.MovieEditionSlotId))
+                .MaxBy(h => h.Date);
 
             if (mostRecent != null && mostRecent.EventType == MovieHistoryEventType.Grabbed)
             {
@@ -119,6 +118,24 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.RssSync
             }
 
             return DownloadSpecDecision.Accept();
+        }
+
+        private static bool IsDownloadLifecycleEvent(MovieHistory history)
+        {
+            return history.EventType == MovieHistoryEventType.Grabbed ||
+                   history.EventType == MovieHistoryEventType.DownloadFolderImported ||
+                   history.EventType == MovieHistoryEventType.DownloadFailed ||
+                   history.EventType == MovieHistoryEventType.DownloadIgnored;
+        }
+
+        private static bool MatchesTarget(MovieHistory history, int? movieEditionSlotId)
+        {
+            if (!history.Data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var value))
+            {
+                return !movieEditionSlotId.HasValue;
+            }
+
+            return movieEditionSlotId.HasValue && int.TryParse(value, out var parsedSlotId) && parsedSlotId == movieEditionSlotId.Value;
         }
     }
 }

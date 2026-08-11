@@ -41,8 +41,20 @@ namespace NzbDrone.Core.Test.QueueTests
                 .With(v => v.IsTrackable = true)
                 .With(v => v.DownloadItem = downloadItem)
                 .With(v => v.RemoteMovie = remoteEpisode)
+                .With(v => v.MovieEditionSlotId = null)
                 .Build()
                 .ToList();
+        }
+
+        [Test]
+        public void queue_should_preserve_stale_slot_target_when_remote_movie_is_unmapped()
+        {
+            _trackedDownloads[0].RemoteMovie = null;
+            _trackedDownloads[0].MovieEditionSlotId = 42;
+
+            Subject.Handle(new TrackedDownloadRefreshedEvent(_trackedDownloads));
+
+            Subject.GetQueue().Single().MovieEditionSlotId.Should().Be(42);
         }
 
         [Test]

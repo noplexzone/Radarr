@@ -3,6 +3,7 @@ using System.Linq;
 using FluentAssertions;
 using Moq;
 using NUnit.Framework;
+using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.Download;
 using NzbDrone.Core.Download.History;
 using NzbDrone.Core.Download.TrackedDownloads;
@@ -10,10 +11,13 @@ using NzbDrone.Core.History;
 using NzbDrone.Core.Indexers;
 using NzbDrone.Core.Indexers.TorrentRss;
 using NzbDrone.Core.Languages;
+using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.Events;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
+using NzbDrone.Core.Profiles.Qualities;
 using NzbDrone.Core.Test.Framework;
 
 namespace NzbDrone.Core.Test.Download.TrackedDownloads
@@ -24,6 +28,9 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
         [SetUp]
         public void Setup()
         {
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetForMovie(1))
+                .Returns(new List<MovieEditionSlot> { new MovieEditionSlot { Id = 42, MovieId = 1, QualityProfileId = 7, MinimumCustomFormatScore = 50 } });
         }
 
         private void GivenDownloadHistory()
@@ -243,6 +250,10 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
                 .Setup(s => s.GetLatestGrab("slot-download"))
                 .Returns(downloadHistory);
 
+            var slotProfile = new QualityProfile { Id = 7, Name = "Slot" };
+            var slotFile = new MovieFile { Id = 9, MovieId = 1, MovieEditionSlotId = 42 };
+            Mocker.GetMock<IQualityProfileService>().Setup(s => s.Get(7)).Returns(slotProfile);
+            Mocker.GetMock<IMediaFileService>().Setup(s => s.FindByEditionSlotId(42)).Returns(slotFile);
             var remoteMovie = new RemoteMovie
             {
                 Movie = new Movie { Id = 1 },
@@ -266,6 +277,41 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
             trackedDownload.Should().NotBeNull();
             trackedDownload.RemoteMovie.Should().NotBeNull();
             trackedDownload.RemoteMovie.MovieEditionSlotId.Should().Be(42);
+            trackedDownload.RemoteMovie.SlotQualityProfile.Should().BeSameAs(slotProfile);
+            trackedDownload.RemoteMovie.SlotMinimumCustomFormatScore.Should().Be(50);
+            trackedDownload.RemoteMovie.SlotMovieFile.Should().BeSameAs(slotFile);
+            Mocker.GetMock<ICustomFormatCalculationService>().Verify(s => s.ParseCustomFormat(trackedDownload.RemoteMovie, item.TotalSize), Times.Once());
+        }
+
+        [Test]
+        public void should_preserve_exact_slot_when_movie_is_refreshed()
+        {
+            var history = new MovieHistory { DownloadId = "refresh-slot", MovieId = 1, EventType = MovieHistoryEventType.Grabbed, SourceTitle = "Movie.2024.Directors.Cut.1080p" };
+            history.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "42");
+            Mocker.GetMock<IHistoryService>().Setup(s => s.FindByDownloadId("refresh-slot")).Returns(new List<MovieHistory> { history });
+            var downloadGrab = new DownloadHistory { DownloadId = "refresh-slot", MovieId = 1, EventType = DownloadHistoryEventType.DownloadGrabbed };
+            downloadGrab.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "42");
+            Mocker.GetMock<IDownloadHistoryService>().Setup(s => s.GetLatestGrab("refresh-slot")).Returns(downloadGrab);
+            var remoteMovie = new RemoteMovie { Movie = new Movie { Id = 1, TmdbId = 10 }, ParsedMovieInfo = new ParsedMovieInfo { MovieTitles = new List<string> { "Movie" }, Year = 2024 } };
+            Mocker.GetMock<IParsingService>().Setup(s => s.Map(It.IsAny<ParsedMovieInfo>(), It.IsAny<string>(), It.IsAny<int>(), null)).Returns(remoteMovie);
+            var client = new DownloadClientDefinition { Id = 1, Protocol = DownloadProtocol.Torrent };
+            var item = new DownloadClientItem { Title = "Movie.2024.Directors.Cut.1080p", DownloadId = "refresh-slot", DownloadClientInfo = new DownloadClientItemClientInfo() };
+            Subject.TrackDownload(client, item).RemoteMovie.MovieEditionSlotId.Should().Be(42);
+
+            Subject.Handle(new MovieEditedEvent(new Movie { Id = 1, TmdbId = 10 }, remoteMovie.Movie));
+            Subject.GetTrackedDownloads().Single().RemoteMovie.MovieEditionSlotId.Should().Be(42);
+            Subject.Handle(new MoviesBulkEditedEvent(new List<Movie> { new Movie { Id = 1, TmdbId = 10 } }));
+            Subject.GetTrackedDownloads().Single().RemoteMovie.MovieEditionSlotId.Should().Be(42);
+
+
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetForMovie(1)).Returns(new List<MovieEditionSlot>());
+            Subject.Handle(new MovieEditedEvent(new Movie { Id = 1, TmdbId = 10 }, remoteMovie.Movie));
+            Subject.GetTrackedDownloads().Single().RemoteMovie.Should().BeNull();
+            Subject.GetTrackedDownloads().Single().MovieEditionSlotId.Should().Be(42);
+
+            Subject.Handle(new MovieAddedEvent(new Movie { Id = 1, TmdbId = 10 }));
+            Subject.GetTrackedDownloads().Single().RemoteMovie.Should().BeNull();
+            Subject.GetTrackedDownloads().Single().MovieEditionSlotId.Should().Be(42);
         }
 
         [Test]

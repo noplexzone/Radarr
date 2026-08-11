@@ -41,6 +41,7 @@ namespace NzbDrone.Core.Test.Download.FailedDownloadServiceTests
                     .With(c => c.State = TrackedDownloadState.FailedPending)
                     .With(c => c.DownloadItem = completed)
                     .With(c => c.RemoteMovie = remoteMovie)
+                    .With(c => c.MovieEditionSlotId = null)
                     .Build();
 
             Mocker.GetMock<IHistoryService>()
@@ -95,6 +96,20 @@ namespace NzbDrone.Core.Test.Download.FailedDownloadServiceTests
             .Verify(v => v.PublishEvent(It.IsAny<DownloadFailedEvent>()), Times.Once());
 
             _trackedDownload.State.Should().Be(TrackedDownloadState.Failed);
+        }
+
+        [Test]
+        public void should_publish_failure_for_exact_tracked_edition_target()
+        {
+            _trackedDownload.RemoteMovie.MovieEditionSlotId = 42;
+            _trackedDownload.MovieEditionSlotId = 42;
+            _trackedDownload.DownloadItem.Status = DownloadItemStatus.Failed;
+            _grabHistory[0].Date = System.DateTime.UtcNow;
+            _grabHistory[0].Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "43");
+            _grabHistory[1].Date = System.DateTime.UtcNow.AddMinutes(-1);
+            _grabHistory[1].Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "42");
+            Subject.ProcessFailed(_trackedDownload);
+            Mocker.GetMock<IEventAggregator>().Verify(v => v.PublishEvent(It.Is<DownloadFailedEvent>(e => e.MovieEditionSlotId == 42 && e.Data[MovieHistory.MOVIE_EDITION_SLOT_ID] == "42")), Times.Once());
         }
     }
 }
