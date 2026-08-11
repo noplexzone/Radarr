@@ -73,11 +73,13 @@ namespace NzbDrone.Core.Test.Housekeeping.Housekeepers
                 MovieId = movie.Id,
                 EditionName = "Director's Cut",
                 Monitored = true,
-                MovieFileId = movieFile.Id,
                 DateAdded = DateTime.UtcNow
             };
 
             Db.Insert(slot);
+            movieFile.MovieId = movie.Id;
+            movieFile.MovieEditionSlotId = slot.Id;
+            Db.Update(movieFile);
 
             Subject.Clean();
             AllStoredModels.Should().HaveCount(1);

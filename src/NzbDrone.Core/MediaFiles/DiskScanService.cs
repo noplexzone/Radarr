@@ -17,6 +17,7 @@ using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.MovieEditionSlots;
+using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.RootFolders;
 
 namespace NzbDrone.Core.MediaFiles
@@ -142,6 +143,21 @@ namespace NzbDrone.Core.MediaFiles
 
             var decisionsStopwatch = Stopwatch.StartNew();
             var decisions = _importDecisionMaker.GetImportDecisions(unmappedFiles, movie, false);
+
+            // Files discovered beside an existing main file are explicit unassigned
+            // discoveries. Rescans must never replace the main pointer or infer a slot
+            // from parser edition text. A durable slot target set by grab history is kept.
+            var hasCurrentMain = movie.MovieFileId > 0 &&
+                                 _mediaFileService.GetFilesByMovie(movie.Id).Any(file =>
+                                     file.Id == movie.MovieFileId && !file.MovieEditionSlotId.HasValue);
+            if (hasCurrentMain)
+            {
+                foreach (var decision in decisions.Where(d => d.Approved && d.LocalMovie.ImportTarget == MovieFileImportTarget.Main))
+                {
+                    decision.LocalMovie.ImportTarget = MovieFileImportTarget.Unassigned;
+                }
+            }
+
             decisionsStopwatch.Stop();
             _logger.Trace("Import decisions complete for: {0} [{1}]", movie, decisionsStopwatch.Elapsed);
             _importApprovedMovies.Import(decisions, false);
