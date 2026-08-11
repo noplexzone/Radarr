@@ -129,6 +129,28 @@ namespace NzbDrone.Core.Test.IndexerSearchTests
                 .Returns(new List<QualityProfile> { _movieQualityProfile, _slotOverrideQualityProfile });
         }
 
+        // --- Phase 5 API command: MissingEditionSlotsSearchCommand ---
+
+        [Test]
+        public void missing_edition_slots_command_searches_missing_slots_without_movie_id()
+        {
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(s => s.GetMonitoredMissingSlots())
+                .Returns(new List<MovieEditionSlot> { _missingSlot });
+
+            Mocker.GetMock<IMovieService>()
+                .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
+                .Returns(new List<Movie> { _monitoredMovie });
+
+            Subject.Execute(new MissingEditionSlotsSearchCommand { Trigger = CommandTrigger.Manual });
+
+            Mocker.GetMock<ISearchForReleases>()
+                .Verify(s => s.MovieEditionSearch(_monitoredMovie, _missingSlot, true, false), Times.Once);
+
+            Mocker.GetMock<IMovieService>()
+                .Verify(s => s.GetMovie(It.IsAny<int>()), Times.Never);
+        }
+
         // --- Feature 8: MissingMoviesSearchCommand ---
 
         [Test]

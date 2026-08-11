@@ -17,7 +17,7 @@ using NzbDrone.Core.Queue;
 
 namespace NzbDrone.Core.IndexerSearch
 {
-    public class MovieSearchService : IExecute<MoviesSearchCommand>, IExecute<MissingMoviesSearchCommand>, IExecute<CutoffUnmetMoviesSearchCommand>, IExecute<MovieEditionSearchCommand>, IExecute<CutoffUnmetEditionSlotsSearchCommand>
+    public class MovieSearchService : IExecute<MoviesSearchCommand>, IExecute<MissingMoviesSearchCommand>, IExecute<CutoffUnmetMoviesSearchCommand>, IExecute<MovieEditionSearchCommand>, IExecute<MissingEditionSlotsSearchCommand>, IExecute<CutoffUnmetEditionSlotsSearchCommand>
     {
         private readonly IMovieService _movieService;
         private readonly IMovieCutoffService _movieCutoffService;
@@ -110,6 +110,17 @@ namespace NzbDrone.Core.IndexerSearch
 
             SearchForBulkMovies(missing, message.Trigger == CommandTrigger.Manual).GetAwaiter().GetResult();
             SearchCutoffUnmetEditionSlots(queuedEditionSlotIds, message.Trigger == CommandTrigger.Manual);
+        }
+
+
+        public void Execute(MissingEditionSlotsSearchCommand message)
+        {
+            var queuedEditionSlotIds = _queueService.GetQueue()
+                .Where(q => q.MovieEditionSlotId.HasValue)
+                .Select(q => q.MovieEditionSlotId.Value)
+                .ToHashSet();
+
+            SearchMissingEditionSlots(queuedEditionSlotIds, message.Trigger == CommandTrigger.Manual).GetAwaiter().GetResult();
         }
 
         public void Execute(CutoffUnmetEditionSlotsSearchCommand message)
