@@ -10,6 +10,7 @@ import EnhancedSelectInput, {
 import Icon from 'Components/Icon';
 import SpinnerIconButton from 'Components/Link/SpinnerIconButton';
 import LoadingIndicator from 'Components/Loading/LoadingIndicator';
+import ConfirmModal from 'Components/Modal/ConfirmModal';
 import MonitorToggleButton from 'Components/MonitorToggleButton';
 import RelativeDateCell from 'Components/Table/Cells/RelativeDateCell';
 import TableRowCell from 'Components/Table/Cells/TableRowCell';
@@ -95,16 +96,42 @@ interface MovieEditionSlot {
   movieId: number;
   editionName: string;
   searchTerm: string | null;
+  aliases: string[];
   monitored: boolean;
   movieFileId: number | null;
   qualityProfileId: number | null;
   minimumCustomFormatScore: number | null;
+  effectiveQualityProfileId: number;
+  effectiveQualityProfileName: string;
+  qualityProfileInherited: boolean;
+  effectiveMinimumCustomFormatScore: number;
+  minimumCustomFormatScoreInherited: boolean;
+  status: 'assigned' | 'missing' | 'unmonitored';
+  movieFile: MovieEditionSlotFile | null;
   movieFileQuality: QualityModel | null;
   movieFileCustomFormatScore: number | null;
   movieFileCustomFormats: CustomFormat[] | null;
   lastSearchTime: string | null;
   dateAdded: string;
   isSaving?: boolean;
+  isDeleting?: boolean;
+}
+
+interface MovieEditionSlotFile {
+  id: number;
+  relativePath: string;
+  size: number;
+  quality: QualityModel;
+  customFormats: CustomFormat[];
+  customFormatScore: number;
+  dateAdded: string;
+}
+
+type EditionFileAction = 'keepUnassigned' | 'deleteRecycle' | 'deletePermanent';
+
+interface PendingDeleteSlot {
+  slot: MovieEditionSlot;
+  attachedFileAction: EditionFileAction;
 }
 
 interface MovieEditionSlotRowProps {
@@ -120,7 +147,7 @@ interface MovieEditionSlotRowProps {
     qualityProfileId: number | null,
     minimumCustomFormatScore: number | null
   ) => void;
-  onDelete: (slotId: number) => void;
+  onDeletePress: (slot: MovieEditionSlot) => void;
 }
 
 function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
@@ -131,7 +158,7 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
     onSearchPress,
     onInteractiveSearchPress,
     onSave,
-    onDelete,
+    onDeletePress,
   } = props;
 
   const [editionName, setEditionName] = useState(slot.editionName);
@@ -142,7 +169,6 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
   const [minimumCustomFormatScore, setMinimumCustomFormatScore] = useState(
     slot.minimumCustomFormatScore?.toString() ?? ''
   );
-  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     setEditionName(slot.editionName);
@@ -219,12 +245,15 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
   );
 
   const handleDeletePress = useCallback(() => {
-    if (!window.confirm('Are you sure you want to delete this edition slot?')) {
-      return;
-    }
-    setIsDeleting(true);
-    onDelete(slot.id);
-  }, [slot.id, onDelete]);
+    onDeletePress(slot);
+  }, [slot, onDeletePress]);
+
+  const movieFile = slot.movieFile;
+  const movieFileQuality = movieFile?.quality ?? slot.movieFileQuality;
+  const movieFileCustomFormats =
+    movieFile?.customFormats ?? slot.movieFileCustomFormats;
+  const movieFileCustomFormatScore =
+    movieFile?.customFormatScore ?? slot.movieFileCustomFormatScore;
 
   let status = (
     <span className={styles.statusUnmonitored}>
@@ -233,7 +262,7 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
     </span>
   );
 
-  if (slot.movieFileId) {
+  if (slot.status === 'assigned' || movieFile) {
     status = (
       <span className={styles.statusHasFile}>
         <Icon
@@ -244,7 +273,7 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
         {translate('Downloaded')}
       </span>
     );
-  } else if (slot.monitored) {
+  } else if (slot.status === 'missing' || slot.monitored) {
     status = (
       <span className={styles.statusMissing}>
         <Icon
@@ -288,49 +317,68 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
 
       <TableRowCell>{status}</TableRowCell>
 
-      <TableRowCell>
-        {slot.movieFileQuality ? (
-          <MovieQuality
-            quality={slot.movieFileQuality}
-            isCutoffNotMet={false}
-          />
+      <TableRowCell className={styles.fileCell}>
+        {movieFile ? (
+          <span title={movieFile.relativePath}>{movieFile.relativePath}</span>
         ) : (
           '-'
         )}
       </TableRowCell>
 
       <TableRowCell>
-        {slot.movieFileCustomFormats?.length ? (
-          <MovieFormats formats={slot.movieFileCustomFormats} />
+        {movieFileQuality ? (
+          <MovieQuality quality={movieFileQuality} isCutoffNotMet={false} />
+        ) : (
+          '-'
+        )}
+      </TableRowCell>
+
+      <TableRowCell>
+        {movieFileCustomFormats?.length ? (
+          <MovieFormats formats={movieFileCustomFormats} />
         ) : (
           '-'
         )}
       </TableRowCell>
 
       <TableRowCell className={styles.customFormatScoreCell}>
-        {slot.movieFileCustomFormatScore == null
+        {movieFileCustomFormatScore == null
           ? '-'
           : formatCustomFormatScore(
-              slot.movieFileCustomFormatScore,
-              slot.movieFileCustomFormats?.length ?? 0
+              movieFileCustomFormatScore,
+              movieFileCustomFormats?.length ?? 0
             )}
       </TableRowCell>
 
       <TableRowCell>
-        <SlotQualityProfileSelect
-          value={qualityProfileId}
-          onChange={handleQualityProfileIdChange}
-        />
+        <div className={styles.profileCell}>
+          <SlotQualityProfileSelect
+            value={qualityProfileId}
+            onChange={handleQualityProfileIdChange}
+          />
+          {slot.qualityProfileInherited ? (
+            <div className={styles.inheritedValue}>
+              {slot.effectiveQualityProfileName}
+            </div>
+          ) : null}
+        </div>
       </TableRowCell>
 
       <TableRowCell>
-        <input
-          className={styles.smallEditInput}
-          type="number"
-          value={minimumCustomFormatScore}
-          placeholder={translate('Default')}
-          onChange={handleMinimumCustomFormatScoreChange}
-        />
+        <div className={styles.scoreCell}>
+          <input
+            className={styles.smallEditInput}
+            type="number"
+            value={minimumCustomFormatScore}
+            placeholder={translate('Default')}
+            onChange={handleMinimumCustomFormatScoreChange}
+          />
+          {slot.minimumCustomFormatScoreInherited ? (
+            <div className={styles.inheritedValue}>
+              {slot.effectiveMinimumCustomFormatScore}
+            </div>
+          ) : null}
+        </div>
       </TableRowCell>
 
       <RelativeDateCell
@@ -340,6 +388,7 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
 
       <TableRowCell className={styles.actionsCell}>
         <SpinnerIconButton
+          className={styles.actionButton}
           name={icons.SAVE}
           title={translate('Save')}
           isSpinning={!!slot.isSaving}
@@ -347,6 +396,7 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
         />
 
         <SpinnerIconButton
+          className={styles.actionButton}
           name={icons.SEARCH}
           title={translate('SearchEdition')}
           isSpinning={isSearching}
@@ -354,6 +404,7 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
         />
 
         <SpinnerIconButton
+          className={styles.actionButton}
           name={icons.INTERACTIVE}
           title={translate('InteractiveSearch')}
           isSpinning={false}
@@ -361,9 +412,10 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
         />
 
         <SpinnerIconButton
+          className={styles.actionButton}
           name={icons.DELETE}
           title={translate('Delete')}
-          isSpinning={isDeleting}
+          isSpinning={!!slot.isDeleting}
           onPress={handleDeletePress}
         />
       </TableRowCell>
@@ -394,6 +446,8 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [interactiveSearchSlot, setInteractiveSearchSlot] =
     useState<MovieEditionSlot | null>(null);
+  const [pendingDeleteSlot, setPendingDeleteSlot] =
+    useState<PendingDeleteSlot | null>(null);
 
   const fetchSlots = useCallback(() => {
     setIsFetching(true);
@@ -486,7 +540,14 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
         url: `/movieeditionslot/${slot.id}`,
         method: 'PUT',
         dataType: 'json',
-        data: JSON.stringify({ ...slot, monitored }),
+        data: JSON.stringify({
+          editionName: slot.editionName,
+          searchTerm: slot.searchTerm,
+          aliases: slot.aliases,
+          monitored,
+          qualityProfileId: slot.qualityProfileId,
+          minimumCustomFormatScore: slot.minimumCustomFormatScore,
+        }),
       });
 
       request.done(() => {
@@ -558,7 +619,6 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
         method: 'PUT',
         dataType: 'json',
         data: JSON.stringify({
-          ...slot,
           editionName,
           searchTerm: searchTerm || null,
           qualityProfileId,
@@ -581,21 +641,55 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
     []
   );
 
-  const handleDeleteSlot = useCallback((slotId: number) => {
+  const handleDeleteSlotPress = useCallback((slot: MovieEditionSlot) => {
+    setPendingDeleteSlot({ slot, attachedFileAction: 'keepUnassigned' });
+  }, []);
+
+  const handleDeleteModalClose = useCallback(() => {
+    setPendingDeleteSlot(null);
+  }, []);
+
+  const handleDeleteFileActionChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const attachedFileAction = event.target.value as EditionFileAction;
+
+      setPendingDeleteSlot((pending) =>
+        pending ? { ...pending, attachedFileAction } : pending
+      );
+    },
+    []
+  );
+
+  const handleConfirmDeleteSlot = useCallback(() => {
+    if (!pendingDeleteSlot) {
+      return;
+    }
+
+    const { slot, attachedFileAction } = pendingDeleteSlot;
+
+    setSlots((prev) =>
+      prev.map((s) => (s.id === slot.id ? { ...s, isDeleting: true } : s))
+    );
+
     const { request } = createAjaxRequest({
-      url: `/movieeditionslot/${slotId}`,
+      url: `/movieeditionslot/${slot.id}`,
       method: 'DELETE',
       dataType: 'json',
+      data: JSON.stringify({ attachedFileAction }),
     });
 
     request.done(() => {
-      setSlots((prev) => prev.filter((s) => s.id !== slotId));
+      setSlots((prev) => prev.filter((s) => s.id !== slot.id));
+      setPendingDeleteSlot(null);
     });
 
     request.fail(() => {
-      // row reverts its own isDeleting state on unmount; silently ignore
+      setSlots((prev) =>
+        prev.map((s) => (s.id === slot.id ? { ...s, isDeleting: false } : s))
+      );
+      setPendingDeleteSlot(null);
     });
-  }, []);
+  }, [pendingDeleteSlot]);
 
   const isRowSearching = useCallback(
     (slotId: number) => {
@@ -610,6 +704,14 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
     [commands, movieId]
   );
 
+  const downloadedCount = slots.filter(
+    (slot) => slot.status === 'assigned' || !!slot.movieFile
+  ).length;
+  const monitoredCount = slots.filter((slot) => slot.monitored).length;
+  const missingCount = slots.filter(
+    (slot) => slot.status === 'missing' || (!slot.movieFile && slot.monitored)
+  ).length;
+
   return (
     <FieldSet legend={translate('MovieEditions')}>
       <div className={styles.container}>
@@ -621,27 +723,67 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
 
         {isPopulated && (
           <>
-            <div className={styles.addForm}>
-              <input
-                className={styles.addInput}
-                type="text"
-                value={newEditionName}
-                placeholder={translate('EditionName')}
-                onChange={handleNewEditionNameChange}
-              />
-
-              <input
-                className={styles.addInput}
-                type="text"
-                value={newSearchTerm}
-                placeholder={translate('SearchTerm')}
-                onChange={handleNewSearchTermChange}
-              />
+            <div className={styles.header}>
+              <div className={styles.summary}>
+                <span>
+                  {translate('EditionSlotCount', { count: slots.length })}
+                </span>
+                <span>
+                  {translate('EditionSlotMonitoredCount', {
+                    count: monitoredCount,
+                  })}
+                </span>
+                <span>
+                  {translate('EditionSlotDownloadedCount', {
+                    count: downloadedCount,
+                  })}
+                </span>
+                <span>
+                  {translate('EditionSlotMissingCount', {
+                    count: missingCount,
+                  })}
+                </span>
+              </div>
 
               <SpinnerIconButton
+                className={styles.actionButton}
+                name={icons.SEARCH}
+                title={translate('SearchAllMonitoredEditions')}
+                isSpinning={isSearchingAll}
+                isDisabled={!monitoredCount}
+                onPress={handleSearchAllPress}
+              />
+            </div>
+
+            <div className={styles.addForm}>
+              <label className={styles.addField}>
+                <span>{translate('EditionName')}</span>
+                <input
+                  className={styles.addInput}
+                  type="text"
+                  value={newEditionName}
+                  placeholder={translate('EditionNamePlaceholder')}
+                  onChange={handleNewEditionNameChange}
+                />
+              </label>
+
+              <label className={styles.addField}>
+                <span>{translate('SearchTerm')}</span>
+                <input
+                  className={styles.addInput}
+                  type="text"
+                  value={newSearchTerm}
+                  placeholder={translate('SearchTermPlaceholder')}
+                  onChange={handleNewSearchTermChange}
+                />
+              </label>
+
+              <SpinnerIconButton
+                className={styles.actionButton}
                 name={icons.ADD}
                 title={translate('AddEditionSlot')}
                 isSpinning={isAdding}
+                isDisabled={!newEditionName.trim()}
                 onPress={handleAdd}
               />
             </div>
@@ -653,48 +795,38 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
             ) : null}
 
             {!!slots.length && (
-              <>
-                <div className={styles.searchAllButton}>
-                  <SpinnerIconButton
-                    name={icons.SEARCH}
-                    title={translate('SearchAllMonitoredEditions')}
-                    isSpinning={isSearchingAll}
-                    onPress={handleSearchAllPress}
-                  />
-                </div>
-
-                <table>
-                  <thead>
-                    <tr>
-                      <th className={styles.monitorCell} />
-                      <th>{translate('Edition')}</th>
-                      <th>{translate('SearchTerm')}</th>
-                      <th>{translate('Status')}</th>
-                      <th>{translate('Quality')}</th>
-                      <th>{translate('CustomFormats')}</th>
-                      <th>{translate('CustomFormatScore')}</th>
-                      <th>{translate('QualityProfile')}</th>
-                      <th>{translate('MinimumCustomFormatScore')}</th>
-                      <th>{translate('LastSearch')}</th>
-                      <th className={styles.actionsCell} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {slots.map((slot) => (
-                      <MovieEditionSlotRow
-                        key={slot.id}
-                        slot={slot}
-                        isSearching={isRowSearching(slot.id)}
-                        onMonitorToggle={handleMonitorToggle}
-                        onSearchPress={handleRowSearchPress}
-                        onInteractiveSearchPress={handleInteractiveSearchPress}
-                        onSave={handleSaveSlot}
-                        onDelete={handleDeleteSlot}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </>
+              <table className={styles.table}>
+                <thead>
+                  <tr>
+                    <th className={styles.monitorCell} />
+                    <th>{translate('Edition')}</th>
+                    <th>{translate('SearchTerm')}</th>
+                    <th>{translate('Status')}</th>
+                    <th>{translate('File')}</th>
+                    <th>{translate('Quality')}</th>
+                    <th>{translate('CustomFormats')}</th>
+                    <th>{translate('CustomFormatScore')}</th>
+                    <th>{translate('QualityProfile')}</th>
+                    <th>{translate('MinimumCustomFormatScore')}</th>
+                    <th>{translate('LastSearch')}</th>
+                    <th className={styles.actionsCell} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {slots.map((slot) => (
+                    <MovieEditionSlotRow
+                      key={slot.id}
+                      slot={slot}
+                      isSearching={isRowSearching(slot.id)}
+                      onMonitorToggle={handleMonitorToggle}
+                      onSearchPress={handleRowSearchPress}
+                      onInteractiveSearchPress={handleInteractiveSearchPress}
+                      onSave={handleSaveSlot}
+                      onDeletePress={handleDeleteSlotPress}
+                    />
+                  ))}
+                </tbody>
+              </table>
             )}
           </>
         )}
@@ -708,6 +840,71 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
             onModalClose={handleInteractiveSearchModalClose}
           />
         ) : null}
+
+        <ConfirmModal
+          isOpen={!!pendingDeleteSlot}
+          kind={kinds.DANGER}
+          title={translate('DeleteEditionSlot')}
+          message={
+            <div>
+              <p>
+                {translate('DeleteEditionSlotMessage', {
+                  editionName: pendingDeleteSlot?.slot.editionName ?? '',
+                })}
+              </p>
+
+              {pendingDeleteSlot?.slot.movieFile ? (
+                <div className={styles.deleteOptions}>
+                  <div className={styles.deleteOptionsLabel}>
+                    {translate('AttachedEditionFileAction')}
+                  </div>
+
+                  <label>
+                    <input
+                      type="radio"
+                      value="keepUnassigned"
+                      checked={
+                        pendingDeleteSlot.attachedFileAction ===
+                        'keepUnassigned'
+                      }
+                      onChange={handleDeleteFileActionChange}
+                    />
+                    {translate('KeepFileUnassigned')}
+                  </label>
+
+                  <label>
+                    <input
+                      type="radio"
+                      value="deleteRecycle"
+                      checked={
+                        pendingDeleteSlot.attachedFileAction === 'deleteRecycle'
+                      }
+                      onChange={handleDeleteFileActionChange}
+                    />
+                    {translate('DeleteFileRecycle')}
+                  </label>
+
+                  <label>
+                    <input
+                      type="radio"
+                      value="deletePermanent"
+                      checked={
+                        pendingDeleteSlot.attachedFileAction ===
+                        'deletePermanent'
+                      }
+                      onChange={handleDeleteFileActionChange}
+                    />
+                    {translate('DeleteFilePermanent')}
+                  </label>
+                </div>
+              ) : null}
+            </div>
+          }
+          confirmLabel={translate('Delete')}
+          isSpinning={!!pendingDeleteSlot?.slot.isDeleting}
+          onConfirm={handleConfirmDeleteSlot}
+          onCancel={handleDeleteModalClose}
+        />
       </div>
     </FieldSet>
   );

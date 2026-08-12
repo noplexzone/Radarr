@@ -2,6 +2,14 @@
   margin-bottom: 20px;
 }
 
+.actionButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
+}
+
 .addForm {
   display: flex;
   gap: 8px;
@@ -29,10 +37,6 @@
   color: var(--inputColor);
 }
 
-.searchAllButton {
-  margin-bottom: 10px;
-}
-
 .statusHasFile {
   color: var(--successColor);
 }
@@ -53,7 +57,6 @@
   padding: 10px;
 }
 
-
 .statusUnmonitored {
   color: var(--disabledColor);
 }
@@ -69,4 +72,145 @@
 
 .customFormatScoreCell {
   white-space: nowrap;
+}
+
+.header {
+  display: flex;
+  gap: 12px;
+
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  color: var(--dimColor);
+}
+
+.summary span {
+  padding: 2px 8px;
+  border: 1px solid var(--borderColor);
+  border-radius: 999px;
+  background: var(--inputBackgroundColor);
+}
+
+.addField {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+
+  min-width: 0;
+  color: var(--dimColor);
+  font-size: 12px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.fileCell {
+  max-width: 240px;
+  word-break: break-all;
+}
+
+.profileCell,
+.scoreCell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.inheritedValue {
+  color: var(--dimColor);
+  font-size: 12px;
+  line-height: 14px;
+}
+
+.deleteOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  margin-top: 12px;
+}
+
+.deleteOptions label {
+  display: flex;
+  gap: 8px;
+
+  align-items: center;
+}
+
+.deleteOptionsLabel {
+  font-weight: 600;
+}
+
+@media only screen and (max-width: $breakpointSmall) {
+  .header,
+  .addForm {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .summary {
+    gap: 6px;
+  }
+
+  .table,
+  .table thead,
+  .table tbody,
+  .table tr,
+  .table th,
+  .table td {
+    display: block;
+  }
+
+  .table thead {
+    display: none;
+  }
+
+  .table tr {
+    margin-bottom: 12px;
+    padding: 10px;
+    border: 1px solid var(--borderColor);
+    border-radius: 4px;
+    background: var(--inputBackgroundColor);
+  }
+
+  .table td {
+    padding: 6px 0;
+    border: 0;
+  }
+
+  .monitorCell,
+  .actionsCell {
+    width: auto;
+  }
+
+  .actionsCell {
+    display: flex;
+    gap: 8px;
+
+    justify-content: flex-end;
+    white-space: normal;
+  }
+
+  .editInput,
+  .smallEditInput {
+    min-height: 34px;
+  }
+
+  .smallEditInput {
+    width: 100%;
+  }
+
+  .fileCell {
+    max-width: none;
+  }
 }
