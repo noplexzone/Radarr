@@ -132,6 +132,16 @@
   line-height: 14px;
 }
 
+.assignSelect {
+  width: 100%;
+}
+
+.modalForm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .deleteOptions {
   display: flex;
   flex-direction: column;

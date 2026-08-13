@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { createSelector } from 'reselect';
+import AppState from 'App/State/AppState';
 import { QualityProfilesAppState } from 'App/State/SettingsAppState';
 import * as commandNames from 'Commands/commandNames';
 import FieldSet from 'Components/FieldSet';
@@ -19,6 +20,7 @@ import { icons, kinds } from 'Helpers/Props';
 import MovieFormats from 'Movie/MovieFormats';
 import MovieQuality from 'Movie/MovieQuality';
 import MovieEditionSlotInteractiveSearchModal from 'Movie/Search/MovieEditionSlotInteractiveSearchModal';
+import { MovieFile } from 'MovieFile/MovieFile';
 import { QualityModel } from 'Quality/Quality';
 import { executeCommand } from 'Store/Actions/commandActions';
 import { fetchQualityProfiles } from 'Store/Actions/settingsActions';
@@ -115,6 +117,8 @@ interface MovieEditionSlot {
   dateAdded: string;
   isSaving?: boolean;
   isDeleting?: boolean;
+  isAssigning?: boolean;
+  isConverting?: boolean;
 }
 
 interface MovieEditionSlotFile {
@@ -127,11 +131,22 @@ interface MovieEditionSlotFile {
   dateAdded: string;
 }
 
-type EditionFileAction = 'keepUnassigned' | 'deleteRecycle' | 'deletePermanent';
+type EditionFileAction = 'keepUnassigned' | 'deleteRecycle';
+type ExistingMainFileAction = 'keepUnassigned' | 'deleteRecycle' | 'reject';
 
 interface PendingDeleteSlot {
   slot: MovieEditionSlot;
   attachedFileAction: EditionFileAction;
+}
+
+interface PendingConvertSlot {
+  slot: MovieEditionSlot;
+  existingMainFileAction: ExistingMainFileAction;
+}
+
+interface PendingAssignSlot {
+  slot: MovieEditionSlot;
+  movieFileId: number | null;
 }
 
 interface MovieEditionSlotRowProps {
@@ -140,6 +155,9 @@ interface MovieEditionSlotRowProps {
   onMonitorToggle: (slot: MovieEditionSlot, monitored: boolean) => void;
   onSearchPress: (slotId: number) => void;
   onInteractiveSearchPress: (slot: MovieEditionSlot) => void;
+  onAssignPress: (slot: MovieEditionSlot) => void;
+  onUnassignPress: (slot: MovieEditionSlot) => void;
+  onConvertToMainPress: (slot: MovieEditionSlot) => void;
   onSave: (
     slot: MovieEditionSlot,
     editionName: string,
@@ -157,6 +175,9 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
     onMonitorToggle,
     onSearchPress,
     onInteractiveSearchPress,
+    onAssignPress,
+    onUnassignPress,
+    onConvertToMainPress,
     onSave,
     onDeletePress,
   } = props;
@@ -243,6 +264,18 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
     },
     []
   );
+
+  const handleAssignPress = useCallback(() => {
+    onAssignPress(slot);
+  }, [slot, onAssignPress]);
+
+  const handleUnassignPress = useCallback(() => {
+    onUnassignPress(slot);
+  }, [slot, onUnassignPress]);
+
+  const handleConvertToMainPress = useCallback(() => {
+    onConvertToMainPress(slot);
+  }, [slot, onConvertToMainPress]);
 
   const handleDeletePress = useCallback(() => {
     onDeletePress(slot);
@@ -411,6 +444,34 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
           onPress={handleInteractiveSearchPress}
         />
 
+        {movieFile ? (
+          <>
+            <SpinnerIconButton
+              className={styles.actionButton}
+              name={icons.UNMONITORED}
+              title={translate('UnassignEditionFile')}
+              isSpinning={!!slot.isAssigning}
+              onPress={handleUnassignPress}
+            />
+
+            <SpinnerIconButton
+              className={styles.actionButton}
+              name={icons.MOVIE_FILE}
+              title={translate('ConvertEditionFileToMain')}
+              isSpinning={!!slot.isConverting}
+              onPress={handleConvertToMainPress}
+            />
+          </>
+        ) : (
+          <SpinnerIconButton
+            className={styles.actionButton}
+            name={icons.MOVIE_FILE}
+            title={translate('AssignEditionFile')}
+            isSpinning={!!slot.isAssigning}
+            onPress={handleAssignPress}
+          />
+        )}
+
         <SpinnerIconButton
           className={styles.actionButton}
           name={icons.DELETE}
@@ -441,6 +502,7 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [slots, setSlots] = useState<MovieEditionSlot[]>([]);
 
+  const movieFiles = useSelector((state: AppState) => state.movieFiles.items);
   const [newEditionName, setNewEditionName] = useState('');
   const [newSearchTerm, setNewSearchTerm] = useState('');
   const [isAdding, setIsAdding] = useState(false);
@@ -448,6 +510,10 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
     useState<MovieEditionSlot | null>(null);
   const [pendingDeleteSlot, setPendingDeleteSlot] =
     useState<PendingDeleteSlot | null>(null);
+  const [pendingConvertSlot, setPendingConvertSlot] =
+    useState<PendingConvertSlot | null>(null);
+  const [pendingAssignSlot, setPendingAssignSlot] =
+    useState<PendingAssignSlot | null>(null);
 
   const fetchSlots = useCallback(() => {
     setIsFetching(true);
@@ -475,6 +541,26 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
   useEffect(() => {
     fetchSlots();
   }, [fetchSlots]);
+
+  const assignedEditionFileIds = useMemo(() => {
+    return new Set(
+      slots.flatMap((slot) => {
+        const movieFileId = slot.movieFile?.id ?? slot.movieFileId;
+        return movieFileId ? [movieFileId] : [];
+      })
+    );
+  }, [slots]);
+
+  const assignableFiles = useMemo(() => {
+    return movieFiles.filter((file) => {
+      const fileMovieEditionSlotId = file.movieEditionSlotId;
+      return (
+        file.movieId === movieId &&
+        !assignedEditionFileIds.has(file.id) &&
+        !fileMovieEditionSlotId
+      );
+    });
+  }, [assignedEditionFileIds, movieFiles, movieId]);
 
   const handleNewEditionNameChange = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -640,6 +726,141 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
     },
     []
   );
+
+  const handleAssignSlotPress = useCallback(
+    (slot: MovieEditionSlot) => {
+      const defaultFile = assignableFiles[0];
+      setPendingAssignSlot({ slot, movieFileId: defaultFile?.id ?? null });
+    },
+    [assignableFiles]
+  );
+
+  const handleAssignFileChange = useCallback(
+    (event: React.ChangeEvent<HTMLSelectElement>) => {
+      const movieFileId = parseInt(event.target.value);
+
+      setPendingAssignSlot((pending) =>
+        pending
+          ? {
+              ...pending,
+              movieFileId: Number.isNaN(movieFileId) ? null : movieFileId,
+            }
+          : pending
+      );
+    },
+    []
+  );
+
+  const handleAssignModalClose = useCallback(() => {
+    setPendingAssignSlot(null);
+  }, []);
+
+  const handleConfirmAssignSlot = useCallback(() => {
+    if (!pendingAssignSlot?.movieFileId) {
+      return;
+    }
+
+    const { slot, movieFileId } = pendingAssignSlot;
+
+    setSlots((prev) =>
+      prev.map((s) => (s.id === slot.id ? { ...s, isAssigning: true } : s))
+    );
+
+    const { request } = createAjaxRequest({
+      url: `/movieeditionslot/${slot.id}/assignfile`,
+      method: 'POST',
+      dataType: 'json',
+      data: JSON.stringify({ movieId, movieFileId }),
+    });
+
+    request.done(() => {
+      setPendingAssignSlot(null);
+      fetchSlots();
+    });
+
+    request.fail(() => {
+      setSlots((prev) =>
+        prev.map((s) => (s.id === slot.id ? { ...s, isAssigning: false } : s))
+      );
+      setPendingAssignSlot(null);
+    });
+  }, [fetchSlots, movieId, pendingAssignSlot]);
+
+  const handleUnassignSlotPress = useCallback(
+    (slot: MovieEditionSlot) => {
+      setSlots((prev) =>
+        prev.map((s) => (s.id === slot.id ? { ...s, isAssigning: true } : s))
+      );
+
+      const { request } = createAjaxRequest({
+        url: `/movieeditionslot/${slot.id}/unassignfile`,
+        method: 'POST',
+        dataType: 'json',
+      });
+
+      request.done(() => {
+        fetchSlots();
+      });
+
+      request.fail(() => {
+        setSlots((prev) =>
+          prev.map((s) => (s.id === slot.id ? { ...s, isAssigning: false } : s))
+        );
+      });
+    },
+    [fetchSlots]
+  );
+
+  const handleConvertToMainSlotPress = useCallback((slot: MovieEditionSlot) => {
+    setPendingConvertSlot({ slot, existingMainFileAction: 'reject' });
+  }, []);
+
+  const handleExistingMainActionChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const existingMainFileAction = event.target
+        .value as ExistingMainFileAction;
+
+      setPendingConvertSlot((pending) =>
+        pending ? { ...pending, existingMainFileAction } : pending
+      );
+    },
+    []
+  );
+
+  const handleConvertModalClose = useCallback(() => {
+    setPendingConvertSlot(null);
+  }, []);
+
+  const handleConfirmConvertToMain = useCallback(() => {
+    if (!pendingConvertSlot) {
+      return;
+    }
+
+    const { slot, existingMainFileAction } = pendingConvertSlot;
+
+    setSlots((prev) =>
+      prev.map((s) => (s.id === slot.id ? { ...s, isConverting: true } : s))
+    );
+
+    const { request } = createAjaxRequest({
+      url: `/movieeditionslot/${slot.id}/converttomain`,
+      method: 'POST',
+      dataType: 'json',
+      data: JSON.stringify({ existingMainFileAction }),
+    });
+
+    request.done(() => {
+      setPendingConvertSlot(null);
+      fetchSlots();
+    });
+
+    request.fail(() => {
+      setSlots((prev) =>
+        prev.map((s) => (s.id === slot.id ? { ...s, isConverting: false } : s))
+      );
+      setPendingConvertSlot(null);
+    });
+  }, [fetchSlots, pendingConvertSlot]);
 
   const handleDeleteSlotPress = useCallback((slot: MovieEditionSlot) => {
     setPendingDeleteSlot({ slot, attachedFileAction: 'keepUnassigned' });
@@ -821,6 +1042,9 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
                       onMonitorToggle={handleMonitorToggle}
                       onSearchPress={handleRowSearchPress}
                       onInteractiveSearchPress={handleInteractiveSearchPress}
+                      onAssignPress={handleAssignSlotPress}
+                      onUnassignPress={handleUnassignSlotPress}
+                      onConvertToMainPress={handleConvertToMainSlotPress}
                       onSave={handleSaveSlot}
                       onDeletePress={handleDeleteSlotPress}
                     />
@@ -840,6 +1064,105 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
             onModalClose={handleInteractiveSearchModalClose}
           />
         ) : null}
+
+        <ConfirmModal
+          isOpen={!!pendingAssignSlot}
+          title={translate('AssignEditionFile')}
+          message={
+            <div className={styles.modalForm}>
+              <p>
+                {translate('AssignEditionFileMessage', {
+                  editionName: pendingAssignSlot?.slot.editionName ?? '',
+                })}
+              </p>
+
+              {assignableFiles.length ? (
+                <select
+                  className={styles.assignSelect}
+                  value={pendingAssignSlot?.movieFileId ?? ''}
+                  onChange={handleAssignFileChange}
+                >
+                  {assignableFiles.map((file: MovieFile) => (
+                    <option key={file.id} value={file.id}>
+                      {file.relativePath}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className={styles.emptyMessage}>
+                  {translate('NoUnassignedMovieFiles')}
+                </div>
+              )}
+            </div>
+          }
+          confirmLabel={translate('Assign')}
+          isSpinning={!!pendingAssignSlot?.slot.isAssigning}
+          onConfirm={handleConfirmAssignSlot}
+          onCancel={handleAssignModalClose}
+        />
+
+        <ConfirmModal
+          isOpen={!!pendingConvertSlot}
+          kind={kinds.DANGER}
+          title={translate('ConvertEditionFileToMain')}
+          message={
+            <div>
+              <p>
+                {translate('ConvertEditionFileToMainMessage', {
+                  editionName: pendingConvertSlot?.slot.editionName ?? '',
+                })}
+              </p>
+
+              <div className={styles.deleteOptions}>
+                <div className={styles.deleteOptionsLabel}>
+                  {translate('ExistingMainFileAction')}
+                </div>
+
+                <label>
+                  <input
+                    type="radio"
+                    value="reject"
+                    checked={
+                      pendingConvertSlot?.existingMainFileAction === 'reject'
+                    }
+                    onChange={handleExistingMainActionChange}
+                  />
+                  {translate('RejectIfMainExists')}
+                </label>
+
+                <label>
+                  <input
+                    type="radio"
+                    value="keepUnassigned"
+                    checked={
+                      pendingConvertSlot?.existingMainFileAction ===
+                      'keepUnassigned'
+                    }
+                    onChange={handleExistingMainActionChange}
+                  />
+                  {translate('KeepExistingMainUnassigned')}
+                </label>
+
+                <label>
+                  <input
+                    type="radio"
+                    value="deleteRecycle"
+                    checked={
+                      pendingConvertSlot?.existingMainFileAction ===
+                      'deleteRecycle'
+                    }
+                    onChange={handleExistingMainActionChange}
+                  />
+                  {translate('DeleteExistingMainRecycle')}
+                </label>
+              </div>
+            </div>
+          }
+          confirmLabel={translate('Convert')}
+          isSpinning={!!pendingConvertSlot?.slot.isConverting}
+          onConfirm={handleConfirmConvertToMain}
+          onCancel={handleConvertModalClose}
+        />
 
         <ConfirmModal
           isOpen={!!pendingDeleteSlot}
@@ -882,19 +1205,6 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
                       onChange={handleDeleteFileActionChange}
                     />
                     {translate('DeleteFileRecycle')}
-                  </label>
-
-                  <label>
-                    <input
-                      type="radio"
-                      value="deletePermanent"
-                      checked={
-                        pendingDeleteSlot.attachedFileAction ===
-                        'deletePermanent'
-                      }
-                      onChange={handleDeleteFileActionChange}
-                    />
-                    {translate('DeleteFilePermanent')}
                   </label>
                 </div>
               ) : null}

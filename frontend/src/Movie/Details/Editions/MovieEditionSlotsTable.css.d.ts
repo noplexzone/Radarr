@@ -6,6 +6,7 @@ interface CssExports {
   'addField': string;
   'addForm': string;
   'addInput': string;
+  'assignSelect': string;
   'container': string;
   'customFormatScoreCell': string;
   'deleteOptions': string;
@@ -15,6 +16,7 @@ interface CssExports {
   'fileCell': string;
   'header': string;
   'inheritedValue': string;
+  'modalForm': string;
   'monitorCell': string;
   'profileCell': string;
   'scoreCell': string;
