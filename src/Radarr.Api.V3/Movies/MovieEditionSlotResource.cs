@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.Languages;
 using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Qualities;

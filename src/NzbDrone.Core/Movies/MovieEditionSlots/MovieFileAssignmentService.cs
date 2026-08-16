@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using NzbDrone.Core.MediaFiles;
 
 namespace NzbDrone.Core.Movies.MovieEditionSlots
