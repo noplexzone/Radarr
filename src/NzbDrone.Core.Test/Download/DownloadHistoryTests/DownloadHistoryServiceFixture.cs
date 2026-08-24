@@ -92,6 +92,23 @@ namespace NzbDrone.Core.Test.Download.DownloadHistoryTests
         }
 
         [Test]
+        public void missing_target_lifecycle_should_not_match_exact_main_identity()
+        {
+            var missingTarget = new DownloadHistory
+            {
+                EventType = DownloadHistoryEventType.DownloadFailed,
+                MovieId = 1,
+                DownloadClientId = 7,
+                DownloadId = "missing-target"
+            };
+            Mocker.GetMock<IDownloadHistoryRepository>()
+                .Setup(r => r.FindByDownloadId("missing-target"))
+                .Returns(new List<DownloadHistory> { missingTarget });
+
+            Subject.GetLatestDownloadHistoryItemForTarget("missing-target", 7, 1, MovieAcquisitionTarget.Main).Should().BeNull();
+        }
+
+        [Test]
         public void should_filter_lifecycle_and_grab_by_exact_logical_identity()
         {
             var target = MovieAcquisitionTarget.ForEditionSlot(42);

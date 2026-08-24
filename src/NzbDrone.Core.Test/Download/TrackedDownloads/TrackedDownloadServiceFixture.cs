@@ -37,7 +37,15 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
                 .Setup(s => s.GetGrabs(It.IsAny<string>(), It.IsAny<int>()))
                 .Returns((string downloadId, int downloadClientId) => (Mocker.GetMock<IHistoryService>().Object.FindByDownloadId(downloadId) ?? new List<MovieHistory>())
                     .Where(h => h.EventType == MovieHistoryEventType.Grabbed)
-                    .Select(h => DownloadGrab(downloadId, h.MovieId, downloadClientId, ReadTarget(h)))
+                    .Select(h => DownloadGrab(
+                        downloadId,
+                        h.MovieId,
+                        downloadClientId,
+                        ReadTarget(h),
+                        h.SourceTitle,
+                        h.Date,
+                        h.Data.GetValueOrDefault(MovieHistory.INDEXER),
+                        Enum.TryParse(h.Data.GetValueOrDefault("indexerFlags"), true, out IndexerFlags flags) ? flags : (IndexerFlags)0))
                     .ToList());
         }
 
@@ -86,7 +94,16 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
             };
         }
 
-        private static DownloadHistory DownloadGrab(string downloadId, int movieId, int downloadClientId, MovieAcquisitionTarget target, string sourceTitle = "Movie.2024.1080p")
+        private static DownloadHistory DownloadGrab(
+            string downloadId,
+            int movieId,
+            int downloadClientId,
+            MovieAcquisitionTarget target,
+            string sourceTitle = "Movie.2024.1080p",
+            DateTime? date = null,
+            string indexer = "TestIndexer",
+            IndexerFlags indexerFlags = (IndexerFlags)0,
+            int indexerId = 123)
         {
             var history = new DownloadHistory
             {
@@ -94,7 +111,16 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
                 MovieId = movieId,
                 DownloadClientId = downloadClientId,
                 EventType = DownloadHistoryEventType.DownloadGrabbed,
-                SourceTitle = sourceTitle
+                SourceTitle = sourceTitle,
+                Date = date ?? DateTime.UtcNow,
+                IndexerId = indexerId,
+                Release = new ReleaseInfo
+                {
+                    Title = sourceTitle,
+                    Indexer = indexer,
+                    IndexerFlags = indexerFlags,
+                    IndexerId = indexerId
+                }
             };
             MovieAcquisitionTargetSerializer.Write(history.Data, target);
             return history;
@@ -175,6 +201,29 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
             Subject.GetTrackedDownloads().Single(t => t.AcquisitionTarget.Equals(slotA)).Should().BeSameAs(oldSlot);
             oldSlot.State.Should().Be(TrackedDownloadState.Failed);
             Subject.GetTrackedDownloads().Single(t => t.AcquisitionTarget.Equals(slotB)).State.Should().Be(TrackedDownloadState.Downloading);
+        }
+
+        [Test]
+        public void missing_target_grab_should_reconstruct_unknown_not_main()
+        {
+            var missingTargetGrab = new DownloadHistory
+            {
+                DownloadId = "missing-target",
+                MovieId = 1,
+                DownloadClientId = 7,
+                EventType = DownloadHistoryEventType.DownloadGrabbed,
+                SourceTitle = "Movie.2024.1080p"
+            };
+            Mocker.GetMock<IDownloadHistoryService>()
+                .Setup(s => s.GetGrabs("missing-target", 7))
+                .Returns(new List<DownloadHistory> { missingTargetGrab });
+            GivenMappedMovie(1);
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+
+            var tracked = Subject.TrackDownload(client, Item(client, "missing-target")).Single();
+
+            tracked.AcquisitionTarget.Should().BeSameAs(MovieAcquisitionTarget.Unknown);
+            tracked.AcquisitionTarget.Should().NotBeSameAs(MovieAcquisitionTarget.Main);
         }
 
         [Test]
@@ -428,6 +477,61 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
             trackedDownload.RemoteMovie.Should().NotBeNull();
             trackedDownload.RemoteMovie.Release.Should().NotBeNull();
             trackedDownload.RemoteMovie.Release.Indexer.Should().Be("MyIndexer (Prowlarr)");
+        }
+
+        [Test]
+        public void should_use_only_exact_download_history_context_when_clients_share_identity()
+        {
+            var target = MovieAcquisitionTarget.Main;
+            var currentGrabDate = new DateTime(2026, 8, 24, 12, 0, 0, DateTimeKind.Utc);
+            var otherClientGrabDate = currentGrabDate.AddHours(1);
+            var currentGrab = DownloadGrab(
+                "shared-context",
+                1,
+                7,
+                target,
+                "Current.Movie.2024.1080p",
+                currentGrabDate,
+                "CurrentIndexer",
+                IndexerFlags.G_Freeleech,
+                701);
+            var otherClientMovieHistory = Grab(
+                "shared-context",
+                1,
+                target,
+                otherClientGrabDate,
+                "Other.Client.Movie.2024.1080p");
+            otherClientMovieHistory.Data[MovieHistory.INDEXER] = "OtherClientIndexer";
+            otherClientMovieHistory.Data["indexerFlags"] = IndexerFlags.Nuked.ToString();
+
+            Mocker.GetMock<IDownloadHistoryService>()
+                .Setup(s => s.GetGrabs("shared-context", 7))
+                .Returns(new List<DownloadHistory> { currentGrab });
+            Mocker.GetMock<IHistoryService>()
+                .Setup(s => s.FindByDownloadId("shared-context"))
+                .Returns(new List<MovieHistory> { otherClientMovieHistory });
+            Mocker.GetMock<IParsingService>()
+                .Setup(s => s.Map(It.IsAny<ParsedMovieInfo>(), It.IsAny<string>(), It.IsAny<int>(), null))
+                .Returns((RemoteMovie)null);
+            Mocker.GetMock<IParsingService>()
+                .Setup(s => s.Map(It.IsAny<ParsedMovieInfo>(), 1))
+                .Returns(new RemoteMovie
+                {
+                    Movie = new Movie { Id = 1 },
+                    ParsedMovieInfo = new ParsedMovieInfo()
+                });
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+
+            var tracked = Subject.TrackDownload(client, Item(client, "shared-context", "!!!")).Single();
+
+            tracked.RemoteMovie.Should().NotBeNull();
+            tracked.Added.Should().Be(currentGrabDate);
+            tracked.Indexer.Should().Be("CurrentIndexer");
+            tracked.RemoteMovie.Release.Should().BeSameAs(currentGrab.Release);
+            tracked.RemoteMovie.Release.IndexerFlags.Should().Be(IndexerFlags.G_Freeleech);
+            tracked.RemoteMovie.Release.IndexerId.Should().Be(701);
+            Mocker.GetMock<IHistoryService>()
+                .Verify(s => s.FindByDownloadId(It.IsAny<string>()), Times.Never());
         }
 
         [Test]

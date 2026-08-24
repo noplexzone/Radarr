@@ -127,13 +127,21 @@ namespace NzbDrone.Core.Download.History
         [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
         public DownloadHistory GetLatestDownloadHistoryItem(string downloadId, int? movieEditionSlotId)
         {
-            return GetLatestDownloadHistoryItemForTarget(downloadId, FromLegacyNullableTarget(movieEditionSlotId));
+            var target = FromLegacyNullableTarget(movieEditionSlotId);
+            return _repository.FindByDownloadId(downloadId)
+                .Where(history => MatchesLegacyTarget(history, target))
+                .FirstOrDefault(history => history.EventType == DownloadHistoryEventType.DownloadIgnored ||
+                                           history.EventType == DownloadHistoryEventType.DownloadGrabbed ||
+                                           history.EventType == DownloadHistoryEventType.DownloadImported ||
+                                           history.EventType == DownloadHistoryEventType.DownloadFailed);
         }
 
         [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
         public DownloadHistory GetLatestGrab(string downloadId, int? movieEditionSlotId)
         {
-            return GetLatestGrabForTarget(downloadId, FromLegacyNullableTarget(movieEditionSlotId));
+            var target = FromLegacyNullableTarget(movieEditionSlotId);
+            return _repository.FindByDownloadId(downloadId)
+                .FirstOrDefault(history => history.EventType == DownloadHistoryEventType.DownloadGrabbed && MatchesLegacyTarget(history, target));
         }
 
         public DownloadHistory GetLatestGrabForTarget(string downloadId, MovieAcquisitionTarget target)
@@ -296,6 +304,11 @@ namespace NzbDrone.Core.Download.History
         }
 
         private static bool MatchesTarget(DownloadHistory history, MovieAcquisitionTarget target)
+        {
+            return MovieAcquisitionTargetSerializer.Read(history.Data).Equals(target);
+        }
+
+        private static bool MatchesLegacyTarget(DownloadHistory history, MovieAcquisitionTarget target)
         {
             return MovieAcquisitionTargetSerializer.ReadLegacyHistory(history.Data).Equals(target);
         }
