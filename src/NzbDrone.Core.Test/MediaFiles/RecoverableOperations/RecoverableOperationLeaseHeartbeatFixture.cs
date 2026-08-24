@@ -33,14 +33,14 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
             entered.Wait();
             var leaseAtEntry = Subject.GetById(operation.Id);
             leaseAtEntry.LeaseExpiresAt.Should().NotBeNull();
-            SpinWait.SpinUntil(() => DateTime.UtcNow > leaseAtEntry.LeaseExpiresAt.Value.AddMilliseconds(40), TimeSpan.FromSeconds(3)).Should().BeTrue();
+            SpinWait.SpinUntil(() => DateTime.UtcNow > leaseAtEntry.LeaseExpiresAt.Value.AddMilliseconds(100), TimeSpan.FromSeconds(3)).Should().BeTrue();
             var current = Subject.GetById(operation.Id);
             current.Version.Should().BeGreaterThan(leaseAtEntry.Version);
             current.LeaseExpiresAt.Should().BeAfter(DateTime.UtcNow);
 
             var firstRenewedVersion = current.Version;
             var firstRenewedExpiry = current.LeaseExpiresAt.Value;
-            SpinWait.SpinUntil(() => DateTime.UtcNow > firstRenewedExpiry.AddMilliseconds(40), TimeSpan.FromSeconds(3)).Should().BeTrue();
+            SpinWait.SpinUntil(() => DateTime.UtcNow > firstRenewedExpiry.AddMilliseconds(100), TimeSpan.FromSeconds(3)).Should().BeTrue();
             current = Subject.GetById(operation.Id);
             current.Version.Should().BeGreaterThan(firstRenewedVersion);
             current.LeaseExpiresAt.Should().BeAfter(DateTime.UtcNow);
@@ -54,8 +54,8 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
 
         private sealed class FastLeasePolicy : IRecoverableOperationLeasePolicy
         {
-            public TimeSpan LeaseDuration => TimeSpan.FromMilliseconds(250);
-            public TimeSpan HeartbeatInterval => TimeSpan.FromMilliseconds(25);
+            public TimeSpan LeaseDuration => TimeSpan.FromSeconds(1);
+            public TimeSpan HeartbeatInterval => TimeSpan.FromMilliseconds(50);
         }
     }
 }

@@ -113,6 +113,7 @@ namespace NzbDrone.Core.Datastore
             Mapper.Entity<MovieHistory>("History").RegisterModel();
 
             Mapper.Entity<RecoverableOperation>("MovieEditionFileOperations").RegisterModel();
+            Mapper.Entity<RecoverableOperationResource>("MovieEditionFileOperationResources").RegisterModel();
 
             Mapper.Entity<MovieFile>("MovieFiles").RegisterModel()
                   .Ignore(f => f.Path)

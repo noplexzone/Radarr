@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using FluentAssertions;
 using NUnit.Framework;
@@ -20,6 +21,76 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
         [Test] public void should_record_bounded_error_attempt_with_cas() { var o = Subject.CreatePending(Request("attempt", "movie:attempt")); o = Subject.RecordErrorAttempt(o.Id, o.Version, "failed safely", DateTime.UtcNow); o.AttemptCount.Should().Be(1); o.LastError.Should().Be("failed safely"); o.LastAttemptAt.Should().NotBeNull(); Action stale = () => Subject.RecordErrorAttempt(o.Id, 1, "stale", DateTime.UtcNow); stale.Should().Throw<RecoverableOperationConcurrencyException>(); }
         RecoverableOperation Reach(RecoverableOperationState state) { var key = Guid.NewGuid().ToString("N"); var o = Subject.CreatePending(Request(key, "resource:" + key)); if (state == RecoverableOperationState.Pending) return o; if (state == RecoverableOperationState.RollingBack) return Subject.Transition(o.Id, o.State, o.Version, state); foreach (var next in new[] { RecoverableOperationState.Staging, RecoverableOperationState.Staged, RecoverableOperationState.ApplyingDatabase, RecoverableOperationState.DatabaseCommitted, RecoverableOperationState.Finalizing }) { o = Subject.Transition(o.Id, o.State, o.Version, next); if (o.State == state) return o; } throw new InvalidOperationException(); }
         [Test] public void interface_should_remain_narrow() { typeof(IRecoverableOperationRepository).GetMethods().Select(x => x.Name).Should().NotContain(new[] { "Insert", "Update", "Delete", "Upsert", "SetFields", "Purge" }); }
-        internal static RecoverableOperationCreateRequest Request(string key, string resource, RecoverableOperationType operationType = RecoverableOperationType.Move, RecoverableTransferMode transferMode = RecoverableTransferMode.Move, int movieId = 1, int? snapshotMovieId = null, string stagingRoot = null, bool missingSource = false) { var snapshotMovie = snapshotMovieId ?? movieId; var root = stagingRoot ?? $"/movies/{movieId}/.radarr-recovery/{key}/"; return new() { OperationKey = key, ResourceKey = resource, OperationType = operationType, MovieId = movieId, MovieFileId = 10, MovieEditionSlotId = 20, StagingRoot = root, Plan = new() { Expected = new() { MovieId = snapshotMovie, MovieFileId = 10, MovieEditionSlotId = 20, Path = $"/movies/{movieId}/Old.mkv", Size = 100 }, Desired = new() { MovieId = snapshotMovie, MovieFileId = 10, MovieEditionSlotId = 20, DestinationPath = $"/movies/{movieId}/Movie.mkv", Size = 100 }, SourcePath = missingSource ? null : $"/movies/{movieId}/Old.mkv", StagingPath = $"{root.TrimEnd('/')}/candidate", DestinationPath = $"/movies/{movieId}/Movie.mkv", FinalizePath = $"{root.TrimEnd('/')}/backup", ExpectedSize = 100, TransferMode = transferMode, EventFacts = { { "source", "test" } } } }; }
+
+        [Test]
+        public void should_reserve_multiple_resources_in_canonical_order()
+        {
+            var operation = Subject.CreatePending(Request("multi", null, resources: new[] { "target:z", " source:a ", "destination:m" }));
+            ResourceKeys(operation.Id).Should().Equal("destination:m", "source:a", "target:z");
+            operation.ResourceKey.Should().Be("destination:m");
+            operation.ActiveResourceKey.Should().Be("destination:m");
+        }
+
+        [Test]
+        public void should_reject_a_normalized_duplicate_across_legacy_and_multi_resource_inputs()
+        {
+            Action create = () => Subject.CreatePending(Request("combined", " legacy:primary ", resources: new[] { "source:a", "legacy:primary" }));
+            create.Should().Throw<RecoverableOperationValidationException>().WithMessage("*legacy:primary*");
+            Db.All<RecoverableOperation>().Should().BeEmpty();
+            Db.All<RecoverableOperationResource>().Should().BeEmpty();
+        }
+
+        [Test]
+        public void duplicate_operation_key_should_preserve_domain_exception_translation()
+        {
+            Subject.CreatePending(Request("same-operation", "resource:first"));
+            Action duplicate = () => Subject.CreatePending(Request("same-operation", "resource:second"));
+            duplicate.Should().Throw<RecoverableOperationResourceConflictException>().WithMessage("*resource:second*");
+        }
+
+        [Test]
+        public void should_roll_back_entire_create_when_any_resource_overlaps_and_allow_unrelated_sets()
+        {
+            var first = Subject.CreatePending(Request("multi-first", null, resources: new[] { "target:one", "source:shared", "destination:one" }));
+            Action overlap = () => Subject.CreatePending(Request("multi-second", null, resources: new[] { "target:two", "source:shared", "destination:two" }));
+            overlap.Should().Throw<RecoverableOperationResourceConflictException>().WithMessage("*source:shared*").Which.InnerException.Should().BeNull();
+            Db.All<RecoverableOperation>().Should().ContainSingle().Which.Id.Should().Be(first.Id);
+            Db.All<RecoverableOperationResource>().Should().HaveCount(3);
+            Subject.CreatePending(Request("unrelated", null, resources: new[] { "source:other", "target:other" })).Should().NotBeNull();
+        }
+
+        [Test]
+        public void terminal_states_should_free_all_resources_but_recovery_required_should_retain_them()
+        {
+            var completed = Subject.CreatePending(Request("multi-complete", null, resources: new[] { "complete:a", "complete:b" }));
+            foreach (var next in new[] { RecoverableOperationState.Staging, RecoverableOperationState.Staged, RecoverableOperationState.ApplyingDatabase, RecoverableOperationState.DatabaseCommitted, RecoverableOperationState.Finalizing, RecoverableOperationState.Completed }) completed = Subject.Transition(completed.Id, completed.State, completed.Version, next);
+            ResourceKeys(completed.Id).Should().BeEmpty();
+            Subject.CreatePending(Request("multi-complete-reuse", null, resources: new[] { "complete:a", "complete:b" })).Should().NotBeNull();
+
+            var rolledBack = Subject.CreatePending(Request("multi-rollback", null, resources: new[] { "rollback:a", "rollback:b" }));
+            rolledBack = Subject.Transition(rolledBack.Id, rolledBack.State, rolledBack.Version, RecoverableOperationState.RollingBack);
+            rolledBack = Subject.Transition(rolledBack.Id, rolledBack.State, rolledBack.Version, RecoverableOperationState.RolledBack);
+            ResourceKeys(rolledBack.Id).Should().BeEmpty();
+            Subject.CreatePending(Request("multi-rollback-reuse", null, resources: new[] { "rollback:a", "rollback:b" })).Should().NotBeNull();
+
+            var quarantined = Subject.CreatePending(Request("multi-quarantine", null, resources: new[] { "quarantine:a", "quarantine:b" }));
+            quarantined = Subject.MarkRecoveryRequired(quarantined.Id, quarantined.State, quarantined.Version, "manual recovery");
+            ResourceKeys(quarantined.Id).Should().Equal("quarantine:a", "quarantine:b");
+            Action conflict = () => Subject.CreatePending(Request("multi-quarantine-conflict", null, resources: new[] { "quarantine:b", "other" }));
+            conflict.Should().Throw<RecoverableOperationResourceConflictException>();
+        }
+
+        [Test]
+        public void invalid_duplicate_or_oversized_resource_sets_should_insert_nothing()
+        {
+            var requests = new[] { Request("resources-empty", null, resources: Array.Empty<string>()), Request("resources-blank", null, resources: new[] { "valid", " " }), Request("resources-null", null, resources: new[] { "valid", null }), Request("legacy-blank", " ", resources: new[] { "valid" }), Request("resources-duplicate", null, resources: new[] { "duplicate", " duplicate " }), Request("resources-oversized", null, resources: new[] { new string('x', 513) }) };
+            foreach (var request in requests) { Action create = () => Subject.CreatePending(request); create.Should().Throw<RecoverableOperationValidationException>(); }
+            Db.All<RecoverableOperation>().Should().BeEmpty();
+            Db.All<RecoverableOperationResource>().Should().BeEmpty();
+        }
+
+        private IReadOnlyList<string> ResourceKeys(int operationId) => Db.All<RecoverableOperationResource>().Where(resource => resource.OperationId == operationId).OrderBy(resource => resource.Id).Select(resource => resource.ResourceKey).ToList();
+
+        internal static RecoverableOperationCreateRequest Request(string key, string resource, RecoverableOperationType operationType = RecoverableOperationType.Move, RecoverableTransferMode transferMode = RecoverableTransferMode.Move, int movieId = 1, int? snapshotMovieId = null, string stagingRoot = null, bool missingSource = false, IReadOnlyCollection<string> resources = null) { var snapshotMovie = snapshotMovieId ?? movieId; var root = stagingRoot ?? $"/movies/{movieId}/.radarr-recovery/{key}/"; return new() { OperationKey = key, ResourceKey = resource, ResourceKeys = resources, OperationType = operationType, MovieId = movieId, MovieFileId = 10, MovieEditionSlotId = 20, StagingRoot = root, Plan = new() { Expected = new() { MovieId = snapshotMovie, MovieFileId = 10, MovieEditionSlotId = 20, Path = $"/movies/{movieId}/Old.mkv", Size = 100 }, Desired = new() { MovieId = snapshotMovie, MovieFileId = 10, MovieEditionSlotId = 20, DestinationPath = $"/movies/{movieId}/Movie.mkv", Size = 100 }, SourcePath = missingSource ? null : $"/movies/{movieId}/Old.mkv", StagingPath = $"{root.TrimEnd('/')}/candidate", DestinationPath = $"/movies/{movieId}/Movie.mkv", FinalizePath = $"{root.TrimEnd('/')}/backup", ExpectedSize = 100, TransferMode = transferMode, EventFacts = { { "source", "test" } } } }; }
     }
 }

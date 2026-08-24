@@ -108,10 +108,17 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         public long EventDispatchMask { get; set; }
     }
 
+    public sealed class RecoverableOperationResource : ModelBase
+    {
+        public int OperationId { get; set; }
+        public string ResourceKey { get; set; }
+    }
+
     public sealed class RecoverableOperationCreateRequest
     {
         public string OperationKey { get; init; }
         public string ResourceKey { get; init; }
+        public IReadOnlyCollection<string> ResourceKeys { get; init; }
         public RecoverableOperationType OperationType { get; init; }
         public int MovieId { get; init; }
         public int? MovieFileId { get; init; }
