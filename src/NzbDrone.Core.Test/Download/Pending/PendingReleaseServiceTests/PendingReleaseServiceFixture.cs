@@ -6,6 +6,7 @@ using NUnit.Framework;
 using NzbDrone.Core.DecisionEngine;
 using NzbDrone.Core.Download.Pending;
 using NzbDrone.Core.Indexers;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Test.Framework;
 
@@ -16,12 +17,21 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
     {
         private void GivenPendingRelease()
         {
+            var movie = new Movie { Id = 1 };
             Mocker.GetMock<IPendingReleaseRepository>()
-                              .Setup(v => v.All())
-                              .Returns(new List<PendingRelease>
-                              {
-                                  new PendingRelease { Release = new ReleaseInfo { IndexerId = 1 } }
-                              });
+                  .Setup(v => v.All())
+                  .Returns(new List<PendingRelease>
+                  {
+                      new PendingRelease
+                      {
+                          MovieId = movie.Id,
+                          Release = new ReleaseInfo { IndexerId = 1 },
+                          ParsedMovieInfo = new ParsedMovieInfo()
+                      }
+                  });
+            Mocker.GetMock<IMovieService>()
+                  .Setup(v => v.GetMovies(It.IsAny<IEnumerable<int>>()))
+                  .Returns(new List<Movie> { movie });
         }
 
         [Test]

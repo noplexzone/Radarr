@@ -41,17 +41,19 @@ namespace NzbDrone.Core.Indexers
             var rssReleases = await _rssFetcherAndParser.Fetch();
             var pendingReleases = _pendingReleaseService.GetPending();
 
-            var reports = rssReleases.Concat(pendingReleases).ToList();
-            var decisions = _downloadDecisionMaker.GetRssDecision(reports);
+            var reportsCount = rssReleases.Count + pendingReleases.Count;
+            var decisions = _downloadDecisionMaker.GetRssDecision(rssReleases)
+                .Concat(_downloadDecisionMaker.GetPendingDecision(pendingReleases))
+                .ToList();
             var processed = await _processDownloadDecisions.ProcessDecisions(decisions);
 
             if (processed.Pending.Any())
             {
-                _logger.ProgressInfo("RSS Sync Completed. Reports found: {0}, Reports grabbed: {1}, Reports pending: {2}", reports.Count, processed.Grabbed.Count, processed.Pending.Count);
+                _logger.ProgressInfo("RSS Sync Completed. Reports found: {0}, Reports grabbed: {1}, Reports pending: {2}", reportsCount, processed.Grabbed.Count, processed.Pending.Count);
             }
             else
             {
-                _logger.ProgressInfo("RSS Sync Completed. Reports found: {0}, Reports grabbed: {1}", reports.Count, processed.Grabbed.Count);
+                _logger.ProgressInfo("RSS Sync Completed. Reports found: {0}, Reports grabbed: {1}", reportsCount, processed.Grabbed.Count);
             }
 
             return processed;

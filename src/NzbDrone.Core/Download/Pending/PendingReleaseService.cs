@@ -25,7 +25,7 @@ namespace NzbDrone.Core.Download.Pending
     {
         void Add(DownloadDecision decision, PendingReleaseReason reason);
         void AddMany(List<Tuple<DownloadDecision, PendingReleaseReason>> decisions);
-        List<ReleaseInfo> GetPending();
+        List<PendingReleaseInfo> GetPending();
         List<RemoteMovie> GetPendingRemoteMovies(int movieId);
         List<Queue.Queue> GetPendingQueue();
         Queue.Queue FindPendingQueueItem(int queueId);
@@ -149,30 +149,27 @@ namespace NzbDrone.Core.Download.Pending
             }
         }
 
-        public List<ReleaseInfo> GetPending()
+        public List<PendingReleaseInfo> GetPending()
         {
-            var releases = _repository.All().Select(p =>
-            {
-                var release = p.Release;
-
-                release.PendingReleaseReason = p.Reason;
-
-                return release;
-            }).ToList();
+            var releases = _repository.All().ToList();
 
             if (releases.Any())
             {
                 releases = FilterBlockedIndexers(releases);
             }
 
-            return releases;
+            return IncludeRemoteMovies(releases, augment: false).Select(p =>
+            {
+                p.Release.PendingReleaseReason = p.Reason;
+                return new PendingReleaseInfo(p.RemoteMovie, p.Reason);
+            }).ToList();
         }
 
-        private List<ReleaseInfo> FilterBlockedIndexers(List<ReleaseInfo> releases)
+        private List<PendingRelease> FilterBlockedIndexers(List<PendingRelease> releases)
         {
             var blockedIndexers = new HashSet<int>(_indexerStatusService.GetBlockedProviders().Select(v => v.ProviderId));
 
-            return releases.Where(release => !blockedIndexers.Contains(release.IndexerId)).ToList();
+            return releases.Where(release => !blockedIndexers.Contains(release.Release.IndexerId)).ToList();
         }
 
         public List<RemoteMovie> GetPendingRemoteMovies(int movieId)
@@ -256,7 +253,9 @@ namespace NzbDrone.Core.Download.Pending
             return IncludeRemoteMovies(_repository.AllByMovieId(movieId).ToList());
         }
 
-        private List<PendingRelease> IncludeRemoteMovies(List<PendingRelease> releases, Dictionary<string, RemoteMovie> knownRemoteMovies = null)
+        private List<PendingRelease> IncludeRemoteMovies(List<PendingRelease> releases,
+                                                         Dictionary<string, RemoteMovie> knownRemoteMovies = null,
+                                                         bool augment = true)
         {
             var result = new List<PendingRelease>();
 
@@ -288,7 +287,7 @@ namespace NzbDrone.Core.Download.Pending
                 // Languages will be empty if added before upgrading to v4, reparsing the languages if they're empty will set it to Unknown or better.
                 if (release.ParsedMovieInfo.Languages.Empty())
                 {
-                    release.ParsedMovieInfo.Languages = LanguageParser.ParseLanguages(release.Title);
+                    release.ParsedMovieInfo.Languages = LanguageParser.ParseLanguages(release.Title ?? string.Empty);
                 }
 
                 release.RemoteMovie = new RemoteMovie
@@ -301,8 +300,11 @@ namespace NzbDrone.Core.Download.Pending
                     Release = release.Release
                 };
 
-                _aggregationService.Augment(release.RemoteMovie);
-                release.RemoteMovie.CustomFormats = _formatCalculator.ParseCustomFormat(release.RemoteMovie, release.Release.Size);
+                if (augment)
+                {
+                    _aggregationService.Augment(release.RemoteMovie);
+                    release.RemoteMovie.CustomFormats = _formatCalculator.ParseCustomFormat(release.RemoteMovie, release.Release.Size);
+                }
 
                 result.Add(release);
             }
@@ -460,6 +462,7 @@ namespace NzbDrone.Core.Download.Pending
             foreach (var rejectedRelease in rejected)
             {
                 var matching = pending
+                    .Where(p => p.RemoteMovie.Movie.Id == rejectedRelease.RemoteMovie.Movie.Id)
                     .Where(p => p.RemoteMovie.AcquisitionTarget.Equals(rejectedRelease.RemoteMovie.AcquisitionTarget))
                     .Where(MatchingReleasePredicate(rejectedRelease.RemoteMovie.Release));
 

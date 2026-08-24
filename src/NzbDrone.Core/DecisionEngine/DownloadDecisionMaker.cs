@@ -10,6 +10,7 @@ using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.DecisionEngine.Specifications;
 using NzbDrone.Core.DecisionEngine.Specifications.Search;
 using NzbDrone.Core.Download.Aggregation;
+using NzbDrone.Core.Download.Pending;
 using NzbDrone.Core.IndexerSearch.Definitions;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Movies;
@@ -23,6 +24,7 @@ namespace NzbDrone.Core.DecisionEngine
     public interface IMakeDownloadDecision
     {
         List<DownloadDecision> GetRssDecision(List<ReleaseInfo> reports, bool pushedRelease = false);
+        List<DownloadDecision> GetPendingDecision(List<PendingReleaseInfo> pendingReleases);
         List<DownloadDecision> GetSearchDecision(List<ReleaseInfo> reports, SearchCriteriaBase searchCriteriaBase);
     }
 
@@ -67,12 +69,20 @@ namespace NzbDrone.Core.DecisionEngine
             return GetDecisions(reports, pushedRelease).ToList();
         }
 
+        public List<DownloadDecision> GetPendingDecision(List<PendingReleaseInfo> pendingReleases)
+        {
+            return GetDecisions(pendingReleases.Select(p => p.Release).ToList(), false, null, pendingReleases).ToList();
+        }
+
         public List<DownloadDecision> GetSearchDecision(List<ReleaseInfo> reports, SearchCriteriaBase searchCriteriaBase)
         {
             return GetDecisions(reports, false, searchCriteriaBase).ToList();
         }
 
-        private IEnumerable<DownloadDecision> GetDecisions(List<ReleaseInfo> reports, bool pushedRelease = false, SearchCriteriaBase searchCriteria = null)
+        private IEnumerable<DownloadDecision> GetDecisions(List<ReleaseInfo> reports,
+                                                            bool pushedRelease = false,
+                                                            SearchCriteriaBase searchCriteria = null,
+                                                            List<PendingReleaseInfo> pendingReleases = null)
         {
             if (reports.Any())
             {
@@ -93,11 +103,13 @@ namespace NzbDrone.Core.DecisionEngine
 
                 try
                 {
-                    var parsedMovieInfo = Parser.Parser.ParseMovieTitle(report.Title);
+                    var pendingRelease = pendingReleases?[reportNumber - 1];
+                    var parsedMovieInfo = pendingRelease?.RemoteMovie.ParsedMovieInfo ?? Parser.Parser.ParseMovieTitle(report.Title);
 
                     if (parsedMovieInfo != null && !parsedMovieInfo.PrimaryMovieTitle.IsNullOrWhiteSpace())
                     {
-                        var remoteMovie = _parsingService.Map(parsedMovieInfo, report.ImdbId.ToString(), report.TmdbId, searchCriteria);
+                        var remoteMovie = pendingRelease?.RemoteMovie ??
+                                          _parsingService.Map(parsedMovieInfo, report.ImdbId.ToString(), report.TmdbId, searchCriteria);
                         remoteMovie.Release = report;
 
                         if (remoteMovie.Movie == null)
@@ -114,7 +126,7 @@ namespace NzbDrone.Core.DecisionEngine
 
                             // Resolve edition identity and target isolation before custom-format
                             // scoring and every downstream decision specification.
-                            var editionRejection = PrepareEditionContext(remoteMovie, searchCriteria);
+                            var editionRejection = PrepareEditionContext(remoteMovie, searchCriteria, pendingRelease != null);
 
                             remoteMovie.CustomFormats = _formatCalculator.ParseCustomFormat(remoteMovie, remoteMovie.Release.Size);
                             var effectiveQualityProfile = remoteMovie.SlotQualityProfile ??
@@ -206,7 +218,7 @@ namespace NzbDrone.Core.DecisionEngine
             }
         }
 
-        private DownloadRejection PrepareEditionContext(RemoteMovie remoteMovie, SearchCriteriaBase searchCriteria)
+        private DownloadRejection PrepareEditionContext(RemoteMovie remoteMovie, SearchCriteriaBase searchCriteria, bool persistedTarget = false)
         {
             var slots = _editionSlotService.GetForMovie(remoteMovie.Movie.Id) ?? new List<MovieEditionSlot>();
             var match = _editionMatcher.Match(remoteMovie, slots);
@@ -233,7 +245,7 @@ namespace NzbDrone.Core.DecisionEngine
 
             // RSS and release-push have no preselected slot target. A unique deterministic
             // match establishes the exact slot target; absent evidence remains ordinary Main.
-            if (searchCriteria == null)
+            if (searchCriteria == null && !persistedTarget)
             {
                 if (match.Status == EditionMatchStatus.NoEditionEvidence)
                 {
@@ -276,6 +288,19 @@ namespace NzbDrone.Core.DecisionEngine
             {
                 return new DownloadRejection(DownloadRejectionReason.WrongEdition,
                     "Release acquisition target is unknown and cannot be matched safely");
+            }
+
+            var targetSlot = slots.SingleOrDefault(slot => slot.Id == target.EditionSlotId.Value);
+            if (targetSlot == null)
+            {
+                return new DownloadRejection(DownloadRejectionReason.WrongEdition,
+                    $"Requested edition slot {target.EditionSlotId.Value} is no longer configured for this movie");
+            }
+
+            if (persistedTarget && !targetSlot.Monitored)
+            {
+                return new DownloadRejection(DownloadRejectionReason.WrongEdition,
+                    $"Requested edition slot is no longer monitored: {targetSlot.EditionName}");
             }
 
             if (match.Status != EditionMatchStatus.UniqueSlot)

@@ -19,6 +19,21 @@ namespace NzbDrone.Core.Download.Pending
         public RemoteMovie RemoteMovie { get; set; }
     }
 
+    public class PendingReleaseInfo
+    {
+        public PendingReleaseInfo(RemoteMovie remoteMovie, PendingReleaseReason reason)
+        {
+            RemoteMovie = remoteMovie ?? throw new ArgumentNullException(nameof(remoteMovie));
+            Reason = reason;
+        }
+
+        public RemoteMovie RemoteMovie { get; }
+        public ReleaseInfo Release => RemoteMovie.Release;
+        public PendingReleaseReason Reason { get; }
+        public MovieAcquisitionTarget AcquisitionTarget => RemoteMovie.AcquisitionTarget;
+        public int MovieId => RemoteMovie.Movie.Id;
+    }
+
     public class PendingReleaseAdditionalInfo
     {
         public MovieMatchType MovieMatchType { get; set; }

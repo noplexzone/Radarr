@@ -6,6 +6,7 @@ using NUnit.Framework;
 using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.DecisionEngine;
 using NzbDrone.Core.DecisionEngine.Specifications;
+using NzbDrone.Core.Download.Pending;
 using NzbDrone.Core.IndexerSearch.Definitions;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Movies;
@@ -711,6 +712,76 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
 
             result.Approved.Should().BeTrue();
             result.RemoteMovie.EditionMatchResult.Status.Should().Be(EditionMatchStatus.NoEditionEvidence);
+        }
+
+
+        [Test]
+        public void pending_retry_should_reject_alias_changes_that_now_match_a_different_slot_without_retargeting()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.MovieTitles = new List<string> { "Movie" };
+            _remoteEpisode.ParsedMovieInfo.Edition = "DC";
+            _remoteEpisode.AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(41);
+            GivenEditionSlots(
+                new MovieEditionSlot { Id = 41, MovieId = 7, EditionName = "Director's Cut", Monitored = true },
+                new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Definitive Cut", Aliases = new List<string> { "DC" }, Monitored = true });
+
+            _remoteEpisode.Release = _reports[0];
+
+            var result = Subject.GetPendingDecision(new List<PendingReleaseInfo>
+            {
+                new PendingReleaseInfo(_remoteEpisode, PendingReleaseReason.Delay)
+            }).Single();
+
+            result.Approved.Should().BeFalse();
+            result.RemoteMovie.AcquisitionTarget.Should().Be(MovieAcquisitionTarget.ForEditionSlot(41));
+            result.Rejections.Single().Message.ToLowerInvariant().Should().Contain("target mismatch");
+            Mocker.GetMock<IParsingService>()
+                  .Verify(c => c.Map(It.IsAny<ParsedMovieInfo>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<SearchCriteriaBase>()), Times.Never());
+        }
+
+        [Test]
+        public void pending_retry_with_persisted_unknown_target_should_fail_closed_without_becoming_main()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.MovieTitles = new List<string> { "Movie" };
+            _remoteEpisode.AcquisitionTarget = MovieAcquisitionTarget.Unknown;
+            GivenEditionSlots();
+
+            _remoteEpisode.Release = _reports[0];
+
+            var result = Subject.GetPendingDecision(new List<PendingReleaseInfo>
+            {
+                new PendingReleaseInfo(_remoteEpisode, PendingReleaseReason.Delay)
+            }).Single();
+
+            result.Approved.Should().BeFalse();
+            result.RemoteMovie.AcquisitionTarget.Should().Be(MovieAcquisitionTarget.Unknown);
+            result.Rejections.Single().Message.ToLowerInvariant().Should().Contain("unknown");
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void pending_slot_retry_should_reject_a_missing_or_unmonitored_persisted_slot(bool slotStillExists)
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.MovieTitles = new List<string> { "Movie" };
+            _remoteEpisode.ParsedMovieInfo.Edition = "Director's Cut";
+            _remoteEpisode.AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(41);
+            GivenEditionSlots(slotStillExists
+                ? new MovieEditionSlot { Id = 41, MovieId = 7, EditionName = "Director's Cut", Monitored = false }
+                : new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Director's Cut", Monitored = true });
+
+            _remoteEpisode.Release = _reports[0];
+
+            var result = Subject.GetPendingDecision(new List<PendingReleaseInfo>
+            {
+                new PendingReleaseInfo(_remoteEpisode, PendingReleaseReason.Delay)
+            }).Single();
+
+            result.Approved.Should().BeFalse();
+            result.RemoteMovie.AcquisitionTarget.Should().Be(MovieAcquisitionTarget.ForEditionSlot(41));
+            result.Rejections.Single().Message.Should().Contain(slotStillExists ? "no longer monitored" : "no longer configured");
         }
 
         private void GivenEditionSlots(params MovieEditionSlot[] slots)

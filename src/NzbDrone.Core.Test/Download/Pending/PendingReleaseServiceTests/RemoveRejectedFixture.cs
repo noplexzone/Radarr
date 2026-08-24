@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using FizzWare.NBuilder;
 using Moq;
 using NUnit.Framework;
@@ -147,6 +148,51 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
                                                                            new List<DownloadDecision> { _temporarilyRejected })));
 
             VerifyNoDelete();
+        }
+
+        [Test]
+        public void should_only_remove_the_same_movie_when_identical_releases_are_pending_for_two_movies()
+        {
+            var otherMovie = Builder<Movie>.CreateNew()
+                                           .With(m => m.Id = _movie.Id + 1)
+                                           .With(m => m.QualityProfile = _profile)
+                                           .Build();
+            var target = MovieAcquisitionTarget.ForEditionSlot(41);
+            _remoteMovie.AcquisitionTarget = target;
+
+            var heldReleases = new[] { _movie, otherMovie }
+                .Select((movie, index) =>
+                {
+                    var additionalInfo = new PendingReleaseAdditionalInfo();
+                    additionalInfo.SerializeAcquisitionTarget(target);
+
+                    return new PendingRelease
+                    {
+                        Id = index + 1,
+                        MovieId = movie.Id,
+                        Title = _release.Title,
+                        Release = _release.JsonClone(),
+                        ParsedMovieInfo = _parsedMovieInfo,
+                        AdditionalInfo = additionalInfo
+                    };
+                })
+                .ToList();
+
+            Mocker.GetMock<IPendingReleaseRepository>()
+                  .Setup(s => s.All())
+                  .Returns(heldReleases);
+            Mocker.GetMock<IMovieService>()
+                  .Setup(s => s.GetMovies(It.IsAny<IEnumerable<int>>()))
+                  .Returns(new List<Movie> { _movie, otherMovie });
+
+            Subject.Handle(new RssSyncCompleteEvent(new ProcessedDecisions(new List<DownloadDecision>(),
+                                                                           new List<DownloadDecision>(),
+                                                                           new List<DownloadDecision> { _temporarilyRejected })));
+
+            Mocker.GetMock<IPendingReleaseRepository>()
+                  .Verify(v => v.Delete(It.Is<PendingRelease>(p => p.MovieId == _movie.Id)), Times.Once());
+            Mocker.GetMock<IPendingReleaseRepository>()
+                  .Verify(v => v.Delete(It.Is<PendingRelease>(p => p.MovieId == otherMovie.Id)), Times.Never());
         }
 
         private void VerifyDelete()

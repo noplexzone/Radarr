@@ -43,6 +43,9 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
             _pending = new List<PendingRelease>();
 
             Mocker.GetMock<IPendingReleaseRepository>()
+                  .Setup(v => v.All())
+                  .Returns(() => _pending.ToList());
+            Mocker.GetMock<IPendingReleaseRepository>()
                   .Setup(v => v.AllByMovieId(_movie.Id))
                   .Returns(() => _pending.ToList());
             Mocker.GetMock<IPendingReleaseRepository>()
@@ -51,6 +54,9 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
             Mocker.GetMock<IMovieService>()
                   .Setup(v => v.GetMovies(It.IsAny<IEnumerable<int>>()))
                   .Returns(new List<Movie> { _movie });
+            Mocker.GetMock<IIndexerStatusService>()
+                  .Setup(v => v.GetBlockedProviders())
+                  .Returns(new List<IndexerStatus>());
             Mocker.GetMock<ITaskManager>()
                   .Setup(v => v.GetNextExecution(typeof(RssSyncCommand)))
                   .Returns(DateTime.UtcNow.AddMinutes(15));
@@ -109,6 +115,28 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
             _pending.Add(BuildPending(1, expected));
 
             Subject.GetPendingRemoteMovies(_movie.Id).Single().AcquisitionTarget.Should().Be(expected);
+        }
+
+
+        [TestCase(MovieAcquisitionTargetKind.Main, null)]
+        [TestCase(MovieAcquisitionTargetKind.EditionSlot, 41)]
+        [TestCase(MovieAcquisitionTargetKind.Unknown, null)]
+        public void get_pending_should_expose_the_exact_persisted_retry_target(MovieAcquisitionTargetKind kind, int? slotId)
+        {
+            var expected = kind switch
+            {
+                MovieAcquisitionTargetKind.EditionSlot => MovieAcquisitionTarget.ForEditionSlot(slotId.Value),
+                MovieAcquisitionTargetKind.Main => MovieAcquisitionTarget.Main,
+                _ => MovieAcquisitionTarget.Unknown
+            };
+            _pending.Add(BuildPending(1, expected));
+
+            var pending = Subject.GetPending().Single();
+
+            pending.MovieId.Should().Be(_movie.Id);
+            pending.AcquisitionTarget.Should().Be(expected);
+            pending.RemoteMovie.AcquisitionTarget.Should().Be(expected);
+            pending.Reason.Should().Be(PendingReleaseReason.Delay);
         }
 
         [Test]
