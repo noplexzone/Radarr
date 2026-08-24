@@ -1,0 +1,4 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+namespace NzbDrone.Core.MediaFiles.RecoverableOperations { public interface IRecoverableOperationRecoveryService { IReadOnlyList<int> Classify(int maximumOperations); } public sealed class RecoverableOperationRecoveryService : IRecoverableOperationRecoveryService { readonly IRecoverableOperationRepository _repository; public RecoverableOperationRecoveryService(IRecoverableOperationRepository repository) { _repository = repository; } public IReadOnlyList<int> Classify(int maximumOperations) { var rows = _repository.ListRecoverableAfter(0, maximumOperations, DateTime.UtcNow); foreach (var row in rows) _repository.MarkRecoveryRequired(row.Id, row.State, row.Version, "No recovery handler is registered for this operation type in the Task 5A foundation."); return rows.Select(x => x.Id).ToList(); } } }
