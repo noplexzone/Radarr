@@ -3,6 +3,7 @@ using System.Linq;
 using NLog;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.History;
+using NzbDrone.Core.Movies;
 
 namespace NzbDrone.Core.Download.TrackedDownloads
 {
@@ -32,7 +33,7 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
             var movie = trackedDownload.RemoteMovie.Movie;
 
-            var target = trackedDownload.MovieEditionSlotId ?? trackedDownload.RemoteMovie.MovieEditionSlotId;
+            var target = trackedDownload.AcquisitionTarget;
             var lastHistoryItem = historyItems.FirstOrDefault(h => h.MovieId == movie.Id && MatchesTarget(h, target));
 
             if (lastHistoryItem == null)
@@ -48,14 +49,9 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             return allMoviesImportedInHistory;
         }
 
-        private static bool MatchesTarget(MovieHistory history, int? movieEditionSlotId)
+        private static bool MatchesTarget(MovieHistory history, MovieAcquisitionTarget target)
         {
-            if (!history.Data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var value))
-            {
-                return !movieEditionSlotId.HasValue;
-            }
-
-            return movieEditionSlotId.HasValue && int.TryParse(value, out var slotId) && slotId == movieEditionSlotId.Value;
+            return MovieAcquisitionTargetSerializer.ReadLegacyHistory(history.Data).Equals(target);
         }
     }
 }

@@ -117,9 +117,11 @@ namespace NzbDrone.Core.Movies
                 return MovieAcquisitionTarget.Unknown;
             }
 
+            var hasSlotIdentity = data.ContainsKey(MovieHistory.MOVIE_EDITION_SLOT_ID);
+
             if (string.Equals(kind, MainValue, StringComparison.OrdinalIgnoreCase))
             {
-                return MovieAcquisitionTarget.Main;
+                return hasSlotIdentity ? MovieAcquisitionTarget.Unknown : MovieAcquisitionTarget.Main;
             }
 
             if (string.Equals(kind, UnknownValue, StringComparison.OrdinalIgnoreCase))
@@ -127,7 +129,7 @@ namespace NzbDrone.Core.Movies
                 return MovieAcquisitionTarget.Unknown;
             }
 
-            return string.Equals(kind, EditionSlotValue, StringComparison.OrdinalIgnoreCase) && TryReadSlot(data, out var target)
+            return string.Equals(kind, EditionSlotValue, StringComparison.OrdinalIgnoreCase) && hasSlotIdentity && TryReadSlot(data, out var target)
                 ? target
                 : MovieAcquisitionTarget.Unknown;
         }

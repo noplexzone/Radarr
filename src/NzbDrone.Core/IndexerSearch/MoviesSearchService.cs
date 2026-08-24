@@ -79,8 +79,8 @@ namespace NzbDrone.Core.IndexerSearch
             var movies = _movieService.MoviesWithoutFiles(pagingSpec).Records.ToList();
 
             var queue = _queueService.GetQueue();
-            var queuedMovieIds = queue.Where(q => q.Movie != null && !q.MovieEditionSlotId.HasValue).Select(q => q.Movie.Id).ToHashSet();
-            var queuedEditionSlotIds = queue.Where(q => q.MovieEditionSlotId.HasValue).Select(q => q.MovieEditionSlotId.Value).ToHashSet();
+            var queuedMovieIds = queue.Where(q => q.Movie != null && q.AcquisitionTarget.Kind == MovieAcquisitionTargetKind.Main).Select(q => q.Movie.Id).ToHashSet();
+            var queuedEditionSlotIds = queue.Where(q => q.AcquisitionTarget.Kind == MovieAcquisitionTargetKind.EditionSlot).Select(q => q.AcquisitionTarget.EditionSlotId.Value).ToHashSet();
             var missing = movies.Where(e => !queuedMovieIds.Contains(e.Id)).ToList();
 
             SearchForBulkMovies(missing, message.Trigger == CommandTrigger.Manual).GetAwaiter().GetResult();
@@ -104,8 +104,8 @@ namespace NzbDrone.Core.IndexerSearch
             var movies = _movieCutoffService.MoviesWhereCutoffUnmet(pagingSpec).Records.ToList();
 
             var queue = _queueService.GetQueue();
-            var queuedMovieIds = queue.Where(q => q.Movie != null && !q.MovieEditionSlotId.HasValue).Select(q => q.Movie.Id).ToHashSet();
-            var queuedEditionSlotIds = queue.Where(q => q.MovieEditionSlotId.HasValue).Select(q => q.MovieEditionSlotId.Value).ToHashSet();
+            var queuedMovieIds = queue.Where(q => q.Movie != null && q.AcquisitionTarget.Kind == MovieAcquisitionTargetKind.Main).Select(q => q.Movie.Id).ToHashSet();
+            var queuedEditionSlotIds = queue.Where(q => q.AcquisitionTarget.Kind == MovieAcquisitionTargetKind.EditionSlot).Select(q => q.AcquisitionTarget.EditionSlotId.Value).ToHashSet();
             var missing = movies.Where(e => !queuedMovieIds.Contains(e.Id)).ToList();
 
             SearchForBulkMovies(missing, message.Trigger == CommandTrigger.Manual).GetAwaiter().GetResult();
@@ -116,8 +116,8 @@ namespace NzbDrone.Core.IndexerSearch
         public void Execute(MissingEditionSlotsSearchCommand message)
         {
             var queuedEditionSlotIds = _queueService.GetQueue()
-                .Where(q => q.MovieEditionSlotId.HasValue)
-                .Select(q => q.MovieEditionSlotId.Value)
+                .Where(q => q.AcquisitionTarget.Kind == MovieAcquisitionTargetKind.EditionSlot)
+                .Select(q => q.AcquisitionTarget.EditionSlotId.Value)
                 .ToHashSet();
 
             SearchMissingEditionSlots(queuedEditionSlotIds, message.Trigger == CommandTrigger.Manual).GetAwaiter().GetResult();
@@ -126,8 +126,8 @@ namespace NzbDrone.Core.IndexerSearch
         public void Execute(CutoffUnmetEditionSlotsSearchCommand message)
         {
             var queuedEditionSlotIds = _queueService.GetQueue()
-                .Where(q => q.MovieEditionSlotId.HasValue)
-                .Select(q => q.MovieEditionSlotId.Value)
+                .Where(q => q.AcquisitionTarget.Kind == MovieAcquisitionTargetKind.EditionSlot)
+                .Select(q => q.AcquisitionTarget.EditionSlotId.Value)
                 .ToHashSet();
 
             SearchCutoffUnmetEditionSlots(queuedEditionSlotIds, message.Trigger == CommandTrigger.Manual);

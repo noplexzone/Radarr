@@ -135,16 +135,18 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
             Subject.IsSatisfiedBy(_remoteMovie, null).Accepted.Should().BeFalse();
         }
 
-        [TestCase(null, 42)]
-        [TestCase(42, null)]
-        [TestCase(42, 43)]
-        public void should_ignore_queued_downloads_for_a_different_exact_target(int? subjectSlotId, int? queuedSlotId)
+        [TestCase(MovieAcquisitionTargetKind.Main, null, MovieAcquisitionTargetKind.EditionSlot, 42)]
+        [TestCase(MovieAcquisitionTargetKind.EditionSlot, 42, MovieAcquisitionTargetKind.Main, null)]
+        [TestCase(MovieAcquisitionTargetKind.EditionSlot, 42, MovieAcquisitionTargetKind.EditionSlot, 43)]
+        [TestCase(MovieAcquisitionTargetKind.Unknown, null, MovieAcquisitionTargetKind.Main, null)]
+        [TestCase(MovieAcquisitionTargetKind.Main, null, MovieAcquisitionTargetKind.Unknown, null)]
+        public void should_ignore_queued_downloads_for_a_different_exact_target(MovieAcquisitionTargetKind subjectKind, int? subjectSlotId, MovieAcquisitionTargetKind queuedKind, int? queuedSlotId)
         {
-            _remoteMovie.MovieEditionSlotId = subjectSlotId;
+            _remoteMovie.AcquisitionTarget = Target(subjectKind, subjectSlotId);
 
             var queuedRemoteMovie = Builder<RemoteMovie>.CreateNew()
                 .With(r => r.Movie = _movie)
-                .With(r => r.MovieEditionSlotId = queuedSlotId)
+                .With(r => r.AcquisitionTarget = Target(queuedKind, queuedSlotId))
                 .With(r => r.ParsedMovieInfo = new ParsedMovieInfo { Quality = new QualityModel(Quality.DVD) })
                 .With(r => r.CustomFormats = new List<CustomFormat>())
                 .Build();
@@ -154,15 +156,16 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
             Subject.IsSatisfiedBy(_remoteMovie, null).Accepted.Should().BeTrue();
         }
 
-        [TestCase(null)]
-        [TestCase(42)]
-        public void should_compete_with_queued_download_for_the_same_exact_target(int? slotId)
+        [TestCase(MovieAcquisitionTargetKind.Main, null)]
+        [TestCase(MovieAcquisitionTargetKind.Unknown, null)]
+        [TestCase(MovieAcquisitionTargetKind.EditionSlot, 42)]
+        public void should_compete_with_queued_download_for_the_same_exact_target(MovieAcquisitionTargetKind kind, int? slotId)
         {
-            _remoteMovie.MovieEditionSlotId = slotId;
+            _remoteMovie.AcquisitionTarget = Target(kind, slotId);
 
             var queuedRemoteMovie = Builder<RemoteMovie>.CreateNew()
                 .With(r => r.Movie = _movie)
-                .With(r => r.MovieEditionSlotId = slotId)
+                .With(r => r.AcquisitionTarget = Target(kind, slotId))
                 .With(r => r.ParsedMovieInfo = new ParsedMovieInfo { Quality = new QualityModel(Quality.DVD) })
                 .With(r => r.CustomFormats = new List<CustomFormat>())
                 .Build();
@@ -170,6 +173,15 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
             GivenQueue(new[] { queuedRemoteMovie });
 
             Subject.IsSatisfiedBy(_remoteMovie, null).Accepted.Should().BeFalse();
+        }
+
+        private static MovieAcquisitionTarget Target(MovieAcquisitionTargetKind kind, int? slotId)
+        {
+            return kind == MovieAcquisitionTargetKind.Main
+                ? MovieAcquisitionTarget.Main
+                : kind == MovieAcquisitionTargetKind.EditionSlot
+                    ? MovieAcquisitionTarget.ForEditionSlot(slotId.Value)
+                    : MovieAcquisitionTarget.Unknown;
         }
 
         [Test]

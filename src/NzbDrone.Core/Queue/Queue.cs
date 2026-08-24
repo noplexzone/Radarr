@@ -41,7 +41,7 @@ namespace NzbDrone.Core.Queue
             get => AcquisitionTarget.EditionSlotId;
             set => AcquisitionTarget = value.HasValue
                 ? MovieAcquisitionTarget.ForEditionSlot(value.Value)
-                : MovieAcquisitionTarget.Main;
+                : MovieAcquisitionTarget.Unknown;
         }
     }
 }

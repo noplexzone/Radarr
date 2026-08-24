@@ -41,5 +41,24 @@ namespace NzbDrone.Core.Test.Download
             Mocker.GetMock<IManageCommandQueue>().Verify(q => q.Push(It.IsAny<MoviesSearchCommand>(), It.IsAny<CommandPriority>(), It.IsAny<CommandTrigger>()), Times.Never());
             Mocker.GetMock<IManageCommandQueue>().Verify(q => q.Push(It.IsAny<MovieEditionSearchCommand>(), It.IsAny<CommandPriority>(), It.IsAny<CommandTrigger>()), Times.Never());
         }
+
+        [Test]
+        public void conflicting_main_and_slot_history_should_never_trigger_main_redownload()
+        {
+            var data = new Dictionary<string, string>
+            {
+                [NzbDrone.Core.History.MovieHistory.ACQUISITION_TARGET] = "main",
+                [NzbDrone.Core.History.MovieHistory.MOVIE_EDITION_SLOT_ID] = "42"
+            };
+
+            Subject.Handle(new DownloadFailedEvent
+            {
+                MovieId = 1,
+                AcquisitionTarget = MovieAcquisitionTargetSerializer.ReadLegacyHistory(data)
+            });
+
+            Mocker.GetMock<IManageCommandQueue>().Verify(q => q.Push(It.IsAny<MoviesSearchCommand>(), It.IsAny<CommandPriority>(), It.IsAny<CommandTrigger>()), Times.Never());
+            Mocker.GetMock<IManageCommandQueue>().Verify(q => q.Push(It.IsAny<MovieEditionSearchCommand>(), It.IsAny<CommandPriority>(), It.IsAny<CommandTrigger>()), Times.Never());
+        }
     }
 }

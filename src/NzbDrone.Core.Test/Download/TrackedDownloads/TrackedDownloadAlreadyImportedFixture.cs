@@ -25,7 +25,7 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
 
             var remoteMovie = Builder<RemoteMovie>.CreateNew()
                                                       .With(r => r.Movie = _movie)
-                                                      .With(r => r.MovieEditionSlotId = null)
+                                                      .With(r => r.AcquisitionTarget = MovieAcquisitionTarget.Main)
                                                       .Build();
 
             var downloadItem = Builder<DownloadClientItem>.CreateNew()
@@ -33,7 +33,7 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
 
             _trackedDownload = Builder<TrackedDownload>.CreateNew()
                                                        .With(t => t.RemoteMovie = remoteMovie)
-                                                       .With(t => t.MovieEditionSlotId = null)
+                                                       .With(t => t.AcquisitionTarget = MovieAcquisitionTarget.Main)
                                                        .With(t => t.DownloadItem = downloadItem)
                                                        .Build();
 
@@ -71,9 +71,9 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
         }
 
         [Test]
-        public void should_only_use_history_for_the_exact_nullable_target()
+        public void should_only_use_history_for_the_exact_target()
         {
-            _trackedDownload.MovieEditionSlotId = 42;
+            _trackedDownload.AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(42);
             var otherSlotImport = Builder<MovieHistory>.CreateNew()
                 .With(h => h.MovieId = _movie.Id)
                 .With(h => h.EventType = MovieHistoryEventType.DownloadFolderImported)
@@ -98,6 +98,48 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
             Subject.IsImported(_trackedDownload, _historyItems)
                    .Should()
                    .BeTrue();
+        }
+
+        [TestCase(MovieAcquisitionTargetKind.Main, null, MovieAcquisitionTargetKind.Unknown, null)]
+        [TestCase(MovieAcquisitionTargetKind.Unknown, null, MovieAcquisitionTargetKind.Main, null)]
+        [TestCase(MovieAcquisitionTargetKind.EditionSlot, 42, MovieAcquisitionTargetKind.EditionSlot, 43)]
+        public void should_not_treat_a_different_target_import_as_imported(MovieAcquisitionTargetKind trackedKind, int? trackedSlotId, MovieAcquisitionTargetKind historyKind, int? historySlotId)
+        {
+            _trackedDownload.AcquisitionTarget = Target(trackedKind, trackedSlotId);
+            var history = Builder<MovieHistory>.CreateNew()
+                .With(h => h.MovieId = _movie.Id)
+                .With(h => h.EventType = MovieHistoryEventType.DownloadFolderImported)
+                .Build();
+            MovieAcquisitionTargetSerializer.Write(history.Data, Target(historyKind, historySlotId));
+            _historyItems.Add(history);
+
+            Subject.IsImported(_trackedDownload, _historyItems).Should().BeFalse();
+        }
+
+        [TestCase(MovieAcquisitionTargetKind.Main, null)]
+        [TestCase(MovieAcquisitionTargetKind.Unknown, null)]
+        [TestCase(MovieAcquisitionTargetKind.EditionSlot, 42)]
+        public void should_match_import_for_the_same_explicit_target(MovieAcquisitionTargetKind kind, int? slotId)
+        {
+            var target = Target(kind, slotId);
+            _trackedDownload.AcquisitionTarget = target;
+            var history = Builder<MovieHistory>.CreateNew()
+                .With(h => h.MovieId = _movie.Id)
+                .With(h => h.EventType = MovieHistoryEventType.DownloadFolderImported)
+                .Build();
+            MovieAcquisitionTargetSerializer.Write(history.Data, target);
+            _historyItems.Add(history);
+
+            Subject.IsImported(_trackedDownload, _historyItems).Should().BeTrue();
+        }
+
+        private static MovieAcquisitionTarget Target(MovieAcquisitionTargetKind kind, int? slotId)
+        {
+            return kind == MovieAcquisitionTargetKind.Main
+                ? MovieAcquisitionTarget.Main
+                : kind == MovieAcquisitionTargetKind.EditionSlot
+                    ? MovieAcquisitionTarget.ForEditionSlot(slotId.Value)
+                    : MovieAcquisitionTarget.Unknown;
         }
     }
 }

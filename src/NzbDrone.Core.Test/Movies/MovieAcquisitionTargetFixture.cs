@@ -78,6 +78,27 @@ namespace NzbDrone.Core.Test.MovieTests
             }).Should().Be(MovieAcquisitionTarget.Unknown);
         }
 
+        [TestCase("main", "42")]
+        [TestCase("unknown", "42")]
+        [TestCase("unexpected", "42")]
+        [TestCase("editionSlot", null)]
+        [TestCase("editionSlot", "not-an-id")]
+        public void contradictory_or_incomplete_explicit_history_target_should_fail_closed(string kind, string slotId)
+        {
+            var data = new Dictionary<string, string>
+            {
+                [MovieHistory.ACQUISITION_TARGET] = kind
+            };
+
+            if (slotId != null)
+            {
+                data[MovieHistory.MOVIE_EDITION_SLOT_ID] = slotId;
+            }
+
+            MovieAcquisitionTargetSerializer.Read(data).Should().Be(MovieAcquisitionTarget.Unknown);
+            MovieAcquisitionTargetSerializer.ReadLegacyHistory(data).Should().Be(MovieAcquisitionTarget.Unknown);
+        }
+
         [Test]
         public void isolated_legacy_history_parser_should_reconstruct_pre_feature_main_and_slots()
         {
@@ -104,6 +125,28 @@ namespace NzbDrone.Core.Test.MovieTests
 
             roundTripped.MovieId.Should().Be(7);
             roundTripped.AcquisitionTarget.Should().Be(target);
+        }
+
+        [Test]
+        public void movie_edition_search_command_should_fail_closed_when_json_target_is_null()
+        {
+            var command = JsonSerializer.Deserialize<MovieEditionSearchCommand>("{\"movieId\":7,\"acquisitionTarget\":null}", new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            command.AcquisitionTarget.Should().Be(MovieAcquisitionTarget.Unknown);
+            command.MovieEditionSlotId.Should().BeNull();
+        }
+
+        [Test]
+        public void queue_compatibility_null_slot_should_fail_closed()
+        {
+            var queue = new NzbDrone.Core.Queue.Queue { AcquisitionTarget = MovieAcquisitionTarget.Main };
+
+            queue.MovieEditionSlotId = null;
+
+            queue.AcquisitionTarget.Should().Be(MovieAcquisitionTarget.Unknown);
         }
 
         [Test]

@@ -6,6 +6,7 @@ using NzbDrone.Core.Configuration;
 using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.History;
 using NzbDrone.Core.IndexerSearch.Definitions;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Parser.Model;
 
 namespace NzbDrone.Core.DecisionEngine.Specifications.RssSync
@@ -50,7 +51,7 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.RssSync
             _logger.Debug("Checking current status of movie [{0}] in history", subject.Movie.Id);
             var mostRecent = _historyService.GetByMovieId(subject.Movie.Id, null)
                 .Where(IsDownloadLifecycleEvent)
-                .Where(h => MatchesTarget(h, subject.MovieEditionSlotId))
+                .Where(h => MatchesTarget(h, subject.AcquisitionTarget))
                 .MaxBy(h => h.Date);
 
             if (mostRecent != null && mostRecent.EventType == MovieHistoryEventType.Grabbed)
@@ -128,14 +129,9 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.RssSync
                    history.EventType == MovieHistoryEventType.DownloadIgnored;
         }
 
-        private static bool MatchesTarget(MovieHistory history, int? movieEditionSlotId)
+        private static bool MatchesTarget(MovieHistory history, MovieAcquisitionTarget target)
         {
-            if (!history.Data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var value))
-            {
-                return !movieEditionSlotId.HasValue;
-            }
-
-            return movieEditionSlotId.HasValue && int.TryParse(value, out var parsedSlotId) && parsedSlotId == movieEditionSlotId.Value;
+            return MovieAcquisitionTargetSerializer.ReadLegacyHistory(history.Data).Equals(target);
         }
     }
 }
