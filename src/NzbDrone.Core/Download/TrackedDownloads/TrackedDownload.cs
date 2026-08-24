@@ -39,6 +39,8 @@ namespace NzbDrone.Core.Download.TrackedDownloads
         public DateTime? Added { get; set; }
         public bool IsTrackable { get; set; }
         public bool HasNotifiedManualInteractionRequired { get; set; }
+        public bool PhysicalItemMarkedAsImported { get; set; }
+        public bool PhysicalItemRemovalFinalized { get; set; }
         public TrackedDownloadKey Key => new (DownloadClient, DownloadItem.DownloadId, MovieId, AcquisitionTarget);
 
         public TrackedDownload()

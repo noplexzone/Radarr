@@ -35,7 +35,7 @@ namespace Radarr.Api.V3.Queue
         private readonly ITrackedDownloadService _trackedDownloadService;
         private readonly IFailedDownloadService _failedDownloadService;
         private readonly IIgnoredDownloadService _ignoredDownloadService;
-        private readonly IProvideDownloadClient _downloadClientProvider;
+        private readonly IPhysicalDownloadFinalizationService _physicalDownloadFinalizationService;
         private readonly IBlocklistService _blocklistService;
         private readonly IMovieEditionSlotService _movieEditionSlotService;
 
@@ -46,7 +46,7 @@ namespace Radarr.Api.V3.Queue
                            ITrackedDownloadService trackedDownloadService,
                            IFailedDownloadService failedDownloadService,
                            IIgnoredDownloadService ignoredDownloadService,
-                           IProvideDownloadClient downloadClientProvider,
+                           IPhysicalDownloadFinalizationService physicalDownloadFinalizationService,
                            IBlocklistService blocklistService,
                            IMovieEditionSlotService movieEditionSlotService)
             : base(broadcastSignalRMessage)
@@ -56,7 +56,7 @@ namespace Radarr.Api.V3.Queue
             _trackedDownloadService = trackedDownloadService;
             _failedDownloadService = failedDownloadService;
             _ignoredDownloadService = ignoredDownloadService;
-            _downloadClientProvider = downloadClientProvider;
+            _physicalDownloadFinalizationService = physicalDownloadFinalizationService;
             _blocklistService = blocklistService;
             _movieEditionSlotService = movieEditionSlotService;
 
@@ -93,7 +93,13 @@ namespace Radarr.Api.V3.Queue
                 throw new NotFoundException();
             }
 
-            ApplyPhysicalMutation(trackedDownload, removeFromClient, changeCategory);
+            var mutationResult = _physicalDownloadFinalizationService.ApplyQueueMutation(new[] { trackedDownload }, false, removeFromClient, changeCategory);
+
+            if (mutationResult is QueueMutationResult.DownloadClientUnavailable or QueueMutationResult.PhysicalGroupUnavailable or QueueMutationResult.DownloadClientMutationFailed)
+            {
+                throw new BadRequestException();
+            }
+
             ApplyLogicalMutation(trackedDownload, removeFromClient, blocklist, skipRedownload, changeCategory);
             _trackedDownloadService.StopTracking(trackedDownload.Key);
         }
@@ -129,17 +135,23 @@ namespace Radarr.Api.V3.Queue
 
             var logicalDownloads = trackedToRemove.DistinctBy(t => t.Key).ToList();
 
-            foreach (var trackedDownload in logicalDownloads.DistinctBy(t => new { t.DownloadClient, t.DownloadItem.DownloadId }))
+            foreach (var physicalGroup in logicalDownloads.GroupBy(t => new { t.DownloadClient, t.DownloadItem.DownloadId }))
             {
-                ApplyPhysicalMutation(trackedDownload, removeFromClient, changeCategory);
-            }
+                var groupDownloads = physicalGroup.ToList();
+                var mutationResult = _physicalDownloadFinalizationService.ApplyQueueMutation(groupDownloads, true, removeFromClient, changeCategory);
 
-            foreach (var trackedDownload in logicalDownloads)
-            {
-                ApplyLogicalMutation(trackedDownload, removeFromClient, blocklist, skipRedownload, changeCategory);
-            }
+                if (mutationResult is QueueMutationResult.DownloadClientUnavailable or QueueMutationResult.PhysicalGroupUnavailable or QueueMutationResult.DownloadClientMutationFailed)
+                {
+                    throw new BadRequestException();
+                }
 
-            _trackedDownloadService.StopTracking(logicalDownloads.Select(t => t.Key).ToList());
+                foreach (var trackedDownload in groupDownloads)
+                {
+                    ApplyLogicalMutation(trackedDownload, removeFromClient, blocklist, skipRedownload, changeCategory);
+                }
+
+                _trackedDownloadService.StopTracking(groupDownloads.Select(t => t.Key).ToList());
+            }
 
             return new { };
         }
@@ -327,30 +339,6 @@ namespace Radarr.Api.V3.Queue
             }
 
             _pendingReleaseService.RemovePendingQueueItems(pendingRelease.Id);
-        }
-
-        private void ApplyPhysicalMutation(TrackedDownload trackedDownload, bool removeFromClient, bool changeCategory)
-        {
-            if (!removeFromClient && !changeCategory)
-            {
-                return;
-            }
-
-            var downloadClient = _downloadClientProvider.Get(trackedDownload.DownloadClient);
-
-            if (downloadClient == null)
-            {
-                throw new BadRequestException();
-            }
-
-            if (removeFromClient)
-            {
-                downloadClient.RemoveItem(trackedDownload.DownloadItem, true);
-            }
-            else
-            {
-                downloadClient.MarkItemAsImported(trackedDownload.DownloadItem);
-            }
         }
 
         private void ApplyLogicalMutation(TrackedDownload trackedDownload, bool removeFromClient, bool blocklist, bool skipRedownload, bool changeCategory)

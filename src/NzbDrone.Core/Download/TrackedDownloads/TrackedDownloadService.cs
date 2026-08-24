@@ -201,6 +201,12 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
             if (existingItem != null && existingItem.State != TrackedDownloadState.Downloading)
             {
+                if (!existingItem.IsTrackable)
+                {
+                    existingItem.PhysicalItemMarkedAsImported = false;
+                    existingItem.PhysicalItemRemovalFinalized = false;
+                }
+
                 LogItemChange(existingItem, existingItem.DownloadItem, downloadItem);
                 existingItem.DownloadItem = downloadItem;
                 existingItem.IsTrackable = true;

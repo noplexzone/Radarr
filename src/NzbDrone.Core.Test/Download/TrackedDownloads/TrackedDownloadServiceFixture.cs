@@ -205,6 +205,30 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
         }
 
         [Test]
+        public void reappearing_terminal_exact_envelope_should_reset_physical_mutation_flags()
+        {
+            var target = MovieAcquisitionTarget.ForEditionSlot(42);
+            var grabs = new List<MovieHistory> { Grab("reused-exact", 1, target, DateTime.UtcNow) };
+            Mocker.GetMock<IHistoryService>().Setup(s => s.FindByDownloadId("reused-exact")).Returns(grabs);
+            GivenMappedMovie(1);
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+            var tracked = Subject.TrackDownload(client, Item(client, "reused-exact")).Single();
+            tracked.State = TrackedDownloadState.Imported;
+            tracked.PhysicalItemMarkedAsImported = true;
+            tracked.PhysicalItemRemovalFinalized = true;
+
+            Subject.UpdateTrackable(new List<TrackedDownload>());
+            tracked.IsTrackable.Should().BeFalse();
+
+            var reappeared = Subject.TrackDownload(client, Item(client, "reused-exact", "Movie.2024.New.Lifecycle.1080p")).Single();
+
+            reappeared.Should().BeSameAs(tracked);
+            reappeared.IsTrackable.Should().BeTrue();
+            reappeared.PhysicalItemMarkedAsImported.Should().BeFalse();
+            reappeared.PhysicalItemRemovalFinalized.Should().BeFalse();
+        }
+
+        [Test]
         public void missing_target_grab_should_reconstruct_unknown_not_main()
         {
             var missingTargetGrab = new DownloadHistory

@@ -65,16 +65,18 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             {
                 var downloadClients = _downloadClientFactory.DownloadHandlingEnabled();
 
+                var physicallyPresentDownloads = new List<TrackedDownload>();
                 var trackedDownloads = new List<TrackedDownload>();
 
                 foreach (var downloadClient in downloadClients)
                 {
                     var clientTrackedDownloads = ProcessClientDownloads(downloadClient);
 
+                    physicallyPresentDownloads.AddRange(clientTrackedDownloads);
                     trackedDownloads.AddRange(clientTrackedDownloads.Where(DownloadIsTrackable));
                 }
 
-                _trackedDownloadService.UpdateTrackable(trackedDownloads);
+                _trackedDownloadService.UpdateTrackable(physicallyPresentDownloads);
                 _eventAggregator.PublishEvent(new TrackedDownloadRefreshedEvent(trackedDownloads));
                 _manageCommandQueue.Push(new ProcessMonitoredDownloadsCommand(), CommandPriority.High);
             }
@@ -97,9 +99,14 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             }
             catch (Exception ex)
             {
-                // TODO: Stop tracking items for the offline client
                 _downloadClientStatusService.RecordFailure(downloadClient.Definition.Id);
                 _logger.Warn(ex, "Unable to retrieve queue and history items from " + downloadClient.Definition.Name);
+
+                // A failed poll proves nothing about physical absence. Preserve the
+                // client's cached envelopes until a successful poll can reconcile them.
+                return _trackedDownloadService.GetTrackedDownloads()
+                    .Where(download => download.DownloadClient == downloadClient.Definition.Id)
+                    .ToList();
             }
 
             foreach (var downloadItem in downloadClientItems)

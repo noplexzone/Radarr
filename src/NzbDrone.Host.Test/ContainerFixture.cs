@@ -70,6 +70,13 @@ namespace NzbDrone.App.Test
         }
 
         [Test]
+        public void should_auto_register_physical_download_finalization_service()
+        {
+            _container.GetRequiredService<IPhysicalDownloadFinalizationService>()
+                .Should().BeOfType<PhysicalDownloadFinalizationService>();
+        }
+
+        [Test]
         public void container_should_inject_itself()
         {
             var factory = _container.GetRequiredService<IServiceFactory>();
