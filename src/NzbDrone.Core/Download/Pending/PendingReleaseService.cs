@@ -285,7 +285,7 @@ namespace NzbDrone.Core.Download.Pending
                 }
 
                 // Languages will be empty if added before upgrading to v4, reparsing the languages if they're empty will set it to Unknown or better.
-                if (release.ParsedMovieInfo.Languages.Empty())
+                if (release.ParsedMovieInfo?.Languages.Empty() == true)
                 {
                     release.ParsedMovieInfo.Languages = LanguageParser.ParseLanguages(release.Title ?? string.Empty);
                 }
@@ -461,10 +461,17 @@ namespace NzbDrone.Core.Download.Pending
 
             foreach (var rejectedRelease in rejected)
             {
+                var rejectedRemoteMovie = rejectedRelease?.RemoteMovie;
+
+                if (rejectedRemoteMovie?.Movie == null || rejectedRemoteMovie.Release == null)
+                {
+                    continue;
+                }
+
                 var matching = pending
-                    .Where(p => p.RemoteMovie.Movie.Id == rejectedRelease.RemoteMovie.Movie.Id)
-                    .Where(p => p.RemoteMovie.AcquisitionTarget.Equals(rejectedRelease.RemoteMovie.AcquisitionTarget))
-                    .Where(MatchingReleasePredicate(rejectedRelease.RemoteMovie.Release));
+                    .Where(p => p.RemoteMovie.Movie.Id == rejectedRemoteMovie.Movie.Id)
+                    .Where(p => p.RemoteMovie.AcquisitionTarget.Equals(rejectedRemoteMovie.AcquisitionTarget))
+                    .Where(MatchingReleasePredicate(rejectedRemoteMovie.Release));
 
                 foreach (var pendingRelease in matching)
                 {

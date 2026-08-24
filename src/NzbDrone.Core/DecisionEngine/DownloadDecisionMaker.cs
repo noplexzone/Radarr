@@ -98,13 +98,16 @@ namespace NzbDrone.Core.DecisionEngine
             foreach (var report in reports)
             {
                 DownloadDecision decision = null;
+                var pendingRelease = pendingReleases?.ElementAtOrDefault(reportNumber - 1);
+                var authoritativeRemoteMovie = pendingRelease?.RemoteMovie;
                 _logger.ProgressTrace("Processing release {0}/{1}", reportNumber, reports.Count);
                 _logger.Debug("Processing release '{0}' from '{1}'", report.Title, report.Indexer);
 
                 try
                 {
-                    var pendingRelease = pendingReleases?[reportNumber - 1];
-                    var parsedMovieInfo = pendingRelease?.RemoteMovie.ParsedMovieInfo ?? Parser.Parser.ParseMovieTitle(report.Title);
+                    var parsedMovieInfo = pendingRelease != null
+                        ? authoritativeRemoteMovie.ParsedMovieInfo
+                        : Parser.Parser.ParseMovieTitle(report.Title);
 
                     if (parsedMovieInfo != null && !parsedMovieInfo.PrimaryMovieTitle.IsNullOrWhiteSpace())
                     {
@@ -142,6 +145,12 @@ namespace NzbDrone.Core.DecisionEngine
                                 : new DownloadDecision(remoteMovie, editionRejection);
                         }
                     }
+                    else if (pendingRelease != null)
+                    {
+                        authoritativeRemoteMovie.Release = report;
+                        decision = new DownloadDecision(authoritativeRemoteMovie,
+                            new DownloadRejection(DownloadRejectionReason.UnableToParse, "Unable to parse pending release"));
+                    }
 
                     if (searchCriteria != null)
                     {
@@ -171,7 +180,8 @@ namespace NzbDrone.Core.DecisionEngine
                 {
                     _logger.Error(e, "Couldn't process release.");
 
-                    var remoteMovie = new RemoteMovie { Release = report };
+                    var remoteMovie = authoritativeRemoteMovie ?? new RemoteMovie();
+                    remoteMovie.Release = report;
                     decision = new DownloadDecision(remoteMovie, new DownloadRejection(DownloadRejectionReason.Error, "Unexpected error processing release"));
                 }
 

@@ -115,6 +115,28 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
         }
 
         [Test]
+        public void should_not_remove_or_throw_for_an_unknown_movie_rejection()
+        {
+            GivenHeldRelease(_release.Title, _release.Indexer, _release.PublishDate);
+            var unknownMovie = new RemoteMovie
+            {
+                Movie = null,
+                ParsedMovieInfo = _parsedMovieInfo,
+                Release = _release,
+                AcquisitionTarget = _remoteMovie.AcquisitionTarget
+            };
+            var rejected = new DownloadDecision(unknownMovie,
+                new DownloadRejection(DownloadRejectionReason.UnknownMovie, "Unknown Movie"));
+
+            Assert.DoesNotThrow(() => Subject.Handle(new RssSyncCompleteEvent(
+                new ProcessedDecisions(new List<DownloadDecision>(),
+                                       new List<DownloadDecision>(),
+                                       new List<DownloadDecision> { rejected }))));
+
+            VerifyNoDelete();
+        }
+
+        [Test]
         public void should_not_remove_if_title_is_different()
         {
             GivenHeldRelease(_release.Title + "-RP", _release.Indexer, _release.PublishDate);

@@ -6,6 +6,7 @@ using NUnit.Framework;
 using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.DecisionEngine;
 using NzbDrone.Core.DecisionEngine.Specifications;
+using NzbDrone.Core.Download.Aggregation;
 using NzbDrone.Core.Download.Pending;
 using NzbDrone.Core.IndexerSearch.Definitions;
 using NzbDrone.Core.MediaFiles;
@@ -758,6 +759,71 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
             result.Approved.Should().BeFalse();
             result.RemoteMovie.AcquisitionTarget.Should().Be(MovieAcquisitionTarget.Unknown);
             result.Rejections.Single().Message.ToLowerInvariant().Should().Contain("unknown");
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void pending_retry_exception_should_retain_the_authoritative_movie_and_target(bool unknownTarget)
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.MovieTitles = new List<string> { "Movie" };
+            _remoteEpisode.AcquisitionTarget = unknownTarget
+                ? MovieAcquisitionTarget.Unknown
+                : MovieAcquisitionTarget.ForEditionSlot(41);
+            _remoteEpisode.Release = _reports[0];
+            Mocker.GetMock<IRemoteMovieAggregationService>()
+                  .Setup(s => s.Augment(_remoteEpisode))
+                  .Throws<TestException>();
+
+            var result = Subject.GetPendingDecision(new List<PendingReleaseInfo>
+            {
+                new PendingReleaseInfo(_remoteEpisode, PendingReleaseReason.Delay)
+            }).Single();
+
+            result.Approved.Should().BeFalse();
+            result.RemoteMovie.Should().BeSameAs(_remoteEpisode);
+            result.RemoteMovie.Movie.Should().BeSameAs(_remoteEpisode.Movie);
+            result.RemoteMovie.AcquisitionTarget.Should().Be(unknownTarget
+                ? MovieAcquisitionTarget.Unknown
+                : MovieAcquisitionTarget.ForEditionSlot(41));
+            result.Rejections.Single().Reason.Should().Be(DownloadRejectionReason.Error);
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void malformed_pending_retry_should_fail_closed_and_continue_with_later_rows(bool nullParsedMovieInfo)
+        {
+            GivenSpecifications(_pass1);
+            GivenEditionSlots();
+            var malformedMovie = new Movie { Id = _remoteEpisode.Movie.Id + 1 };
+            var malformedTarget = MovieAcquisitionTarget.ForEditionSlot(41);
+            var malformed = new RemoteMovie
+            {
+                Movie = malformedMovie,
+                AcquisitionTarget = malformedTarget,
+                ParsedMovieInfo = nullParsedMovieInfo
+                    ? null
+                    : new ParsedMovieInfo { MovieTitles = new List<string> { " " } },
+                Release = new ReleaseInfo { Title = "Malformed.Release" }
+            };
+            _remoteEpisode.ParsedMovieInfo.MovieTitles = new List<string> { "Movie" };
+            _remoteEpisode.AcquisitionTarget = MovieAcquisitionTarget.Main;
+            _remoteEpisode.Release = _reports[0];
+
+            var results = Subject.GetPendingDecision(new List<PendingReleaseInfo>
+            {
+                new PendingReleaseInfo(malformed, PendingReleaseReason.Delay),
+                new PendingReleaseInfo(_remoteEpisode, PendingReleaseReason.Delay)
+            });
+
+            results.Should().HaveCount(2);
+            results[0].Approved.Should().BeFalse();
+            results[0].RemoteMovie.Should().BeSameAs(malformed);
+            results[0].RemoteMovie.Movie.Should().BeSameAs(malformedMovie);
+            results[0].RemoteMovie.AcquisitionTarget.Should().Be(malformedTarget);
+            results[0].Rejections.Single().Reason.Should().Be(DownloadRejectionReason.UnableToParse);
+            results[1].Approved.Should().BeTrue();
+            results[1].RemoteMovie.Should().BeSameAs(_remoteEpisode);
         }
 
         [TestCase(false)]
