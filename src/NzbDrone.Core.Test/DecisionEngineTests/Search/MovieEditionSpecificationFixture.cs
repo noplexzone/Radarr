@@ -168,6 +168,24 @@ namespace NzbDrone.Core.Test.DecisionEngineTests.Search
         }
 
         [Test]
+        public void legacy_title_match_should_not_bridge_a_masked_work_title()
+        {
+            var remote = BuildRemote(parsedEdition: null, releaseTitle: "Director.Movie.Cut.2024.1080p");
+            remote.ParsedMovieInfo.MovieTitles = new List<string> { "Movie" };
+
+            Subject.IsSatisfiedBy(remote, EditionCriteria("Director Cut")).Accepted.Should().BeFalse();
+        }
+
+        [Test]
+        public void legacy_title_match_should_not_bridge_a_masked_release_group()
+        {
+            var remote = BuildRemote(parsedEdition: null, releaseTitle: "[GROUP].Director.GROUP.Cut.2024.1080p-GROUP");
+            remote.ParsedMovieInfo.ReleaseGroup = "GROUP";
+
+            Subject.IsSatisfiedBy(remote, EditionCriteria("Director Cut")).Accepted.Should().BeFalse();
+        }
+
+        [Test]
         public void structured_unique_slot_match_should_reject_explicit_main_target()
         {
             var slot = new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Director's Cut" };
@@ -199,6 +217,25 @@ namespace NzbDrone.Core.Test.DecisionEngineTests.Search
                 new MovieSearchCriteria { AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(41) });
             mismatch.Accepted.Should().BeFalse();
             mismatch.Message.ToLowerInvariant().Should().Contain("target mismatch");
+        }
+
+        [Test]
+        public void structured_unique_match_should_snapshot_authoritative_slot_identity()
+        {
+            var slot = new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Director's Cut" };
+            var remote = BuildRemote(parsedEdition: "Director's Cut");
+            remote.EditionMatchResult = EditionMatchResult.Unique(EditionMatchSource.ParsedMetadata,
+                new[] { slot }, slot, slot.EditionName, EditionIdentityType.CanonicalName, "unique");
+
+            slot.Id = 41;
+            slot.EditionName = "Mutated Edition";
+
+            remote.EditionMatchResult.CandidateSlotIds.Should().Equal(42);
+            remote.EditionMatchResult.SelectedSlotId.Should().Be(42);
+            remote.EditionMatchResult.SelectedSlotEditionName.Should().Be("Director's Cut");
+            Subject.IsSatisfiedBy(remote,
+                    new MovieSearchCriteria { AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(42) })
+                .Accepted.Should().BeTrue();
         }
 
         [Test]

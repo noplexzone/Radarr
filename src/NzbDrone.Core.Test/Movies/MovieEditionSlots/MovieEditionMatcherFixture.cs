@@ -54,7 +54,7 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
             var result = _subject.Match(Remote(parsedEdition: edition), new[] { Slot(42, edition) });
 
             result.Status.Should().Be(EditionMatchStatus.UniqueSlot);
-            result.SelectedSlot.Id.Should().Be(42);
+            result.SelectedSlotId.Should().Be(42);
             result.Source.Should().Be(EditionMatchSource.ParsedMetadata);
             result.MatchedIdentity.Should().Be(edition);
         }
@@ -65,7 +65,7 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
         public void parsed_metadata_should_normalize_punctuation_apostrophes_and_case(string parsedEdition, string canonical)
         {
             _subject.Match(Remote(parsedEdition: parsedEdition), new[] { Slot(42, canonical) })
-                .SelectedSlot.Id.Should().Be(42);
+                .SelectedSlotId.Should().Be(42);
         }
 
         [Test]
@@ -76,6 +76,18 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
             result.Status.Should().Be(EditionMatchStatus.UniqueSlot);
             result.MatchedIdentity.Should().Be("DC");
             result.MatchedIdentityType.Should().Be(EditionIdentityType.Alias);
+        }
+
+        [TestCase("U.C.", "UC")]
+        [TestCase("Producer’s Cut", "Producers.Cut")]
+        public void parsed_metadata_and_title_fallback_should_share_identity_normalization(string identity, string evidence)
+        {
+            var slot = Slot(42, "Configured Edition", null, identity);
+
+            _subject.Match(Remote(parsedEdition: evidence), new[] { slot })
+                .SelectedSlotId.Should().Be(42);
+            _subject.Match(Remote(title: $"Movie.2024.{evidence}.1080p"), new[] { slot })
+                .SelectedSlotId.Should().Be(42);
         }
 
         [Test]
@@ -98,7 +110,7 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
             {
                 var result = _subject.Match(Remote(parsedEdition: "UC"), slots);
                 result.Status.Should().Be(EditionMatchStatus.Ambiguous);
-                result.SelectedSlot.Should().BeNull();
+                result.SelectedSlotId.Should().BeNull();
                 result.CandidateSlotIds.Should().Equal(41, 42);
                 result.Reason.ToLowerInvariant().Should().Contain("multiple");
             }
@@ -112,7 +124,7 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
                 new[] { Slot(42, "Director's Cut") });
 
             result.Status.Should().Be(EditionMatchStatus.UnknownEdition);
-            result.SelectedSlot.Should().BeNull();
+            result.SelectedSlotId.Should().BeNull();
             result.Source.Should().Be(EditionMatchSource.ParsedMetadata);
         }
 
@@ -126,7 +138,7 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
             {
                 var result = _subject.Match(Remote(title: "Movie.2024.Extended.Directors.Cut.1080p"), slots);
                 result.Status.Should().Be(EditionMatchStatus.UniqueSlot);
-                result.SelectedSlot.Id.Should().Be(42);
+                result.SelectedSlotId.Should().Be(42);
                 result.CandidateSlotIds.Should().Equal(41, 42);
                 result.Source.Should().Be(EditionMatchSource.NormalizedTitleFallback);
             }
@@ -152,6 +164,22 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
                 .Status.Should().Be(EditionMatchStatus.NoEditionEvidence);
 
             _subject.Match(Remote(title: "[DC].Movie.2024.1080p-DC", releaseGroup: "DC"), new[] { Slot(42, "Director's Cut", null, "DC") })
+                .Status.Should().Be(EditionMatchStatus.NoEditionEvidence);
+        }
+
+        [Test]
+        public void title_fallback_phrase_should_not_bridge_a_masked_work_title()
+        {
+            _subject.Match(Remote(title: "Director.Movie.Cut.2024.1080p", movieTitle: "Movie"),
+                    new[] { Slot(42, "Director Cut") })
+                .Status.Should().Be(EditionMatchStatus.NoEditionEvidence);
+        }
+
+        [Test]
+        public void title_fallback_phrase_should_not_bridge_a_masked_release_group()
+        {
+            _subject.Match(Remote(title: "[GROUP].Director.GROUP.Cut.2024.1080p-GROUP", movieTitle: "Movie", releaseGroup: "GROUP"),
+                    new[] { Slot(42, "Director Cut") })
                 .Status.Should().Be(EditionMatchStatus.NoEditionEvidence);
         }
 

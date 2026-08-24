@@ -11,6 +11,9 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.Search
 {
     public class MovieEditionSpecification : IDownloadDecisionEngineSpecification
     {
+        private static readonly Regex ApostropheRegex = new Regex("['’‘]", RegexOptions.Compiled);
+        private static readonly Regex AbbreviationRegex = new Regex(@"(?<![\p{L}\p{Nd}])(?:[\p{L}\p{Nd}][\p{P}\p{S}_])+[\p{L}\p{Nd}](?=$|[^\p{L}\p{Nd}])", RegexOptions.Compiled);
+        private static readonly Regex TokenRegex = new Regex(@"[\p{L}\p{Nd}]+", RegexOptions.Compiled);
         private readonly Logger _logger;
 
         public MovieEditionSpecification(Logger logger)
@@ -88,7 +91,7 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.Search
                 if (match.Status == EditionMatchStatus.UniqueSlot)
                 {
                     return DownloadSpecDecision.Reject(DownloadRejectionReason.WrongEdition,
-                        $"Release matches configured edition '{match.SelectedSlot.EditionName}' (slot {match.SelectedSlot.Id}), not Main");
+                        $"Release matches configured edition '{match.SelectedSlotEditionName}' (slot {match.SelectedSlotId.Value}), not Main");
                 }
 
                 return RejectUnsafeStructuredMatch(match);
@@ -105,10 +108,10 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.Search
                 return RejectUnsafeStructuredMatch(match);
             }
 
-            if (match.SelectedSlot.Id != target.EditionSlotId.Value)
+            if (match.SelectedSlotId.Value != target.EditionSlotId.Value)
             {
                 return DownloadSpecDecision.Reject(DownloadRejectionReason.WrongEdition,
-                    $"Edition target mismatch: release matches slot {match.SelectedSlot.Id}, but slot {target.EditionSlotId.Value} was requested");
+                    $"Edition target mismatch: release matches slot {match.SelectedSlotId.Value}, but slot {target.EditionSlotId.Value} was requested");
             }
 
             return DownloadSpecDecision.Accept();
@@ -135,13 +138,15 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.Search
 
         public static bool TitleContainsEditionTerm(RemoteMovie subject, string editionTerm)
         {
-            var titleTokens = TokenizeEditionText(subject.Release?.Title);
+            var titleTokens = TokenizeEditionText(subject.Release?.Title)
+                .Select(token => new TitleToken(token))
+                .ToList();
             foreach (var movieTitle in subject.ParsedMovieInfo?.MovieTitles ?? new List<string>())
             {
-                RemoveTokenSequence(titleTokens, TokenizeEditionText(movieTitle));
+                MaskTokenSequence(titleTokens, TokenizeEditionText(movieTitle));
             }
 
-            RemoveTokenSequence(titleTokens, TokenizeEditionText(subject.ParsedMovieInfo?.ReleaseGroup));
+            MaskTokenSequence(titleTokens, TokenizeEditionText(subject.ParsedMovieInfo?.ReleaseGroup));
             return ContainsEditionTokens(titleTokens, TokenizeEditionText(editionTerm));
         }
 
@@ -152,10 +157,11 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.Search
                 return false;
             }
 
-            return ContainsEditionTokens(TokenizeEditionText(releaseTitle), TokenizeEditionText(editionTerm));
+            var titleTokens = TokenizeEditionText(releaseTitle).Select(token => new TitleToken(token)).ToList();
+            return ContainsEditionTokens(titleTokens, TokenizeEditionText(editionTerm));
         }
 
-        private static bool ContainsEditionTokens(List<string> titleTokens, List<string> termTokens)
+        private static bool ContainsEditionTokens(List<TitleToken> titleTokens, List<string> termTokens)
         {
             if (!termTokens.Any() || termTokens.Count > titleTokens.Count)
             {
@@ -164,13 +170,14 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.Search
 
             for (var start = 0; start <= titleTokens.Count - termTokens.Count; start++)
             {
-                if (!titleTokens.Skip(start).Take(termTokens.Count).SequenceEqual(termTokens))
+                var candidate = titleTokens.Skip(start).Take(termTokens.Count).ToList();
+                if (candidate.Any(token => token.IsMasked) || !candidate.Select(token => token.Value).SequenceEqual(termTokens))
                 {
                     continue;
                 }
 
                 var nextIndex = start + termTokens.Count;
-                if (nextIndex < titleTokens.Count && new[] { "enhanced", "edition", "cut" }.Contains(titleTokens[nextIndex]))
+                if (nextIndex < titleTokens.Count && !titleTokens[nextIndex].IsMasked && new[] { "enhanced", "edition", "cut" }.Contains(titleTokens[nextIndex].Value))
                 {
                     continue;
                 }
@@ -181,7 +188,7 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.Search
             return false;
         }
 
-        private static void RemoveTokenSequence(List<string> source, List<string> sequence)
+        private static void MaskTokenSequence(List<TitleToken> source, List<string> sequence)
         {
             if (!sequence.Any() || sequence.Count > source.Count)
             {
@@ -190,9 +197,10 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.Search
 
             for (var start = source.Count - sequence.Count; start >= 0; start--)
             {
-                if (source.Skip(start).Take(sequence.Count).SequenceEqual(sequence))
+                var candidate = source.Skip(start).Take(sequence.Count).ToList();
+                if (candidate.Select(token => token.Value).SequenceEqual(sequence))
                 {
-                    source.RemoveRange(start, sequence.Count);
+                    candidate.ForEach(token => token.IsMasked = true);
                 }
             }
         }
@@ -204,11 +212,24 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.Search
                 return new List<string>();
             }
 
-            var apostropheNormalized = value.Replace("'", string.Empty);
-            return Regex.Matches(apostropheNormalized, @"[A-Za-z0-9]+")
+            var apostropheNormalized = ApostropheRegex.Replace(value, string.Empty);
+            var abbreviationNormalized = AbbreviationRegex.Replace(apostropheNormalized,
+                match => EditionNormalizer.Normalize(match.Value));
+            return TokenRegex.Matches(abbreviationNormalized)
                 .Select(match => EditionNormalizer.Normalize(match.Value))
                 .Where(token => !string.IsNullOrWhiteSpace(token))
                 .ToList();
+        }
+
+        private sealed class TitleToken
+        {
+            public TitleToken(string value)
+            {
+                Value = value;
+            }
+
+            public string Value { get; }
+            public bool IsMasked { get; set; }
         }
     }
 }

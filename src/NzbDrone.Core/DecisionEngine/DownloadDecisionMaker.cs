@@ -222,6 +222,15 @@ namespace NzbDrone.Core.DecisionEngine
                 match.Status,
                 match.Reason);
 
+            var selectedSlot = match.SelectedSlotId.HasValue
+                ? slots.SingleOrDefault(slot => slot.Id == match.SelectedSlotId.Value)
+                : null;
+            if (match.Status == EditionMatchStatus.UniqueSlot && selectedSlot == null)
+            {
+                return new DownloadRejection(DownloadRejectionReason.WrongEdition,
+                    $"Matched edition slot {match.SelectedSlotId} is no longer configured for this movie");
+            }
+
             // RSS and release-push have no preselected slot target. A unique deterministic
             // match establishes the exact slot target; absent evidence remains ordinary Main.
             if (searchCriteria == null)
@@ -236,14 +245,14 @@ namespace NzbDrone.Core.DecisionEngine
                     return RejectUnsafeEditionMatch(match);
                 }
 
-                if (!match.SelectedSlot.Monitored)
+                if (!selectedSlot.Monitored)
                 {
                     return new DownloadRejection(DownloadRejectionReason.WrongEdition,
-                        $"Release matches unmonitored edition slot: {match.SelectedSlot.EditionName}");
+                        $"Release matches unmonitored edition slot: {match.SelectedSlotEditionName}");
                 }
 
-                remoteMovie.AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(match.SelectedSlot.Id);
-                StampEditionSlotContext(remoteMovie, match.SelectedSlot);
+                remoteMovie.AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(match.SelectedSlotId.Value);
+                StampEditionSlotContext(remoteMovie, selectedSlot);
                 return null;
             }
 
@@ -257,7 +266,7 @@ namespace NzbDrone.Core.DecisionEngine
                 if (match.Status == EditionMatchStatus.UniqueSlot)
                 {
                     return new DownloadRejection(DownloadRejectionReason.WrongEdition,
-                        $"Release matches configured edition '{match.SelectedSlot.EditionName}' (slot {match.SelectedSlot.Id}), not Main");
+                        $"Release matches configured edition '{match.SelectedSlotEditionName}' (slot {match.SelectedSlotId.Value}), not Main");
                 }
 
                 return RejectUnsafeEditionMatch(match);
@@ -274,13 +283,13 @@ namespace NzbDrone.Core.DecisionEngine
                 return RejectUnsafeEditionMatch(match);
             }
 
-            if (match.SelectedSlot.Id != target.EditionSlotId.Value)
+            if (match.SelectedSlotId.Value != target.EditionSlotId.Value)
             {
                 return new DownloadRejection(DownloadRejectionReason.WrongEdition,
-                    $"Edition target mismatch: release matches slot {match.SelectedSlot.Id}, but slot {target.EditionSlotId.Value} was requested");
+                    $"Edition target mismatch: release matches slot {match.SelectedSlotId.Value}, but slot {target.EditionSlotId.Value} was requested");
             }
 
-            StampEditionSlotContext(remoteMovie, match.SelectedSlot,
+            StampEditionSlotContext(remoteMovie, selectedSlot,
                 (searchCriteria as MovieSearchCriteria)?.OverrideQualityProfile);
             return null;
         }

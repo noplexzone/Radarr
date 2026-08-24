@@ -15,6 +15,7 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
     public class MovieEditionMatcher : IMovieEditionMatcher
     {
         private static readonly Regex ApostropheRegex = new Regex("['’‘]", RegexOptions.Compiled);
+        private static readonly Regex AbbreviationRegex = new Regex(@"(?<![\p{L}\p{Nd}])(?:[\p{L}\p{Nd}][\p{P}\p{S}_])+[\p{L}\p{Nd}](?=$|[^\p{L}\p{Nd}])", RegexOptions.Compiled);
         private static readonly Regex TokenRegex = new Regex(@"[\p{L}\p{Nd}]+", RegexOptions.Compiled);
 
         public EditionMatchResult Match(RemoteMovie remoteMovie, IReadOnlyCollection<MovieEditionSlot> slots)
@@ -39,7 +40,7 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
                 .ThenBy(identity => identity.DisplayValue, StringComparer.Ordinal)
                 .ToList();
 
-            var normalizedParsedEdition = EditionNormalizer.Normalize(remoteMovie.ParsedMovieInfo.Edition);
+            var normalizedParsedEdition = NormalizeIdentity(remoteMovie.ParsedMovieInfo.Edition);
             if (normalizedParsedEdition.IsNotNullOrWhiteSpace())
             {
                 return MatchParsedEdition(remoteMovie.ParsedMovieInfo.Edition, normalizedParsedEdition, identities);
@@ -116,16 +117,18 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
 
         private static EditionMatchResult MatchTitle(RemoteMovie remoteMovie, List<EditionIdentity> identities)
         {
-            var titleTokens = Tokenize(remoteMovie.Release.Title);
+            var titleTokens = Tokenize(remoteMovie.Release.Title)
+                .Select(token => new TitleToken(token))
+                .ToList();
             foreach (var movieTitle in remoteMovie.ParsedMovieInfo.MovieTitles ?? new List<string>())
             {
-                RemoveTokenSequence(titleTokens, Tokenize(movieTitle));
+                MaskTokenSequence(titleTokens, Tokenize(movieTitle));
             }
 
-            RemoveTokenSequence(titleTokens, Tokenize(remoteMovie.ParsedMovieInfo.ReleaseGroup));
+            MaskTokenSequence(titleTokens, Tokenize(remoteMovie.ParsedMovieInfo.ReleaseGroup));
 
             var matches = identities
-                .Select(identity => new TitleIdentityMatch(identity, Tokenize(identity.DisplayValue)))
+                .Select(identity => new TitleIdentityMatch(identity, identity.Tokens))
                 .Where(match => ContainsSequence(titleTokens, match.Tokens))
                 .ToList();
 
@@ -199,11 +202,16 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
 
         private static IEnumerable<EditionIdentity> CreateIdentity(MovieEditionSlot slot, string displayValue, EditionIdentityType type)
         {
-            var normalized = EditionNormalizer.Normalize(displayValue);
-            if (normalized.IsNotNullOrWhiteSpace())
+            var tokens = Tokenize(displayValue);
+            if (tokens.Count > 0)
             {
-                yield return new EditionIdentity(slot, displayValue, normalized, type);
+                yield return new EditionIdentity(slot, displayValue, tokens, type);
             }
+        }
+
+        private static string NormalizeIdentity(string value)
+        {
+            return string.Concat(Tokenize(value));
         }
 
         private static List<string> Tokenize(string value)
@@ -214,13 +222,15 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
             }
 
             var apostropheNormalized = ApostropheRegex.Replace(value, string.Empty);
-            return TokenRegex.Matches(apostropheNormalized)
+            var abbreviationNormalized = AbbreviationRegex.Replace(apostropheNormalized,
+                match => EditionNormalizer.Normalize(match.Value));
+            return TokenRegex.Matches(abbreviationNormalized)
                 .Select(match => EditionNormalizer.Normalize(match.Value))
                 .Where(token => token.IsNotNullOrWhiteSpace())
                 .ToList();
         }
 
-        private static bool ContainsSequence(List<string> source, List<string> sequence)
+        private static bool ContainsSequence(List<TitleToken> source, IReadOnlyList<string> sequence)
         {
             if (sequence.Count == 0 || sequence.Count > source.Count)
             {
@@ -229,7 +239,8 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
 
             for (var start = 0; start <= source.Count - sequence.Count; start++)
             {
-                if (source.Skip(start).Take(sequence.Count).SequenceEqual(sequence))
+                var candidate = source.Skip(start).Take(sequence.Count).ToList();
+                if (candidate.All(token => !token.IsMasked) && candidate.Select(token => token.Value).SequenceEqual(sequence))
                 {
                     return true;
                 }
@@ -238,7 +249,7 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
             return false;
         }
 
-        private static void RemoveTokenSequence(List<string> source, List<string> sequence)
+        private static void MaskTokenSequence(List<TitleToken> source, List<string> sequence)
         {
             if (sequence.Count == 0 || sequence.Count > source.Count)
             {
@@ -247,39 +258,53 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
 
             for (var start = source.Count - sequence.Count; start >= 0; start--)
             {
-                if (source.Skip(start).Take(sequence.Count).SequenceEqual(sequence))
+                var candidate = source.Skip(start).Take(sequence.Count).ToList();
+                if (candidate.Select(token => token.Value).SequenceEqual(sequence))
                 {
-                    source.RemoveRange(start, sequence.Count);
+                    candidate.ForEach(token => token.IsMasked = true);
                 }
             }
         }
 
         private sealed class EditionIdentity
         {
-            public EditionIdentity(MovieEditionSlot slot, string displayValue, string normalized, EditionIdentityType type)
+            public EditionIdentity(MovieEditionSlot slot, string displayValue, List<string> tokens, EditionIdentityType type)
             {
                 Slot = slot;
                 DisplayValue = displayValue;
-                Normalized = normalized;
+                Tokens = tokens.AsReadOnly();
+                Normalized = string.Concat(tokens);
                 Type = type;
             }
 
             public MovieEditionSlot Slot { get; }
             public string DisplayValue { get; }
+            public IReadOnlyList<string> Tokens { get; }
             public string Normalized { get; }
             public EditionIdentityType Type { get; }
         }
 
         private sealed class TitleIdentityMatch
         {
-            public TitleIdentityMatch(EditionIdentity identity, List<string> tokens)
+            public TitleIdentityMatch(EditionIdentity identity, IReadOnlyList<string> tokens)
             {
                 Identity = identity;
                 Tokens = tokens;
             }
 
             public EditionIdentity Identity { get; }
-            public List<string> Tokens { get; }
+            public IReadOnlyList<string> Tokens { get; }
+        }
+
+        private sealed class TitleToken
+        {
+            public TitleToken(string value)
+            {
+                Value = value;
+            }
+
+            public string Value { get; }
+            public bool IsMasked { get; set; }
         }
     }
 }

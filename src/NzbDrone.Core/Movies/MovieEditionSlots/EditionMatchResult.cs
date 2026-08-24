@@ -32,14 +32,14 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
         {
             Status = status;
             Source = source;
-            CandidateSlots = (candidates ?? Array.Empty<MovieEditionSlot>())
-                .GroupBy(slot => slot.Id)
-                .Select(group => group.First())
-                .OrderBy(slot => slot.Id)
+            CandidateSlotIds = (candidates ?? Array.Empty<MovieEditionSlot>())
+                .Select(slot => slot.Id)
+                .Distinct()
+                .OrderBy(id => id)
                 .ToList()
                 .AsReadOnly();
-            CandidateSlotIds = CandidateSlots.Select(slot => slot.Id).ToList().AsReadOnly();
-            SelectedSlot = status == EditionMatchStatus.UniqueSlot ? selectedSlot : null;
+            SelectedSlotId = status == EditionMatchStatus.UniqueSlot ? selectedSlot?.Id : null;
+            SelectedSlotEditionName = status == EditionMatchStatus.UniqueSlot ? selectedSlot?.EditionName : null;
             MatchedIdentity = status == EditionMatchStatus.UniqueSlot ? matchedIdentity : null;
             MatchedIdentityType = status == EditionMatchStatus.UniqueSlot ? matchedIdentityType : null;
             Reason = reason;
@@ -47,9 +47,9 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
 
         public EditionMatchStatus Status { get; }
         public EditionMatchSource Source { get; }
-        public IReadOnlyList<MovieEditionSlot> CandidateSlots { get; }
         public IReadOnlyList<int> CandidateSlotIds { get; }
-        public MovieEditionSlot SelectedSlot { get; }
+        public int? SelectedSlotId { get; }
+        public string SelectedSlotEditionName { get; }
         public string MatchedIdentity { get; }
         public EditionIdentityType? MatchedIdentityType { get; }
         public string Reason { get; }
@@ -71,7 +71,13 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
                 throw new ArgumentNullException(nameof(selectedSlot));
             }
 
-            return new EditionMatchResult(EditionMatchStatus.UniqueSlot, source, candidates, selectedSlot, matchedIdentity, matchedIdentityType, reason);
+            var candidateList = (candidates ?? Array.Empty<MovieEditionSlot>()).ToList();
+            if (!candidateList.Any(candidate => candidate.Id == selectedSlot.Id))
+            {
+                throw new ArgumentException("The selected edition slot must be present in the candidate slots", nameof(candidates));
+            }
+
+            return new EditionMatchResult(EditionMatchStatus.UniqueSlot, source, candidateList, selectedSlot, matchedIdentity, matchedIdentityType, reason);
         }
 
         public static EditionMatchResult Unknown(EditionMatchSource source, string reason)
