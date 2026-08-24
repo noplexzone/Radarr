@@ -77,7 +77,7 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
                   .Returns((List<DownloadDecision> d) => d);
         }
 
-        private void GivenHeldRelease(string title, string indexer, DateTime publishDate, PendingReleaseReason reason = PendingReleaseReason.Delay)
+        private void GivenHeldRelease(string title, string indexer, DateTime publishDate, PendingReleaseReason reason = PendingReleaseReason.Delay, MovieAcquisitionTarget target = null)
         {
             var release = _release.JsonClone();
             release.Indexer = indexer;
@@ -90,9 +90,19 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
                                                    .With(h => h.Release = release)
                                                    .With(h => h.Reason = reason)
                                                    .With(h => h.ParsedMovieInfo = _parsedMovieInfo)
+                                                   .With(h => h.AdditionalInfo = PendingInfoFor(target ?? MovieAcquisitionTarget.Main))
                                                    .Build();
 
             _heldReleases.AddRange(heldReleases);
+        }
+
+        private static PendingReleaseAdditionalInfo PendingInfoFor(MovieAcquisitionTarget target)
+        {
+            return new PendingReleaseAdditionalInfo
+            {
+                AcquisitionTargetKind = target.Kind,
+                AcquisitionTargetEditionSlotId = target.EditionSlotId
+            };
         }
 
         [Test]
@@ -101,6 +111,52 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
             Subject.Add(_temporarilyRejected, PendingReleaseReason.Delay);
 
             VerifyInsert();
+        }
+
+        [TestCase(MovieAcquisitionTargetKind.Main, null)]
+        [TestCase(MovieAcquisitionTargetKind.EditionSlot, 41)]
+        public void should_persist_the_exact_acquisition_target(MovieAcquisitionTargetKind kind, int? slotId)
+        {
+            var target = kind == MovieAcquisitionTargetKind.EditionSlot
+                ? MovieAcquisitionTarget.ForEditionSlot(slotId.Value)
+                : MovieAcquisitionTarget.Main;
+            _remoteMovie.AcquisitionTarget = target;
+
+            Subject.Add(_temporarilyRejected, PendingReleaseReason.Delay);
+
+            Mocker.GetMock<IPendingReleaseRepository>()
+                  .Verify(v => v.Insert(It.Is<PendingRelease>(p =>
+                      p.AdditionalInfo.AcquisitionTargetKind == kind &&
+                      p.AdditionalInfo.AcquisitionTargetEditionSlotId == slotId)), Times.Once());
+        }
+
+        [Test]
+        public void should_retain_the_same_release_for_main_and_each_edition_slot()
+        {
+            GivenHeldRelease(_release.Title, _release.Indexer, _release.PublishDate, target: MovieAcquisitionTarget.Main);
+
+            var decisions = new[]
+            {
+                MovieAcquisitionTarget.Main,
+                MovieAcquisitionTarget.ForEditionSlot(41),
+                MovieAcquisitionTarget.ForEditionSlot(42)
+            }.Select(target =>
+            {
+                var remoteMovie = new RemoteMovie
+                {
+                    Movie = _movie,
+                    ParsedMovieInfo = _parsedMovieInfo,
+                    Release = _release,
+                    AcquisitionTarget = target
+                };
+
+                return Tuple.Create(new DownloadDecision(remoteMovie), PendingReleaseReason.Delay);
+            }).ToList();
+
+            Subject.AddMany(decisions);
+
+            Mocker.GetMock<IPendingReleaseRepository>()
+                  .Verify(v => v.Insert(It.IsAny<PendingRelease>()), Times.Exactly(2));
         }
 
         [Test]

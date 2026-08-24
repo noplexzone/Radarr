@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using FizzWare.NBuilder;
 using FluentAssertions;
@@ -40,7 +41,7 @@ namespace NzbDrone.Core.Test.Download.DownloadApprovedReportsTests
                             .Build();
         }
 
-        private RemoteMovie GetRemoteMovie(QualityModel quality, Movie movie = null, DownloadProtocol downloadProtocol = DownloadProtocol.Usenet)
+        private RemoteMovie GetRemoteMovie(QualityModel quality, Movie movie = null, DownloadProtocol downloadProtocol = DownloadProtocol.Usenet, MovieAcquisitionTarget target = null)
         {
             if (movie == null)
             {
@@ -58,6 +59,7 @@ namespace NzbDrone.Core.Test.Download.DownloadApprovedReportsTests
                     MovieTitles = new List<string> { "A Movie" },
                 },
                 Movie = movie,
+                AcquisitionTarget = target ?? MovieAcquisitionTarget.Main,
 
                 Release = new ReleaseInfo()
                 {
@@ -111,6 +113,67 @@ namespace NzbDrone.Core.Test.Download.DownloadApprovedReportsTests
 
             await Subject.ProcessDecisions(decisions);
             Mocker.GetMock<IDownloadService>().Verify(v => v.DownloadReport(It.IsAny<RemoteMovie>(), null), Times.Once());
+        }
+
+        [Test]
+        public async Task should_process_main_slots_and_unknown_independently_for_the_same_movie()
+        {
+            var movie = GetMovie(1);
+            var targets = new[]
+            {
+                MovieAcquisitionTarget.Main,
+                MovieAcquisitionTarget.ForEditionSlot(41),
+                MovieAcquisitionTarget.ForEditionSlot(42),
+                MovieAcquisitionTarget.Unknown
+            };
+            var decisions = targets
+                .Select(target => new DownloadDecision(GetRemoteMovie(new QualityModel(Quality.HDTV720p), movie, target: target)))
+                .ToList();
+
+            var result = await Subject.ProcessDecisions(decisions);
+
+            result.Grabbed.Should().HaveCount(4);
+            Mocker.GetMock<IDownloadService>()
+                  .Verify(v => v.DownloadReport(It.IsAny<RemoteMovie>(), null), Times.Exactly(4));
+        }
+
+        [Test]
+        public async Task should_keep_delayed_main_slots_and_unknown_out_of_each_others_fallback_state()
+        {
+            var movie = GetMovie(1);
+            var decisions = new[]
+            {
+                MovieAcquisitionTarget.Main,
+                MovieAcquisitionTarget.ForEditionSlot(41),
+                MovieAcquisitionTarget.ForEditionSlot(42),
+                MovieAcquisitionTarget.Unknown
+            }.Select(target => new DownloadDecision(
+                GetRemoteMovie(new QualityModel(Quality.HDTV720p), movie, target: target),
+                new DownloadRejection(DownloadRejectionReason.MinimumAgeDelay, "Delayed", RejectionType.Temporary)))
+             .ToList();
+
+            await Subject.ProcessDecisions(decisions);
+
+            Mocker.GetMock<IPendingReleaseService>()
+                  .Verify(v => v.AddMany(It.Is<List<Tuple<DownloadDecision, PendingReleaseReason>>>(items =>
+                      items.Count == 4 && items.All(item => item.Item2 == PendingReleaseReason.Delay))), Times.Once());
+        }
+
+        [Test]
+        public async Task should_dedupe_repeated_decisions_for_the_same_exact_target()
+        {
+            var movie = GetMovie(1);
+            var target = MovieAcquisitionTarget.ForEditionSlot(41);
+            var decisions = new List<DownloadDecision>
+            {
+                new DownloadDecision(GetRemoteMovie(new QualityModel(Quality.HDTV720p), movie, target: target)),
+                new DownloadDecision(GetRemoteMovie(new QualityModel(Quality.HDTV720p), movie, target: target))
+            };
+
+            await Subject.ProcessDecisions(decisions);
+
+            Mocker.GetMock<IDownloadService>()
+                  .Verify(v => v.DownloadReport(It.IsAny<RemoteMovie>(), null), Times.Once());
         }
 
         [Test]

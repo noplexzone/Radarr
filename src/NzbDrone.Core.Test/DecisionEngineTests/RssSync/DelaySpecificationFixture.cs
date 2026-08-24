@@ -97,6 +97,21 @@ namespace NzbDrone.Core.Test.DecisionEngineTests.RssSync
         }
 
         [Test]
+        public void should_select_oldest_pending_release_for_the_exact_target()
+        {
+            var target = MovieAcquisitionTarget.ForEditionSlot(41);
+            _remoteMovie.AcquisitionTarget = target;
+            _remoteMovie.ParsedMovieInfo.Quality = new QualityModel(Quality.SDTV);
+            _remoteMovie.Release.PublishDate = DateTime.UtcNow;
+            _delayProfile.UsenetDelay = 720;
+
+            Subject.IsSatisfiedBy(_remoteMovie, null);
+
+            Mocker.GetMock<IPendingReleaseService>()
+                  .Verify(v => v.OldestPendingRelease(_remoteMovie.Movie.Id, target), Times.Once());
+        }
+
+        [Test]
         public void should_be_true_when_profile_does_not_have_a_delay()
         {
             _delayProfile.UsenetDelay = 0;

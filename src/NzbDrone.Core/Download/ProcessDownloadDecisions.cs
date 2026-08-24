@@ -166,12 +166,9 @@ namespace NzbDrone.Core.Download
 
         private bool IsMovieProcessed(List<DownloadDecision> decisions, DownloadDecision report)
         {
-            var movieId = report.RemoteMovie.Movie.Id;
-
-            return decisions.Select(r => r.RemoteMovie.Movie)
-                            .Select(e => e.Id)
-                            .ToList()
-                            .Contains(movieId);
+            return decisions.Any(r =>
+                r.RemoteMovie.Movie.Id == report.RemoteMovie.Movie.Id &&
+                r.RemoteMovie.AcquisitionTarget.Equals(report.RemoteMovie.AcquisitionTarget));
         }
 
         private void PreparePending(List<Tuple<DownloadDecision, PendingReleaseReason>> queue, List<DownloadDecision> grabbed, List<DownloadDecision> pending, DownloadDecision report, PendingReleaseReason reason)
