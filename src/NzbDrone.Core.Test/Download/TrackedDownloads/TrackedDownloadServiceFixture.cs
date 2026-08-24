@@ -233,6 +233,7 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
                 EventType = MovieHistoryEventType.Grabbed,
             };
             movieHistory.Data.Add("indexer", "TestIndexer");
+            MovieAcquisitionTargetSerializer.Write(movieHistory.Data, MovieAcquisitionTarget.ForEditionSlot(42));
 
             Mocker.GetMock<IHistoryService>()
                 .Setup(s => s.FindByDownloadId("slot-download"))
@@ -244,7 +245,7 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
                 MovieId = 1,
                 DownloadId = "slot-download",
             };
-            downloadHistory.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "42");
+            MovieAcquisitionTargetSerializer.Write(downloadHistory.Data, MovieAcquisitionTarget.ForEditionSlot(42));
 
             Mocker.GetMock<IDownloadHistoryService>()
                 .Setup(s => s.GetLatestGrab("slot-download"))

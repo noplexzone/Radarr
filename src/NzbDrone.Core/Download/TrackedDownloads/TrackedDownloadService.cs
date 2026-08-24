@@ -134,21 +134,26 @@ namespace NzbDrone.Core.Download.TrackedDownloads
                     .ToList();
                 var latestMovieGrab = historyItems.FirstOrDefault(h => h.EventType == MovieHistoryEventType.Grabbed);
                 var latestDownloadGrab = _downloadHistoryService.GetLatestGrab(downloadItem.DownloadId);
-                var movieGrabTarget = GetMovieEditionSlotId(latestMovieGrab?.Data);
-                var downloadGrabTarget = GetMovieEditionSlotId(latestDownloadGrab?.Data);
-                var target = latestDownloadGrab != null && (latestMovieGrab == null || latestDownloadGrab.Date >= latestMovieGrab.Date)
-                    ? downloadGrabTarget
-                    : movieGrabTarget;
-                trackedDownload.MovieEditionSlotId = target;
+                var movieGrabTarget = ReadHistoryTarget(latestMovieGrab?.Data);
+                var downloadGrabTarget = ReadHistoryTarget(latestDownloadGrab?.Data);
+                var target = ResolveReconstructionTarget(latestMovieGrab, movieGrabTarget, latestDownloadGrab, downloadGrabTarget);
+                if (target.Kind == MovieAcquisitionTargetKind.Unknown && latestMovieGrab == null && latestDownloadGrab == null && historyItems.Any())
+                {
+                    // Pre-target histories represented ordinary Main implicitly. Keep that
+                    // compatibility isolated to durable legacy history reconstruction.
+                    target = ReadHistoryTarget(historyItems.First().Data);
+                }
 
-                var downloadHistory = _downloadHistoryService.GetLatestDownloadHistoryItem(downloadItem.DownloadId, target);
+                trackedDownload.AcquisitionTarget = target;
+
+                var downloadHistory = _downloadHistoryService.GetLatestDownloadHistoryItemForTarget(downloadItem.DownloadId, target);
                 if (downloadHistory != null)
                 {
                     trackedDownload.State = GetStateFromHistory(downloadHistory.EventType);
                 }
 
                 var movieGrab = historyItems.FirstOrDefault(h => h.EventType == MovieHistoryEventType.Grabbed && MatchesTarget(h.Data, target));
-                var downloadGrab = _downloadHistoryService.GetLatestGrab(downloadItem.DownloadId, target);
+                var downloadGrab = _downloadHistoryService.GetLatestGrabForTarget(downloadItem.DownloadId, target);
                 RehydrateRemoteMovie(trackedDownload, target, historyItems, movieGrab, downloadGrab);
 
                 if (trackedDownload.RemoteMovie == null)
@@ -191,22 +196,22 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
         private void UpdateCachedItem(TrackedDownload trackedDownload)
         {
-            var target = trackedDownload.MovieEditionSlotId;
+            var target = trackedDownload.AcquisitionTarget;
             var historyItems = _historyService.FindByDownloadId(trackedDownload.DownloadItem.DownloadId)
                 .OrderByDescending(h => h.Date)
                 .ToList();
             var movieGrab = historyItems.FirstOrDefault(h => h.EventType == MovieHistoryEventType.Grabbed && MatchesTarget(h.Data, target));
-            var downloadGrab = _downloadHistoryService.GetLatestGrab(trackedDownload.DownloadItem.DownloadId, target);
+            var downloadGrab = _downloadHistoryService.GetLatestGrabForTarget(trackedDownload.DownloadItem.DownloadId, target);
             RehydrateRemoteMovie(trackedDownload, target, historyItems, movieGrab, downloadGrab);
         }
 
         private void RehydrateRemoteMovie(TrackedDownload trackedDownload,
-                                          int? target,
+                                          MovieAcquisitionTarget target,
                                           List<MovieHistory> historyItems,
                                           MovieHistory movieGrab,
                                           DownloadHistory downloadGrab)
         {
-            trackedDownload.MovieEditionSlotId = target;
+            trackedDownload.AcquisitionTarget = target;
             var parsedMovieInfo = Parser.Parser.ParseMovieTitle(trackedDownload.DownloadItem.Title);
             trackedDownload.RemoteMovie = parsedMovieInfo == null ? null : _parsingService.Map(parsedMovieInfo, "", 0, null);
 
@@ -221,8 +226,9 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             }
 
             var remoteMovie = trackedDownload.RemoteMovie;
-            if (remoteMovie?.Movie == null)
+            if (target.Kind == MovieAcquisitionTargetKind.Unknown || remoteMovie?.Movie == null)
             {
+                trackedDownload.RemoteMovie = null;
                 return;
             }
 
@@ -240,17 +246,17 @@ namespace NzbDrone.Core.Download.TrackedDownloads
                 remoteMovie.Release.IndexerId = downloadGrab.IndexerId;
             }
 
-            if (target.HasValue)
+            if (target.Kind == MovieAcquisitionTargetKind.EditionSlot)
             {
-                var slot = _movieEditionSlotService.GetForMovie(remoteMovie.Movie.Id).SingleOrDefault(x => x.Id == target.Value);
+                var slot = _movieEditionSlotService.GetForMovie(remoteMovie.Movie.Id).SingleOrDefault(x => x.Id == target.EditionSlotId.Value);
                 if (slot == null)
                 {
-                    _logger.Warn("Tracked download targets missing or cross-movie edition slot {0}; leaving it unmapped", target.Value);
+                    _logger.Warn("Tracked download targets missing or cross-movie edition slot {0}; leaving it unmapped", target.EditionSlotId.Value);
                     trackedDownload.RemoteMovie = null;
                     return;
                 }
 
-                remoteMovie.MovieEditionSlotId = slot.Id;
+                remoteMovie.AcquisitionTarget = target;
                 remoteMovie.SlotContextStamped = true;
                 remoteMovie.SlotMinimumCustomFormatScore = slot.MinimumCustomFormatScore;
                 remoteMovie.SlotQualityProfile = slot.QualityProfileId.HasValue
@@ -259,9 +265,9 @@ namespace NzbDrone.Core.Download.TrackedDownloads
                 var slotFile = _mediaFileService.FindByEditionSlotId(slot.Id);
                 remoteMovie.SlotMovieFile = slotFile?.MovieId == remoteMovie.Movie.Id && slotFile.MovieEditionSlotId == slot.Id ? slotFile : null;
             }
-            else
+            else if (target.Kind == MovieAcquisitionTargetKind.Main)
             {
-                remoteMovie.MovieEditionSlotId = null;
+                remoteMovie.AcquisitionTarget = MovieAcquisitionTarget.Main;
                 remoteMovie.SlotContextStamped = false;
                 remoteMovie.SlotMovieFile = null;
                 remoteMovie.SlotQualityProfile = null;
@@ -272,19 +278,24 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             remoteMovie.CustomFormats = _formatCalculator.ParseCustomFormat(remoteMovie, trackedDownload.DownloadItem.TotalSize);
         }
 
-        private static int? GetMovieEditionSlotId(IReadOnlyDictionary<string, string> data)
+        private static MovieAcquisitionTarget ReadHistoryTarget(IReadOnlyDictionary<string, string> data)
         {
-            return data != null && data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var value) && int.TryParse(value, out var slotId) ? slotId : null;
+            return data == null ? MovieAcquisitionTarget.Unknown : MovieAcquisitionTargetSerializer.ReadLegacyHistory(data);
         }
 
-        private static bool MatchesTarget(IReadOnlyDictionary<string, string> data, int? target)
+        private static MovieAcquisitionTarget ResolveReconstructionTarget(MovieHistory movieGrab, MovieAcquisitionTarget movieTarget, DownloadHistory downloadGrab, MovieAcquisitionTarget downloadTarget)
         {
-            if (data == null || !data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var value))
+            if (movieGrab != null && downloadGrab != null && !movieTarget.Equals(downloadTarget))
             {
-                return !target.HasValue;
+                return MovieAcquisitionTarget.Unknown;
             }
 
-            return target.HasValue && int.TryParse(value, out var slotId) && slotId == target.Value;
+            return downloadGrab != null ? downloadTarget : movieGrab != null ? movieTarget : MovieAcquisitionTarget.Unknown;
+        }
+
+        private static bool MatchesTarget(IReadOnlyDictionary<string, string> data, MovieAcquisitionTarget target)
+        {
+            return ReadHistoryTarget(data).Equals(target);
         }
 
         private static TrackedDownloadState GetStateFromHistory(DownloadHistoryEventType eventType)

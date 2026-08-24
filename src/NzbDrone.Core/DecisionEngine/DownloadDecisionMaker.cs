@@ -191,7 +191,7 @@ namespace NzbDrone.Core.DecisionEngine
 
                     if (searchCriteria is MovieSearchCriteria movieCriteria)
                     {
-                        decision.RemoteMovie.MovieEditionSlotId = movieCriteria.MovieEditionSlotId;
+                        decision.RemoteMovie.AcquisitionTarget = movieCriteria.AcquisitionTarget;
                     }
 
                     if (decision.Rejections.Any())

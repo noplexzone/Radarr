@@ -96,7 +96,7 @@ namespace Radarr.Api.V3.Indexers
                         CustomFormatScore = remoteMovie.CustomFormatScore,
                         MovieMatchType = remoteMovie.MovieMatchType,
                         ReleaseSource = remoteMovie.ReleaseSource,
-                        MovieEditionSlotId = remoteMovie.MovieEditionSlotId
+                        AcquisitionTarget = remoteMovie.AcquisitionTarget
                     };
 
                     remoteMovie.Movie = _movieService.GetMovie(release.MovieId!.Value);
@@ -120,7 +120,7 @@ namespace Radarr.Api.V3.Indexers
 
                 if (release.MovieEditionSlotId.HasValue)
                 {
-                    remoteMovie.MovieEditionSlotId = release.MovieEditionSlotId;
+                    remoteMovie.AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(release.MovieEditionSlotId.Value);
                 }
 
                 await _downloadService.DownloadReport(remoteMovie, release.DownloadClientId);

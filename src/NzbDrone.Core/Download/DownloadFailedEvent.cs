@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using NzbDrone.Common.Messaging;
 using NzbDrone.Core.Download.TrackedDownloads;
 using NzbDrone.Core.Languages;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Qualities;
 
@@ -15,7 +16,20 @@ namespace NzbDrone.Core.Download
         }
 
         public int MovieId { get; set; }
-        public int? MovieEditionSlotId { get; set; }
+        private MovieAcquisitionTarget _acquisitionTarget = MovieAcquisitionTarget.Unknown;
+
+        public MovieAcquisitionTarget AcquisitionTarget
+        {
+            get => _acquisitionTarget;
+            set => _acquisitionTarget = value ?? throw new System.ArgumentNullException(nameof(value));
+        }
+
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public int? MovieEditionSlotId
+        {
+            get => AcquisitionTarget.EditionSlotId;
+            set => AcquisitionTarget = value.HasValue ? MovieAcquisitionTarget.ForEditionSlot(value.Value) : MovieAcquisitionTarget.Unknown;
+        }
         public QualityModel Quality { get; set; }
         public string SourceTitle { get; set; }
         public string DownloadClient { get; set; }

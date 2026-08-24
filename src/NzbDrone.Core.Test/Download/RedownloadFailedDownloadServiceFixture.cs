@@ -5,6 +5,7 @@ using NzbDrone.Core.Configuration;
 using NzbDrone.Core.Download;
 using NzbDrone.Core.IndexerSearch;
 using NzbDrone.Core.Messaging.Commands;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Test.Framework;
 namespace NzbDrone.Core.Test.Download
@@ -28,8 +29,17 @@ namespace NzbDrone.Core.Test.Download
         [Test]
         public void should_search_movie_after_main_failure()
         {
-            Subject.Handle(new DownloadFailedEvent { MovieId = 1 });
+            Subject.Handle(new DownloadFailedEvent { MovieId = 1, AcquisitionTarget = MovieAcquisitionTarget.Main });
             Mocker.GetMock<IManageCommandQueue>().Verify(q => q.Push(It.Is<MoviesSearchCommand>(c => c.MovieIds[0] == 1), It.IsAny<CommandPriority>(), It.IsAny<CommandTrigger>()), Times.Once());
+        }
+
+        [Test]
+        public void should_fail_closed_without_searching_when_target_is_unknown()
+        {
+            Subject.Handle(new DownloadFailedEvent { MovieId = 1, AcquisitionTarget = MovieAcquisitionTarget.Unknown });
+
+            Mocker.GetMock<IManageCommandQueue>().Verify(q => q.Push(It.IsAny<MoviesSearchCommand>(), It.IsAny<CommandPriority>(), It.IsAny<CommandTrigger>()), Times.Never());
+            Mocker.GetMock<IManageCommandQueue>().Verify(q => q.Push(It.IsAny<MovieEditionSearchCommand>(), It.IsAny<CommandPriority>(), It.IsAny<CommandTrigger>()), Times.Never());
         }
     }
 }

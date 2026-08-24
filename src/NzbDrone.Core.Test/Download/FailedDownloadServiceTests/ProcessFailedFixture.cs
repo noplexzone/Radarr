@@ -34,14 +34,15 @@ namespace NzbDrone.Core.Test.Download.FailedDownloadServiceTests
 
             var remoteMovie = new RemoteMovie
             {
-                Movie = new Movie()
+                Movie = new Movie(),
+                AcquisitionTarget = MovieAcquisitionTarget.Main
             };
 
             _trackedDownload = Builder<TrackedDownload>.CreateNew()
                     .With(c => c.State = TrackedDownloadState.FailedPending)
                     .With(c => c.DownloadItem = completed)
                     .With(c => c.RemoteMovie = remoteMovie)
-                    .With(c => c.MovieEditionSlotId = null)
+                    .With(c => c.AcquisitionTarget = MovieAcquisitionTarget.Main)
                     .Build();
 
             Mocker.GetMock<IHistoryService>()
@@ -101,8 +102,8 @@ namespace NzbDrone.Core.Test.Download.FailedDownloadServiceTests
         [Test]
         public void should_publish_failure_for_exact_tracked_edition_target()
         {
-            _trackedDownload.RemoteMovie.MovieEditionSlotId = 42;
-            _trackedDownload.MovieEditionSlotId = 42;
+            _trackedDownload.RemoteMovie.AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(42);
+            _trackedDownload.AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(42);
             _trackedDownload.DownloadItem.Status = DownloadItemStatus.Failed;
             _grabHistory[0].Date = System.DateTime.UtcNow;
             _grabHistory[0].Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, "43");

@@ -21,7 +21,20 @@ namespace NzbDrone.Core.Parser.Model
         public TorrentSeedConfiguration SeedConfiguration { get; set; }
         public List<Language> Languages { get; set; }
         public ReleaseSourceType ReleaseSource { get; set; }
-        public int? MovieEditionSlotId { get; set; }
+        private MovieAcquisitionTarget _acquisitionTarget = MovieAcquisitionTarget.Main;
+
+        public MovieAcquisitionTarget AcquisitionTarget
+        {
+            get => _acquisitionTarget;
+            set => _acquisitionTarget = value ?? throw new System.ArgumentNullException(nameof(value));
+        }
+
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public int? MovieEditionSlotId
+        {
+            get => AcquisitionTarget.EditionSlotId;
+            set => AcquisitionTarget = value.HasValue ? MovieAcquisitionTarget.ForEditionSlot(value.Value) : MovieAcquisitionTarget.Unknown;
+        }
 
         // Set by DownloadDecisionMaker when an RSS release is matched to a monitored
         // edition slot via parsed edition. When true, SlotMovieFile (not Movie.MovieFile)

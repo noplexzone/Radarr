@@ -5,6 +5,7 @@ using NUnit.Framework;
 using NzbDrone.Core.Download;
 using NzbDrone.Core.History;
 using NzbDrone.Core.MediaFiles.MovieImport.Aggregation.Aggregators;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Test.Framework;
 
@@ -137,6 +138,22 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport.Aggregation.Aggregators
             Subject.Aggregate(localMovie, _downloadClientItem);
 
             localMovie.MovieEditionSlotId.Should().Be(7);
+        }
+
+        [Test]
+        public void should_preserve_main_acquisition_target_through_release_and_local_movie()
+        {
+            var data = new Dictionary<string, string>();
+            MovieAcquisitionTargetSerializer.Write(data, MovieAcquisitionTarget.Main);
+            Mocker.GetMock<IHistoryService>()
+                .Setup(s => s.FindByDownloadId(_downloadClientItem.DownloadId))
+                .Returns(new List<MovieHistory> { GrabHistory(data) });
+
+            var localMovie = Subject.Aggregate(new LocalMovie(), _downloadClientItem);
+
+            localMovie.Release.AcquisitionTarget.Should().Be(MovieAcquisitionTarget.Main);
+            localMovie.AcquisitionTarget.Should().Be(MovieAcquisitionTarget.Main);
+            localMovie.ImportTarget.Should().Be(MovieFileImportTarget.Main);
         }
     }
 }

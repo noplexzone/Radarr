@@ -139,7 +139,8 @@ namespace NzbDrone.Core.Test.HistoryTests
         {
             var tracked = new NzbDrone.Core.Download.TrackedDownloads.TrackedDownload
             {
-                RemoteMovie = new RemoteMovie { MovieEditionSlotId = 42, ParsedMovieInfo = new ParsedMovieInfo(), Release = new ReleaseInfo() },
+                AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(42),
+                RemoteMovie = new RemoteMovie { AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(42), ParsedMovieInfo = new ParsedMovieInfo(), Release = new ReleaseInfo() },
                 DownloadItem = new DownloadClientItem { DownloadClientInfo = new DownloadClientItemClientInfo(), TotalSize = 1 }
             };
             var ignored = new DownloadIgnoredEvent

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using NzbDrone.Core.History;
+using NzbDrone.Core.Movies;
 
 namespace NzbDrone.Core.Parser.Model
 {
@@ -13,7 +14,10 @@ namespace NzbDrone.Core.Parser.Model
         public IndexerFlags IndexerFlags { get; set; }
 
         public List<int> MovieIds { get; set; }
-        public int? MovieEditionSlotId { get; set; }
+        public MovieAcquisitionTarget AcquisitionTarget { get; private set; } = MovieAcquisitionTarget.Unknown;
+
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public int? MovieEditionSlotId => AcquisitionTarget.EditionSlotId;
 
         public GrabbedReleaseInfo(List<MovieHistory> grabbedHistories)
         {
@@ -31,10 +35,7 @@ namespace NzbDrone.Core.Parser.Model
             IndexerFlags = indexerFlags;
             MovieIds = movieIds;
 
-            if (int.TryParse(grabbedHistory.Data.GetValueOrDefault(MovieHistory.MOVIE_EDITION_SLOT_ID), out var slotId))
-            {
-                MovieEditionSlotId = slotId;
-            }
+            AcquisitionTarget = MovieAcquisitionTargetSerializer.ReadLegacyHistory(grabbedHistory.Data);
         }
     }
 }

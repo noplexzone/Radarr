@@ -1,13 +1,26 @@
 using System.Collections.Generic;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Profiles.Qualities;
 
 namespace NzbDrone.Core.IndexerSearch.Definitions
 {
     public class MovieSearchCriteria : SearchCriteriaBase
     {
+        private MovieAcquisitionTarget _acquisitionTarget = MovieAcquisitionTarget.Main;
+
+        public MovieAcquisitionTarget AcquisitionTarget
+        {
+            get => _acquisitionTarget;
+            set => _acquisitionTarget = value ?? throw new System.ArgumentNullException(nameof(value));
+        }
         public string EditionSearchTerm { get; set; }
         public List<string> EditionMatchTerms { get; set; } = new List<string>();
-        public int? MovieEditionSlotId { get; set; }
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public int? MovieEditionSlotId
+        {
+            get => AcquisitionTarget.EditionSlotId;
+            set => AcquisitionTarget = value.HasValue ? MovieAcquisitionTarget.ForEditionSlot(value.Value) : MovieAcquisitionTarget.Unknown;
+        }
 
         // When an edition slot has its own quality profile, this overrides
         // Movie.QualityProfile for quality/custom-format acceptance checks.

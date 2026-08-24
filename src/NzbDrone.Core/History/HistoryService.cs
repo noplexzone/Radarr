@@ -9,6 +9,7 @@ using NzbDrone.Core.Download;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.Messaging.Events;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.Events;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Profiles.Qualities;
@@ -163,10 +164,7 @@ namespace NzbDrone.Core.History
                 history.Data.Add("ReleaseHash", message.Movie.ParsedMovieInfo.ReleaseHash);
             }
 
-            if (message.Movie.MovieEditionSlotId.HasValue)
-            {
-                history.Data.Add(MovieHistory.MOVIE_EDITION_SLOT_ID, message.Movie.MovieEditionSlotId.Value.ToString());
-            }
+            MovieAcquisitionTargetSerializer.Write(history.Data, message.Movie.AcquisitionTarget);
 
             if (message.Movie.Release is TorrentInfo torrentRelease)
             {
@@ -211,7 +209,7 @@ namespace NzbDrone.Core.History
             history.Data.Add("CustomFormatScore", message.MovieInfo.CustomFormatScore.ToString());
             history.Data.Add("Size", message.MovieInfo.Size.ToString());
             history.Data.Add("IndexerFlags", message.ImportedMovie.IndexerFlags.ToString());
-            AddMovieEditionSlot(history, message.ImportedMovie.MovieEditionSlotId);
+            AddAcquisitionTarget(history, ResolveImportedTarget(message.ImportedMovie, message.MovieInfo));
 
             _historyRepository.Insert(history);
         }
@@ -289,7 +287,7 @@ namespace NzbDrone.Core.History
             history.Data.Add("ReleaseGroup", message.TrackedDownload?.RemoteMovie?.ParsedMovieInfo?.ReleaseGroup);
             history.Data.Add("Size", message.TrackedDownload?.DownloadItem.TotalSize.ToString());
             history.Data.Add("Indexer", message.TrackedDownload?.RemoteMovie?.Release?.Indexer);
-            AddMovieEditionSlot(history, message.TrackedDownload?.RemoteMovie?.MovieEditionSlotId);
+            AddAcquisitionTarget(history, ResolveTrackedTarget(message.TrackedDownload));
 
             _historyRepository.Insert(history);
         }
@@ -318,23 +316,42 @@ namespace NzbDrone.Core.History
             history.Data.Add("ReleaseGroup", message.TrackedDownload?.RemoteMovie?.ParsedMovieInfo?.ReleaseGroup ?? message.Data.GetValueOrDefault(MovieHistory.RELEASE_GROUP));
             history.Data.Add("Size", message.TrackedDownload?.DownloadItem.TotalSize.ToString() ?? message.Data.GetValueOrDefault(MovieHistory.SIZE));
             history.Data.Add("Indexer", message.TrackedDownload?.RemoteMovie?.Release?.Indexer ?? message.Data.GetValueOrDefault(MovieHistory.INDEXER));
-            AddMovieEditionSlot(history, message.MovieEditionSlotId ?? message.TrackedDownload?.RemoteMovie?.MovieEditionSlotId ?? GetMovieEditionSlotId(message.Data));
+            AddAcquisitionTarget(history, message.AcquisitionTarget);
 
             _historyRepository.Insert(history);
         }
 
 
-        private static int? GetMovieEditionSlotId(IReadOnlyDictionary<string, string> data)
+        private static MovieAcquisitionTarget ResolveImportedTarget(MovieFile movieFile, LocalMovie localMovie)
         {
-            return data != null && data.TryGetValue(MovieHistory.MOVIE_EDITION_SLOT_ID, out var value) && int.TryParse(value, out var slotId) ? slotId : null;
+            if (movieFile.MovieEditionSlotId.HasValue)
+            {
+                return MovieAcquisitionTarget.ForEditionSlot(movieFile.MovieEditionSlotId.Value);
+            }
+
+            if (movieFile.ImportTarget == MovieFileImportTarget.Main)
+            {
+                return MovieAcquisitionTarget.Main;
+            }
+
+            if (movieFile.ImportTarget == MovieFileImportTarget.Unassigned ||
+                localMovie?.ImportTarget == MovieFileImportTarget.Unassigned ||
+                localMovie?.ImportTarget == MovieFileImportTarget.Unknown)
+            {
+                return MovieAcquisitionTarget.Unknown;
+            }
+
+            return localMovie?.AcquisitionTarget ?? MovieAcquisitionTarget.Unknown;
         }
 
-        private static void AddMovieEditionSlot(MovieHistory history, int? movieEditionSlotId)
+        private static MovieAcquisitionTarget ResolveTrackedTarget(NzbDrone.Core.Download.TrackedDownloads.TrackedDownload trackedDownload)
         {
-            if (movieEditionSlotId.HasValue)
-            {
-                history.Data[MovieHistory.MOVIE_EDITION_SLOT_ID] = movieEditionSlotId.Value.ToString();
-            }
+            return trackedDownload?.AcquisitionTarget ?? MovieAcquisitionTarget.Unknown;
+        }
+
+        private static void AddAcquisitionTarget(MovieHistory history, MovieAcquisitionTarget target)
+        {
+            MovieAcquisitionTargetSerializer.Write(history.Data, target ?? MovieAcquisitionTarget.Unknown);
         }
 
         public List<MovieHistory> Since(DateTime date, MovieHistoryEventType? eventType)

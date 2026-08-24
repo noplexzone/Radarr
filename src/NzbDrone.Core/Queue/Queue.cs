@@ -33,6 +33,15 @@ namespace NzbDrone.Core.Queue
         public string Indexer { get; set; }
         public string OutputPath { get; set; }
         public string ErrorMessage { get; set; }
-        public int? MovieEditionSlotId { get; set; }
+        public MovieAcquisitionTarget AcquisitionTarget { get; set; } = MovieAcquisitionTarget.Unknown;
+
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public int? MovieEditionSlotId
+        {
+            get => AcquisitionTarget.EditionSlotId;
+            set => AcquisitionTarget = value.HasValue
+                ? MovieAcquisitionTarget.ForEditionSlot(value.Value)
+                : MovieAcquisitionTarget.Main;
+        }
     }
 }

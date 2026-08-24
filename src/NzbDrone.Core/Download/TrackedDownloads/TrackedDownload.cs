@@ -1,5 +1,6 @@
 using System;
 using NzbDrone.Core.Indexers;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Parser.Model;
 
 namespace NzbDrone.Core.Download.TrackedDownloads
@@ -12,7 +13,20 @@ namespace NzbDrone.Core.Download.TrackedDownloads
         public TrackedDownloadState State { get; set; }
         public TrackedDownloadStatus Status { get; private set; }
         public RemoteMovie RemoteMovie { get; set; }
-        public int? MovieEditionSlotId { get; set; }
+        private MovieAcquisitionTarget _acquisitionTarget = MovieAcquisitionTarget.Unknown;
+
+        public MovieAcquisitionTarget AcquisitionTarget
+        {
+            get => _acquisitionTarget;
+            set => _acquisitionTarget = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+        public int? MovieEditionSlotId
+        {
+            get => AcquisitionTarget.EditionSlotId;
+            set => AcquisitionTarget = value.HasValue ? MovieAcquisitionTarget.ForEditionSlot(value.Value) : MovieAcquisitionTarget.Unknown;
+        }
         public TrackedDownloadStatusMessage[] StatusMessages { get; private set; }
         public DownloadProtocol Protocol { get; set; }
         public string Indexer { get; set; }

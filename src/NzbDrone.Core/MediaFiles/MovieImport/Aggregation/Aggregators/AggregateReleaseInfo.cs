@@ -34,7 +34,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Aggregation.Aggregators
             }
 
             localMovie.Release = new GrabbedReleaseInfo(grabbedHistories);
-            localMovie.MovieEditionSlotId = localMovie.Release.MovieEditionSlotId;
+            localMovie.AcquisitionTarget = localMovie.Release.AcquisitionTarget;
 
             return localMovie;
         }

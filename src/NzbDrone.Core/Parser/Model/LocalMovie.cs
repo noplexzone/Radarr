@@ -17,8 +17,8 @@ namespace NzbDrone.Core.Parser.Model
             ImportTarget = MovieFileImportTarget.Main;
         }
 
-        private int? _movieEditionSlotId;
-        private MovieFileImportTarget _importTarget;
+        private MovieAcquisitionTarget _acquisitionTarget = MovieAcquisitionTarget.Main;
+        private MovieFileImportTarget _importTarget = MovieFileImportTarget.Main;
 
         public string Path { get; set; }
         public long Size { get; set; }
@@ -42,21 +42,54 @@ namespace NzbDrone.Core.Parser.Model
             set
             {
                 _importTarget = value;
-                if (value != MovieFileImportTarget.EditionSlot)
+                _acquisitionTarget = value == MovieFileImportTarget.Main
+                    ? MovieAcquisitionTarget.Main
+                    : value == MovieFileImportTarget.EditionSlot && _acquisitionTarget.Kind == MovieAcquisitionTargetKind.EditionSlot
+                        ? _acquisitionTarget
+                        : MovieAcquisitionTarget.Unknown;
+            }
+        }
+
+        public MovieAcquisitionTarget AcquisitionTarget
+        {
+            get => _acquisitionTarget;
+            set
+            {
+                _acquisitionTarget = value ?? throw new System.ArgumentNullException(nameof(value));
+                if (value.Kind == MovieAcquisitionTargetKind.Main)
                 {
-                    _movieEditionSlotId = null;
+                    _importTarget = MovieFileImportTarget.Main;
+                }
+                else if (value.Kind == MovieAcquisitionTargetKind.EditionSlot)
+                {
+                    _importTarget = MovieFileImportTarget.EditionSlot;
+                }
+                else if (_importTarget != MovieFileImportTarget.Unassigned)
+                {
+                    _importTarget = MovieFileImportTarget.Unknown;
                 }
             }
         }
+
+        [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
         public int? MovieEditionSlotId
         {
-            get => _movieEditionSlotId;
+            get => AcquisitionTarget.EditionSlotId;
             set
             {
-                _movieEditionSlotId = value;
                 if (value.HasValue)
                 {
-                    ImportTarget = MovieFileImportTarget.EditionSlot;
+                    AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(value.Value);
+                }
+                else
+                {
+                    _acquisitionTarget = _importTarget == MovieFileImportTarget.Main
+                        ? MovieAcquisitionTarget.Main
+                        : MovieAcquisitionTarget.Unknown;
+                    if (_importTarget == MovieFileImportTarget.EditionSlot)
+                    {
+                        _importTarget = MovieFileImportTarget.Unknown;
+                    }
                 }
             }
         }

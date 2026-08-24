@@ -5,6 +5,7 @@ using NzbDrone.Core.IndexerSearch;
 using NzbDrone.Core.Messaging;
 using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Messaging.Events;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser.Model;
 
@@ -54,23 +55,33 @@ namespace NzbDrone.Core.Download
                 return;
             }
 
-            if (message.MovieEditionSlotId.HasValue)
+            if (message.AcquisitionTarget.Kind == MovieAcquisitionTargetKind.EditionSlot)
             {
-                var slot = _movieEditionSlotService.GetForMovie(message.MovieId)
-                    .Find(s => s.Id == message.MovieEditionSlotId.Value);
+                var slotId = message.AcquisitionTarget.EditionSlotId.Value;
+                var slot = _movieEditionSlotService.GetForMovie(message.MovieId).Find(s => s.Id == slotId);
                 if (slot == null)
                 {
-                    _logger.Warn("Failed download targets missing or cross-movie edition slot {0}; skipping redownload", message.MovieEditionSlotId.Value);
+                    _logger.Warn("Failed download targets missing or cross-movie edition slot {0}; skipping redownload", slotId);
                     return;
                 }
 
                 _logger.Debug("Failed download contains an edition slot, searching that edition again.");
-                _commandQueueManager.Push(new MovieEditionSearchCommand { MovieId = message.MovieId, MovieEditionSlotId = slot.Id });
+                _commandQueueManager.Push(new MovieEditionSearchCommand
+                {
+                    MovieId = message.MovieId,
+                    AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(slot.Id)
+                });
                 return;
             }
 
-            _logger.Debug("Failed download contains a movie, searching again.");
-            _commandQueueManager.Push(new MoviesSearchCommand { MovieIds = new List<int> { message.MovieId } });
+            if (message.AcquisitionTarget.Kind == MovieAcquisitionTargetKind.Main)
+            {
+                _logger.Debug("Failed download contains a main movie target, searching again.");
+                _commandQueueManager.Push(new MoviesSearchCommand { MovieIds = new List<int> { message.MovieId } });
+                return;
+            }
+
+            _logger.Warn("Failed download has no resolved acquisition target; skipping redownload");
         }
     }
 }
