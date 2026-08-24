@@ -107,48 +107,28 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
             try
             {
-                var historyItems = _historyService.FindByDownloadId(downloadItem.DownloadId)
+                var historyItems = _historyService.FindByDownloadId(downloadItem.DownloadId) ?? new List<MovieHistory>();
+                historyItems = historyItems.OrderByDescending(history => history.Date).ToList();
+                var downloadGrabs = (_downloadHistoryService.GetGrabs(downloadItem.DownloadId, downloadClient.Id) ?? new List<DownloadHistory>())
+                    .Where(history => history.DownloadClientId == downloadClient.Id && history.EventType == DownloadHistoryEventType.DownloadGrabbed)
                     .OrderByDescending(history => history.Date)
-                    .ToList();
-                var movieGrabs = historyItems
-                    .Where(history => history.EventType == MovieHistoryEventType.Grabbed)
                     .GroupBy(history => new { history.MovieId, Target = ReadHistoryTarget(history.Data) })
                     .Select(group => group.First())
                     .ToList();
 
-                if (movieGrabs.Count == 0)
+                if (downloadGrabs.Count == 0)
                 {
-                    var latestDownloadGrab = _downloadHistoryService.GetLatestGrab(downloadItem.DownloadId);
-                    var sourceHistory = historyItems.FirstOrDefault();
-                    var target = latestDownloadGrab != null
-                        ? ReadHistoryTarget(latestDownloadGrab.Data)
-                        : sourceHistory != null
-                            ? ReadHistoryTarget(sourceHistory.Data)
-                            : MovieAcquisitionTarget.Unknown;
-                    var movieId = latestDownloadGrab?.MovieId ?? sourceHistory?.MovieId ?? 0;
-                    trackedDownloads.Add(TrackLogicalDownload(downloadClient, downloadItem, movieId, target, sourceHistory, latestDownloadGrab));
+                    trackedDownloads.Add(TrackLogicalDownload(downloadClient, downloadItem, 0, MovieAcquisitionTarget.Unknown, null, null));
                 }
-                else if (movieGrabs.Count == 1)
+
+                foreach (var downloadGrab in downloadGrabs)
                 {
-                    var movieGrab = movieGrabs[0];
-                    var movieTarget = ReadHistoryTarget(movieGrab.Data);
-                    var latestDownloadGrab = _downloadHistoryService.GetLatestGrab(downloadItem.DownloadId);
-                    var target = ResolveReconstructionTarget(movieGrab, movieTarget, latestDownloadGrab, ReadHistoryTarget(latestDownloadGrab?.Data));
-                    trackedDownloads.Add(TrackLogicalDownload(downloadClient, downloadItem, movieGrab.MovieId, target, movieGrab, latestDownloadGrab));
+                    var target = ReadHistoryTarget(downloadGrab.Data);
+                    var movieGrab = historyItems.FirstOrDefault(history => history.EventType == MovieHistoryEventType.Grabbed &&
+                                                                          history.MovieId == downloadGrab.MovieId &&
+                                                                          MatchesTarget(history.Data, target));
+                    trackedDownloads.Add(TrackLogicalDownload(downloadClient, downloadItem, downloadGrab.MovieId, target, movieGrab, downloadGrab));
                 }
-                else
-                {
-                    foreach (var movieGrab in movieGrabs)
-                    {
-                        var target = ReadHistoryTarget(movieGrab.Data);
-                        var downloadGrab = _downloadHistoryService.GetLatestGrabForTarget(downloadItem.DownloadId, target);
-                        trackedDownloads.Add(TrackLogicalDownload(downloadClient, downloadItem, movieGrab.MovieId, target, movieGrab, downloadGrab));
-                    }
-                }
-            }
-            catch (MultipleMoviesFoundException e)
-            {
-                _logger.Debug(e, "Found multiple movies for " + downloadItem.Title);
             }
             catch (Exception e)
             {
@@ -187,13 +167,27 @@ namespace NzbDrone.Core.Download.TrackedDownloads
                 HasNotifiedManualInteractionRequired = existingItem?.HasNotifiedManualInteractionRequired ?? false
             };
 
-            var downloadHistory = _downloadHistoryService.GetLatestDownloadHistoryItemForTarget(downloadItem.DownloadId, target);
+            var downloadHistory = _downloadHistoryService.GetLatestDownloadHistoryItemForTarget(downloadItem.DownloadId, downloadClient.Id, movieId, target);
             if (downloadHistory != null)
             {
                 trackedDownload.State = GetStateFromHistory(downloadHistory.EventType);
             }
 
-            RehydrateRemoteMovie(trackedDownload, target, movieGrab, downloadGrab);
+            try
+            {
+                RehydrateRemoteMovie(trackedDownload, target, movieGrab, downloadGrab);
+            }
+            catch (MultipleMoviesFoundException e)
+            {
+                trackedDownload.RemoteMovie = null;
+                trackedDownload.Warn("Found multiple movies for this download; manual import is required");
+                _logger.Debug(e, "Found multiple movies for " + downloadItem.Title);
+            }
+            catch (Exception e)
+            {
+                trackedDownload.RemoteMovie = null;
+                _logger.Debug(e, "Failed to find movie for " + downloadItem.Title);
+            }
 
             if (trackedDownload.RemoteMovie == null)
             {
@@ -229,7 +223,10 @@ namespace NzbDrone.Core.Download.TrackedDownloads
                 .FirstOrDefault(history => history.EventType == MovieHistoryEventType.Grabbed &&
                                            history.MovieId == trackedDownload.MovieId &&
                                            MatchesTarget(history.Data, target));
-            var downloadGrab = _downloadHistoryService.GetLatestGrabForTarget(trackedDownload.DownloadItem.DownloadId, target);
+            var downloadGrab = _downloadHistoryService.GetLatestGrabForTarget(trackedDownload.DownloadItem.DownloadId,
+                trackedDownload.DownloadClient,
+                trackedDownload.MovieId,
+                target);
             RehydrateRemoteMovie(trackedDownload, target, movieGrab, downloadGrab);
         }
 
@@ -242,17 +239,27 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             var parsedMovieInfo = Parser.Parser.ParseMovieTitle(trackedDownload.DownloadItem.Title);
             trackedDownload.RemoteMovie = parsedMovieInfo == null ? null : _parsingService.Map(parsedMovieInfo, "", 0, null);
 
-            if ((parsedMovieInfo == null || trackedDownload.RemoteMovie?.Movie == null) && movieGrab != null)
+            if (trackedDownload.RemoteMovie?.Movie != null &&
+                trackedDownload.MovieId > 0 &&
+                trackedDownload.RemoteMovie.Movie.Id != trackedDownload.MovieId)
             {
-                parsedMovieInfo = Parser.Parser.ParseMovieTitle(movieGrab.SourceTitle);
+                trackedDownload.RemoteMovie = null;
+                return;
+            }
+
+            if ((parsedMovieInfo == null || trackedDownload.RemoteMovie?.Movie == null) && trackedDownload.MovieId > 0)
+            {
+                parsedMovieInfo = Parser.Parser.ParseMovieTitle(movieGrab?.SourceTitle ?? downloadGrab?.SourceTitle);
                 if (parsedMovieInfo != null)
                 {
-                    trackedDownload.RemoteMovie = _parsingService.Map(parsedMovieInfo, movieGrab.MovieId);
+                    trackedDownload.RemoteMovie = _parsingService.Map(parsedMovieInfo, trackedDownload.MovieId);
                 }
             }
 
             var remoteMovie = trackedDownload.RemoteMovie;
-            if (target.Kind == MovieAcquisitionTargetKind.Unknown || remoteMovie?.Movie == null)
+            if (target.Kind == MovieAcquisitionTargetKind.Unknown ||
+                remoteMovie?.Movie == null ||
+                (trackedDownload.MovieId > 0 && remoteMovie.Movie.Id != trackedDownload.MovieId))
             {
                 trackedDownload.RemoteMovie = null;
                 return;
@@ -321,16 +328,6 @@ namespace NzbDrone.Core.Download.TrackedDownloads
         private static MovieAcquisitionTarget ReadHistoryTarget(IReadOnlyDictionary<string, string> data)
         {
             return data == null ? MovieAcquisitionTarget.Unknown : MovieAcquisitionTargetSerializer.ReadLegacyHistory(data);
-        }
-
-        private static MovieAcquisitionTarget ResolveReconstructionTarget(MovieHistory movieGrab, MovieAcquisitionTarget movieTarget, DownloadHistory downloadGrab, MovieAcquisitionTarget downloadTarget)
-        {
-            if (movieGrab != null && downloadGrab != null && !movieTarget.Equals(downloadTarget))
-            {
-                return MovieAcquisitionTarget.Unknown;
-            }
-
-            return downloadGrab != null ? downloadTarget : movieGrab != null ? movieTarget : MovieAcquisitionTarget.Unknown;
         }
 
         private static bool MatchesTarget(IReadOnlyDictionary<string, string> data, MovieAcquisitionTarget target)

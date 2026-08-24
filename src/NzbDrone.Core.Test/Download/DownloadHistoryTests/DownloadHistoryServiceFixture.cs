@@ -92,6 +92,37 @@ namespace NzbDrone.Core.Test.Download.DownloadHistoryTests
         }
 
         [Test]
+        public void should_filter_lifecycle_and_grab_by_exact_logical_identity()
+        {
+            var target = MovieAcquisitionTarget.ForEditionSlot(42);
+            var exactGrab = History(DownloadHistoryEventType.DownloadGrabbed, 1, 7, target);
+            var exactFailure = History(DownloadHistoryEventType.DownloadFailed, 1, 7, target);
+            var wrongClient = History(DownloadHistoryEventType.DownloadFailed, 1, 8, target);
+            var wrongMovie = History(DownloadHistoryEventType.DownloadFailed, 2, 7, target);
+            var wrongTarget = History(DownloadHistoryEventType.DownloadFailed, 1, 7, MovieAcquisitionTarget.Main);
+            Mocker.GetMock<IDownloadHistoryRepository>()
+                .Setup(r => r.FindByDownloadId("reused"))
+                .Returns(new List<DownloadHistory> { wrongClient, wrongMovie, wrongTarget, exactFailure, exactGrab });
+
+            Subject.GetLatestDownloadHistoryItemForTarget("reused", 7, 1, target).Should().BeSameAs(exactFailure);
+            Subject.GetLatestGrabForTarget("reused", 7, 1, target).Should().BeSameAs(exactGrab);
+            Subject.GetGrabs("reused", 7).Should().Equal(exactGrab);
+        }
+
+        private static DownloadHistory History(DownloadHistoryEventType eventType, int movieId, int downloadClientId, MovieAcquisitionTarget target)
+        {
+            var history = new DownloadHistory
+            {
+                EventType = eventType,
+                MovieId = movieId,
+                DownloadClientId = downloadClientId,
+                DownloadId = "reused"
+            };
+            MovieAcquisitionTargetSerializer.Write(history.Data, target);
+            return history;
+        }
+
+        [Test]
         public void should_skip_insert_when_download_id_is_empty()
         {
             var remoteMovie = BuildRemoteMovie(movieEditionSlotId: 5);

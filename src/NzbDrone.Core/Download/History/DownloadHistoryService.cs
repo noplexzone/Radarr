@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.History;
@@ -18,10 +19,13 @@ namespace NzbDrone.Core.Download.History
         [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
         DownloadHistory GetLatestDownloadHistoryItem(string downloadId, int? movieEditionSlotId);
         DownloadHistory GetLatestDownloadHistoryItemForTarget(string downloadId, MovieAcquisitionTarget target);
+        DownloadHistory GetLatestDownloadHistoryItemForTarget(string downloadId, int downloadClientId, int movieId, MovieAcquisitionTarget target);
         DownloadHistory GetLatestGrab(string downloadId);
         [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
         DownloadHistory GetLatestGrab(string downloadId, int? movieEditionSlotId);
         DownloadHistory GetLatestGrabForTarget(string downloadId, MovieAcquisitionTarget target);
+        DownloadHistory GetLatestGrabForTarget(string downloadId, int downloadClientId, int movieId, MovieAcquisitionTarget target);
+        List<DownloadHistory> GetGrabs(string downloadId, int downloadClientId);
     }
 
     public class DownloadHistoryService : IDownloadHistoryService,
@@ -104,6 +108,16 @@ namespace NzbDrone.Core.Download.History
                                            history.EventType == DownloadHistoryEventType.DownloadFailed);
         }
 
+        public DownloadHistory GetLatestDownloadHistoryItemForTarget(string downloadId, int downloadClientId, int movieId, MovieAcquisitionTarget target)
+        {
+            return _repository.FindByDownloadId(downloadId)
+                .Where(history => MatchesIdentity(history, downloadClientId, movieId, target))
+                .FirstOrDefault(history => history.EventType == DownloadHistoryEventType.DownloadIgnored ||
+                                           history.EventType == DownloadHistoryEventType.DownloadGrabbed ||
+                                           history.EventType == DownloadHistoryEventType.DownloadImported ||
+                                           history.EventType == DownloadHistoryEventType.DownloadFailed);
+        }
+
         public DownloadHistory GetLatestGrab(string downloadId)
         {
             return _repository.FindByDownloadId(downloadId)
@@ -126,6 +140,20 @@ namespace NzbDrone.Core.Download.History
         {
             return _repository.FindByDownloadId(downloadId)
                 .FirstOrDefault(history => history.EventType == DownloadHistoryEventType.DownloadGrabbed && MatchesTarget(history, target));
+        }
+
+        public DownloadHistory GetLatestGrabForTarget(string downloadId, int downloadClientId, int movieId, MovieAcquisitionTarget target)
+        {
+            return _repository.FindByDownloadId(downloadId)
+                .FirstOrDefault(history => history.EventType == DownloadHistoryEventType.DownloadGrabbed &&
+                                           MatchesIdentity(history, downloadClientId, movieId, target));
+        }
+
+        public List<DownloadHistory> GetGrabs(string downloadId, int downloadClientId)
+        {
+            return _repository.FindByDownloadId(downloadId)
+                .Where(history => history.EventType == DownloadHistoryEventType.DownloadGrabbed && history.DownloadClientId == downloadClientId)
+                .ToList();
         }
 
         public void Handle(MovieGrabbedEvent message)
@@ -270,6 +298,13 @@ namespace NzbDrone.Core.Download.History
         private static bool MatchesTarget(DownloadHistory history, MovieAcquisitionTarget target)
         {
             return MovieAcquisitionTargetSerializer.ReadLegacyHistory(history.Data).Equals(target);
+        }
+
+        private static bool MatchesIdentity(DownloadHistory history, int downloadClientId, int movieId, MovieAcquisitionTarget target)
+        {
+            return history.DownloadClientId == downloadClientId &&
+                   history.MovieId == movieId &&
+                   MatchesTarget(history, target);
         }
 
         private static MovieAcquisitionTarget FromLegacyNullableTarget(int? movieEditionSlotId)
