@@ -4,6 +4,7 @@ using FizzWare.NBuilder;
 using Moq;
 using NUnit.Framework;
 using NzbDrone.Common.Crypto;
+using NzbDrone.Core.Download.Aggregation;
 using NzbDrone.Core.Download.Pending;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Parser;
@@ -69,6 +70,30 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
             Subject.RemovePendingQueueItems(queueId);
 
             AssertRemoved(1);
+        }
+
+        [Test]
+        public void should_resolve_queue_item_durably_and_skip_malformed_sibling_rows()
+        {
+            AddPending(id: 1, title: "Movie", year: 2001);
+            _pending.Add(new PendingRelease
+            {
+                Id = 2,
+                MovieId = _movie.Id,
+                Title = "Malformed",
+                ParsedMovieInfo = null,
+                Release = Builder<ReleaseInfo>.CreateNew().Build()
+            });
+            Mocker.GetMock<IRemoteMovieAggregationService>()
+                  .Setup(s => s.Augment(It.Is<RemoteMovie>(r => r.ParsedMovieInfo == null)))
+                  .Throws(new System.InvalidOperationException("malformed sibling"));
+            var queueId = HashConverter.GetHashInt31(string.Format("pending-{0}-movie{1}", 1, _movie.Id));
+
+            Assert.DoesNotThrow(() => Subject.RemovePendingQueueItems(queueId));
+
+            AssertRemoved(1);
+            Mocker.GetMock<IRemoteMovieAggregationService>()
+                  .Verify(s => s.Augment(It.IsAny<RemoteMovie>()), Times.Never());
         }
 
         private void AssertRemoved(params int[] ids)

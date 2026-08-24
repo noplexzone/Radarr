@@ -236,8 +236,14 @@ namespace NzbDrone.Core.Download.Pending
             var movieReleases = _repository.AllByMovieId(targetItem.MovieId);
 
             var target = GetAcquisitionTarget(targetItem);
+            if (targetItem.ParsedMovieInfo?.PrimaryMovieTitle == null)
+            {
+                _logger.Warn("Cannot remove malformed pending queue item {0} for movie {1}: parsed title is missing", targetItem.Id, targetItem.MovieId);
+                return;
+            }
+
             var releasesToRemove = movieReleases.Where(c =>
-                c.ParsedMovieInfo.PrimaryMovieTitle == targetItem.ParsedMovieInfo.PrimaryMovieTitle &&
+                c.ParsedMovieInfo?.PrimaryMovieTitle == targetItem.ParsedMovieInfo.PrimaryMovieTitle &&
                 GetAcquisitionTarget(c).Equals(target));
 
             _repository.DeleteMany(releasesToRemove.Select(c => c.Id));
@@ -502,12 +508,17 @@ namespace NzbDrone.Core.Download.Pending
 
         private PendingRelease FindPendingRelease(int queueId)
         {
-            return GetPendingReleases().First(p => queueId == GetQueueId(p, p.RemoteMovie.Movie));
+            return _repository.All().First(p => queueId == GetQueueId(p, p.MovieId));
         }
 
         private int GetQueueId(PendingRelease pendingRelease, Movie movie)
         {
-            return HashConverter.GetHashInt31(string.Format("pending-{0}-movie{1}", pendingRelease.Id, movie?.Id ?? 0));
+            return GetQueueId(pendingRelease, movie?.Id ?? 0);
+        }
+
+        private int GetQueueId(PendingRelease pendingRelease, int movieId)
+        {
+            return HashConverter.GetHashInt31(string.Format("pending-{0}-movie{1}", pendingRelease.Id, movieId));
         }
 
         private int PrioritizeDownloadProtocol(Movie movie, DownloadProtocol downloadProtocol)
