@@ -457,7 +457,8 @@ namespace NzbDrone.Core.Download.Pending
         private void RemoveRejected(List<DownloadDecision> rejected)
         {
             _logger.Debug("Removing failed releases from pending");
-            var pending = GetPendingReleases();
+            // Rejection cleanup needs only durable movie/target/release identity. Avoid augmentation so one malformed pending row cannot abort cleanup for every other row.
+            var pending = IncludeRemoteMovies(_repository.All().ToList(), augment: false);
 
             foreach (var rejectedRelease in rejected)
             {

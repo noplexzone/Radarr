@@ -5,6 +5,7 @@ using FizzWare.NBuilder;
 using Moq;
 using NUnit.Framework;
 using NzbDrone.Common.Extensions;
+using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.DecisionEngine;
 using NzbDrone.Core.Download;
 using NzbDrone.Core.Download.Pending;
@@ -133,6 +134,44 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
                                        new List<DownloadDecision>(),
                                        new List<DownloadDecision> { rejected }))));
 
+            VerifyNoDelete();
+        }
+
+        [Test]
+        public void should_not_augment_malformed_pending_rows_during_rejection_cleanup()
+        {
+            var malformed = new PendingRelease
+            {
+                Id = 99,
+                MovieId = _movie.Id,
+                Title = _release.Title,
+                Release = _release,
+                ParsedMovieInfo = null,
+                AdditionalInfo = new PendingReleaseAdditionalInfo()
+            };
+            Mocker.GetMock<IPendingReleaseRepository>()
+                  .Setup(s => s.All())
+                  .Returns(new List<PendingRelease> { malformed });
+            Mocker.GetMock<ICustomFormatCalculationService>()
+                  .Setup(s => s.ParseCustomFormat(It.Is<RemoteMovie>(r => r.ParsedMovieInfo == null), It.IsAny<long>()))
+                  .Throws(new NullReferenceException("malformed pending parse data"));
+
+            var unknownMovie = new RemoteMovie
+            {
+                Movie = null,
+                Release = _release,
+                AcquisitionTarget = MovieAcquisitionTarget.Main
+            };
+            var rejected = new DownloadDecision(unknownMovie,
+                new DownloadRejection(DownloadRejectionReason.UnknownMovie, "Unknown Movie"));
+
+            Assert.DoesNotThrow(() => Subject.Handle(new RssSyncCompleteEvent(
+                new ProcessedDecisions(new List<DownloadDecision>(),
+                                       new List<DownloadDecision>(),
+                                       new List<DownloadDecision> { rejected }))));
+
+            Mocker.GetMock<ICustomFormatCalculationService>()
+                  .Verify(s => s.ParseCustomFormat(It.IsAny<RemoteMovie>(), It.IsAny<long>()), Times.Never());
             VerifyNoDelete();
         }
 
