@@ -87,6 +87,8 @@ namespace NzbDrone.Core.Test.QueueTests
 
             Subject.GetQueue().Should().HaveCount(3);
             Subject.GetQueue().Select(q => q.Id).Should().OnlyHaveUniqueItems();
+            Subject.GetQueue().Should().OnlyContain(q => q.TrackedDownloadKey != null);
+            Subject.GetQueue().Select(q => q.TrackedDownloadKey).Should().BeEquivalentTo(new[] { original.Key, slotA.Key, slotB.Key });
         }
 
         [Test]

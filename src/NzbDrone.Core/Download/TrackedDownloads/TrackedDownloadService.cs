@@ -22,8 +22,13 @@ namespace NzbDrone.Core.Download.TrackedDownloads
     public interface ITrackedDownloadService
     {
         TrackedDownload Find(string downloadId);
+        TrackedDownload Find(TrackedDownloadKey key);
+        List<TrackedDownload> FindByDownloadClient(int downloadClientId, string downloadId);
         void StopTracking(string downloadId);
         void StopTracking(List<string> downloadIds);
+        void StopTracking(TrackedDownloadKey key);
+        void StopTracking(List<TrackedDownloadKey> keys);
+        void StopTrackingPhysicalDownload(int downloadClientId, string downloadId);
         List<TrackedDownload> TrackDownload(DownloadClientDefinition downloadClient, DownloadClientItem downloadItem);
         List<TrackedDownload> GetTrackedDownloads();
         void UpdateTrackable(List<TrackedDownload> trackedDownloads);
@@ -74,21 +79,77 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
         public TrackedDownload Find(string downloadId)
         {
-            return _cache.Values.FirstOrDefault(trackedDownload =>
-                trackedDownload.DownloadItem.DownloadId.Equals(downloadId, StringComparison.Ordinal));
+            var matches = _cache.Values
+                .Where(trackedDownload => trackedDownload.DownloadItem.DownloadId.Equals(downloadId, StringComparison.Ordinal))
+                .Take(2)
+                .ToList();
+
+            return matches.Count == 1 ? matches[0] : null;
+        }
+
+        public TrackedDownload Find(TrackedDownloadKey key)
+        {
+            return key == null || !key.IsValid ? null : _cache.Find(GetCacheKey(key));
+        }
+
+        public List<TrackedDownload> FindByDownloadClient(int downloadClientId, string downloadId)
+        {
+            return _cache.Values
+                .Where(trackedDownload => trackedDownload.DownloadClient == downloadClientId &&
+                    trackedDownload.DownloadItem.DownloadId.Equals(downloadId, StringComparison.Ordinal))
+                .ToList();
         }
 
         public void StopTracking(string downloadId)
         {
-            StopTracking(new List<string> { downloadId });
+            var trackedDownload = Find(downloadId);
+            StopTracking(trackedDownload == null ? new List<TrackedDownloadKey>() : new List<TrackedDownloadKey> { trackedDownload.Key });
         }
 
         public void StopTracking(List<string> downloadIds)
         {
-            var trackedDownloads = _cache.Values
-                .Where(trackedDownload => downloadIds.Contains(trackedDownload.DownloadItem.DownloadId))
+            var keys = downloadIds
+                .Distinct(StringComparer.Ordinal)
+                .Select(Find)
+                .Where(trackedDownload => trackedDownload != null)
+                .Select(trackedDownload => trackedDownload.Key)
                 .ToList();
 
+            StopTracking(keys);
+        }
+
+        public void StopTracking(TrackedDownloadKey key)
+        {
+            StopTracking(new List<TrackedDownloadKey> { key });
+        }
+
+        public void StopTracking(List<TrackedDownloadKey> keys)
+        {
+            var validKeys = keys
+                .Where(key => key != null && key.IsValid)
+                .Distinct()
+                .ToList();
+
+            if (validKeys.Count == 0)
+            {
+                return;
+            }
+
+            var trackedDownloads = validKeys
+                .Select(Find)
+                .Where(trackedDownload => trackedDownload != null)
+                .ToList();
+
+            StopTrackingExact(trackedDownloads);
+        }
+
+        public void StopTrackingPhysicalDownload(int downloadClientId, string downloadId)
+        {
+            StopTrackingExact(FindByDownloadClient(downloadClientId, downloadId));
+        }
+
+        private void StopTrackingExact(List<TrackedDownload> trackedDownloads)
+        {
             foreach (var trackedDownload in trackedDownloads)
             {
                 _cache.Remove(GetCacheKey(trackedDownload));
@@ -293,10 +354,12 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
         private static string GetCacheKey(TrackedDownload trackedDownload)
         {
-            return GetCacheKey(trackedDownload.DownloadClient,
-                trackedDownload.DownloadItem.DownloadId,
-                trackedDownload.MovieId,
-                trackedDownload.AcquisitionTarget);
+            return GetCacheKey(trackedDownload.Key);
+        }
+
+        private static string GetCacheKey(TrackedDownloadKey key)
+        {
+            return GetCacheKey(key.DownloadClientId, key.DownloadId, key.MovieId, key.AcquisitionTarget);
         }
 
         private static string GetCacheKey(int downloadClientId, string downloadId, int movieId, MovieAcquisitionTarget target)

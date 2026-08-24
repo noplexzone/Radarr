@@ -13,6 +13,7 @@ using NzbDrone.Core.Indexers;
 using NzbDrone.Core.Indexers.TorrentRss;
 using NzbDrone.Core.Languages;
 using NzbDrone.Core.MediaFiles;
+using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.Events;
 using NzbDrone.Core.Movies.MovieEditionSlots;
@@ -532,6 +533,163 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
             tracked.RemoteMovie.Release.IndexerId.Should().Be(701);
             Mocker.GetMock<IHistoryService>()
                 .Verify(s => s.FindByDownloadId(It.IsAny<string>()), Times.Never());
+        }
+
+        [Test]
+        public void bare_download_id_should_fail_closed_while_exact_key_resolves_selected_slot()
+        {
+            var slotA = MovieAcquisitionTarget.ForEditionSlot(42);
+            var slotB = MovieAcquisitionTarget.ForEditionSlot(43);
+            Mocker.GetMock<IDownloadHistoryService>()
+                .Setup(s => s.GetGrabs("shared-identity", 7))
+                .Returns(new List<DownloadHistory>
+                {
+                    DownloadGrab("shared-identity", 1, 7, slotA),
+                    DownloadGrab("shared-identity", 1, 7, slotB)
+                });
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetForMovie(1)).Returns(new List<MovieEditionSlot>
+            {
+                new MovieEditionSlot { Id = 42, MovieId = 1 },
+                new MovieEditionSlot { Id = 43, MovieId = 1 }
+            });
+            GivenMappedMovie(1);
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+            var tracked = Subject.TrackDownload(client, Item(client, "shared-identity"));
+
+            Subject.Find("shared-identity").Should().BeNull();
+            Subject.Find(new TrackedDownloadKey(7, "shared-identity", 1, slotA))
+                .Should().BeSameAs(tracked.Single(t => t.AcquisitionTarget.Equals(slotA)));
+            Subject.FindByDownloadClient(7, "shared-identity").Should().BeEquivalentTo(tracked);
+        }
+
+        [TestCase(null)]
+        [TestCase("")]
+        [TestCase("   ")]
+        public void malformed_exact_download_id_should_fail_closed(string downloadId)
+        {
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+            Mocker.GetMock<IDownloadHistoryService>()
+                .Setup(s => s.GetGrabs("valid-key", 7))
+                .Returns(new List<DownloadHistory> { DownloadGrab("valid-key", 1, 7, MovieAcquisitionTarget.Main) });
+            GivenMappedMovie(1);
+            var tracked = Subject.TrackDownload(client, Item(client, "valid-key")).Single();
+            var malformedKey = new TrackedDownloadKey(7, downloadId, 1, MovieAcquisitionTarget.Main);
+
+            Subject.Find(malformedKey).Should().BeNull();
+            Subject.StopTracking(malformedKey);
+
+            Subject.GetTrackedDownloads().Should().ContainSingle().Which.Should().BeSameAs(tracked);
+            Mocker.GetMock<IEventAggregator>()
+                .Verify(e => e.PublishEvent(It.IsAny<TrackedDownloadsRemovedEvent>()), Times.Never());
+        }
+
+        [Test]
+        public void null_target_exact_key_should_fail_closed()
+        {
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+            Mocker.GetMock<IDownloadHistoryService>()
+                .Setup(s => s.GetGrabs("valid-key", 7))
+                .Returns(new List<DownloadHistory> { DownloadGrab("valid-key", 1, 7, MovieAcquisitionTarget.Main) });
+            GivenMappedMovie(1);
+            var tracked = Subject.TrackDownload(client, Item(client, "valid-key")).Single();
+            var malformedKey = new TrackedDownloadKey(7, "valid-key", 1, null);
+
+            Subject.Find(malformedKey).Should().BeNull();
+            Subject.StopTracking(malformedKey);
+
+            Subject.GetTrackedDownloads().Should().ContainSingle().Which.Should().BeSameAs(tracked);
+            Mocker.GetMock<IEventAggregator>()
+                .Verify(e => e.PublishEvent(It.IsAny<TrackedDownloadsRemovedEvent>()), Times.Never());
+        }
+
+        [Test]
+        public void exact_stop_should_remove_only_selected_slot_and_publish_only_that_envelope()
+        {
+            var slotA = MovieAcquisitionTarget.ForEditionSlot(42);
+            var slotB = MovieAcquisitionTarget.ForEditionSlot(43);
+            Mocker.GetMock<IDownloadHistoryService>()
+                .Setup(s => s.GetGrabs("shared-stop", 7))
+                .Returns(new List<DownloadHistory>
+                {
+                    DownloadGrab("shared-stop", 1, 7, slotA),
+                    DownloadGrab("shared-stop", 1, 7, slotB)
+                });
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetForMovie(1)).Returns(new List<MovieEditionSlot>
+            {
+                new MovieEditionSlot { Id = 42, MovieId = 1 },
+                new MovieEditionSlot { Id = 43, MovieId = 1 }
+            });
+            GivenMappedMovie(1);
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+            var tracked = Subject.TrackDownload(client, Item(client, "shared-stop"));
+            var selected = tracked.Single(t => t.AcquisitionTarget.Equals(slotA));
+
+            Subject.StopTracking(selected.Key);
+
+            Subject.GetTrackedDownloads().Should().ContainSingle().Which.AcquisitionTarget.Should().Be(slotB);
+            Mocker.GetMock<IEventAggregator>().Verify(e => e.PublishEvent(It.Is<TrackedDownloadsRemovedEvent>(x =>
+                x.TrackedDownloads.Count == 1 && x.TrackedDownloads.Single() == selected)), Times.Once());
+        }
+
+        [Test]
+        public void bare_stop_should_preserve_single_target_behavior_but_fail_closed_for_siblings()
+        {
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+            Mocker.GetMock<IDownloadHistoryService>()
+                .Setup(s => s.GetGrabs("single-stop", 7))
+                .Returns(new List<DownloadHistory> { DownloadGrab("single-stop", 1, 7, MovieAcquisitionTarget.Main) });
+            GivenMappedMovie(1);
+            Subject.TrackDownload(client, Item(client, "single-stop"));
+
+            Subject.StopTracking("single-stop");
+
+            Subject.GetTrackedDownloads().Should().BeEmpty();
+
+            var slotA = MovieAcquisitionTarget.ForEditionSlot(42);
+            var slotB = MovieAcquisitionTarget.ForEditionSlot(43);
+            Mocker.GetMock<IDownloadHistoryService>()
+                .Setup(s => s.GetGrabs("ambiguous-stop", 7))
+                .Returns(new List<DownloadHistory>
+                {
+                    DownloadGrab("ambiguous-stop", 1, 7, slotA),
+                    DownloadGrab("ambiguous-stop", 1, 7, slotB)
+                });
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetForMovie(1)).Returns(new List<MovieEditionSlot>
+            {
+                new MovieEditionSlot { Id = 42, MovieId = 1 },
+                new MovieEditionSlot { Id = 43, MovieId = 1 }
+            });
+            Subject.TrackDownload(client, Item(client, "ambiguous-stop"));
+
+            Subject.StopTracking("ambiguous-stop");
+
+            Subject.GetTrackedDownloads().Should().HaveCount(2);
+        }
+
+        [Test]
+        public void explicitly_named_physical_group_stop_should_remove_all_siblings_for_that_client_only()
+        {
+            var slotA = MovieAcquisitionTarget.ForEditionSlot(42);
+            var slotB = MovieAcquisitionTarget.ForEditionSlot(43);
+            Mocker.GetMock<IDownloadHistoryService>()
+                .Setup(s => s.GetGrabs("physical-stop", 7))
+                .Returns(new List<DownloadHistory>
+                {
+                    DownloadGrab("physical-stop", 1, 7, slotA),
+                    DownloadGrab("physical-stop", 1, 7, slotB)
+                });
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetForMovie(1)).Returns(new List<MovieEditionSlot>
+            {
+                new MovieEditionSlot { Id = 42, MovieId = 1 },
+                new MovieEditionSlot { Id = 43, MovieId = 1 }
+            });
+            GivenMappedMovie(1);
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+            Subject.TrackDownload(client, Item(client, "physical-stop"));
+
+            Subject.StopTrackingPhysicalDownload(7, "physical-stop");
+
+            Subject.GetTrackedDownloads().Should().BeEmpty();
         }
 
         [Test]

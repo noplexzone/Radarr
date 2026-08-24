@@ -5,6 +5,11 @@ using NzbDrone.Core.Parser.Model;
 
 namespace NzbDrone.Core.Download.TrackedDownloads
 {
+    public sealed record TrackedDownloadKey(int DownloadClientId, string DownloadId, int MovieId, MovieAcquisitionTarget AcquisitionTarget)
+    {
+        public bool IsValid => !string.IsNullOrWhiteSpace(DownloadId) && AcquisitionTarget != null;
+    }
+
     public class TrackedDownload
     {
         public int DownloadClient { get; set; }
@@ -34,6 +39,7 @@ namespace NzbDrone.Core.Download.TrackedDownloads
         public DateTime? Added { get; set; }
         public bool IsTrackable { get; set; }
         public bool HasNotifiedManualInteractionRequired { get; set; }
+        public TrackedDownloadKey Key => new (DownloadClient, DownloadItem.DownloadId, MovieId, AcquisitionTarget);
 
         public TrackedDownload()
         {

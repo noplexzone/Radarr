@@ -34,6 +34,7 @@ namespace NzbDrone.Core.Queue
         public string OutputPath { get; set; }
         public string ErrorMessage { get; set; }
         public MovieAcquisitionTarget AcquisitionTarget { get; set; } = MovieAcquisitionTarget.Unknown;
+        public TrackedDownloadKey TrackedDownloadKey { get; set; }
 
         [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
         public int? MovieEditionSlotId
