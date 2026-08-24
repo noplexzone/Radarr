@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Moq;
 using NUnit.Framework;
@@ -17,6 +17,8 @@ namespace NzbDrone.Core.Test.Messaging.Events
 
         private Mock<IHandle<EventB>> _handlerB1;
         private Mock<IHandle<EventB>> _handlerB2;
+        private Mock<IHandleAsync<EventA>> _asyncHandler;
+        private Mock<IHandleAsync<IEvent>> _globalHandler;
 
         [SetUp]
         public void Setup()
@@ -25,6 +27,8 @@ namespace NzbDrone.Core.Test.Messaging.Events
             _handlerA2 = new Mock<IHandle<EventA>>();
             _handlerB1 = new Mock<IHandle<EventB>>();
             _handlerB2 = new Mock<IHandle<EventB>>();
+            _asyncHandler = new Mock<IHandleAsync<EventA>>();
+            _globalHandler = new Mock<IHandleAsync<IEvent>>();
 
             Mocker.GetMock<IServiceFactory>()
                   .Setup(c => c.BuildAll<IHandle<EventA>>())
@@ -33,6 +37,15 @@ namespace NzbDrone.Core.Test.Messaging.Events
             Mocker.GetMock<IServiceFactory>()
                   .Setup(c => c.BuildAll<IHandle<EventB>>())
                   .Returns(new List<IHandle<EventB>> { _handlerB1.Object, _handlerB2.Object });
+
+
+            Mocker.GetMock<IServiceFactory>()
+                  .Setup(c => c.BuildAll<IHandleAsync<EventA>>())
+                  .Returns(new List<IHandleAsync<EventA>> { _asyncHandler.Object });
+
+            Mocker.GetMock<IServiceFactory>()
+                  .Setup(c => c.BuildAll<IHandleAsync<IEvent>>())
+                  .Returns(new List<IHandleAsync<IEvent>> { _globalHandler.Object });
         }
 
         [Test]
@@ -58,6 +71,32 @@ namespace NzbDrone.Core.Test.Messaging.Events
 
             _handlerB1.Verify(c => c.Handle(It.IsAny<EventB>()), Times.Never());
             _handlerB2.Verify(c => c.Handle(It.IsAny<EventB>()), Times.Never());
+        }
+
+        [Test]
+        public void strict_publish_should_run_sync_async_and_global_handlers_inline()
+        {
+            var eventA = new EventA();
+
+            Subject.PublishEventStrict(eventA);
+
+            _handlerA1.Verify(c => c.Handle(eventA), Times.Once());
+            _handlerA2.Verify(c => c.Handle(eventA), Times.Once());
+            _asyncHandler.Verify(c => c.HandleAsync(eventA), Times.Once());
+            _globalHandler.Verify(c => c.HandleAsync(eventA), Times.Once());
+        }
+
+        [Test]
+        public void strict_publish_should_propagate_handler_failure_and_stop()
+        {
+            var eventA = new EventA();
+            _handlerA1.Setup(c => c.Handle(eventA)).Throws(new InvalidOperationException("strict failure"));
+
+            Assert.Throws<InvalidOperationException>(() => Subject.PublishEventStrict(eventA));
+
+            _handlerA2.Verify(c => c.Handle(eventA), Times.Never());
+            _asyncHandler.Verify(c => c.HandleAsync(eventA), Times.Never());
+            _globalHandler.Verify(c => c.HandleAsync(eventA), Times.Never());
         }
 
         [Test]

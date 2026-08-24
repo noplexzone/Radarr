@@ -5,6 +5,7 @@ using NUnit.Framework;
 using NzbDrone.Common.Disk;
 using NzbDrone.Core.Exceptions;
 using NzbDrone.Core.MediaFiles;
+using NzbDrone.Core.MediaFiles.RecoverableOperations;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Test.Framework;
 using NzbDrone.Test.Common;
@@ -84,7 +85,8 @@ namespace NzbDrone.Core.Test.MediaFiles.MediaFileDeletionService
 
             Subject.DeleteMovieFile(_movie, _movieFile);
 
-            Mocker.GetMock<IMediaFileService>().Verify(v => v.Delete(_movieFile, DeleteMediaFileReason.Manual), Times.Once());
+            Mocker.GetMock<IRecoverableMovieFileDeletionCoordinator>().Verify(v => v.DeleteMovieFile(_movie, _movieFile), Times.Once());
+            Mocker.GetMock<IMediaFileService>().Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never());
             Mocker.GetMock<IRecycleBinProvider>().Verify(v => v.DeleteFile(_movieFile.Path, It.IsAny<string>()), Times.Never());
         }
 
@@ -97,12 +99,13 @@ namespace NzbDrone.Core.Test.MediaFiles.MediaFileDeletionService
 
             Subject.DeleteMovieFile(_movie, _movieFile);
 
-            Mocker.GetMock<IMediaFileService>().Verify(v => v.Delete(_movieFile, DeleteMediaFileReason.Manual), Times.Once());
+            Mocker.GetMock<IRecoverableMovieFileDeletionCoordinator>().Verify(v => v.DeleteMovieFile(_movie, _movieFile), Times.Once());
+            Mocker.GetMock<IMediaFileService>().Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never());
             Mocker.GetMock<IRecycleBinProvider>().Verify(v => v.DeleteFile(_movieFile.Path, It.IsAny<string>()), Times.Never());
         }
 
         [Test]
-        public void should_delete_from_disk_and_db_if_movie_file_exists()
+        public void should_route_existing_file_through_recoverable_coordinator()
         {
             GivenRootFolderExists();
             GivenRootFolderHasFolders();
@@ -114,12 +117,13 @@ namespace NzbDrone.Core.Test.MediaFiles.MediaFileDeletionService
 
             Subject.DeleteMovieFile(_movie, _movieFile);
 
-            Mocker.GetMock<IRecycleBinProvider>().Verify(v => v.DeleteFile(_movieFile.Path, "Movie Title"), Times.Once());
-            Mocker.GetMock<IMediaFileService>().Verify(v => v.Delete(_movieFile, DeleteMediaFileReason.Manual), Times.Once());
+            Mocker.GetMock<IRecycleBinProvider>().Verify(v => v.DeleteFile(It.IsAny<string>(), It.IsAny<string>()), Times.Never());
+            Mocker.GetMock<IRecoverableMovieFileDeletionCoordinator>().Verify(v => v.DeleteMovieFile(_movie, _movieFile), Times.Once());
+            Mocker.GetMock<IMediaFileService>().Verify(v => v.Delete(It.IsAny<MovieFile>(), It.IsAny<DeleteMediaFileReason>()), Times.Never());
         }
 
         [Test]
-        public void should_handle_error_deleting_movie_file()
+        public void should_propagate_coordinator_failure_without_using_legacy_deletion()
         {
             GivenRootFolderExists();
             GivenRootFolderHasFolders();
@@ -129,14 +133,13 @@ namespace NzbDrone.Core.Test.MediaFiles.MediaFileDeletionService
                   .Setup(s => s.FileExists(_movieFile.Path))
                   .Returns(true);
 
-            Mocker.GetMock<IRecycleBinProvider>()
-                  .Setup(s => s.DeleteFile(_movieFile.Path, "Movie Title"))
+            Mocker.GetMock<IRecoverableMovieFileDeletionCoordinator>()
+                  .Setup(s => s.DeleteMovieFile(_movie, _movieFile))
                   .Throws(new IOException());
 
-            Assert.Throws<NzbDroneClientException>(() => Subject.DeleteMovieFile(_movie, _movieFile));
+            Assert.Throws<IOException>(() => Subject.DeleteMovieFile(_movie, _movieFile));
 
-            ExceptionVerification.ExpectedErrors(1);
-            Mocker.GetMock<IRecycleBinProvider>().Verify(v => v.DeleteFile(_movieFile.Path, "Movie Title"), Times.Once());
+            Mocker.GetMock<IRecycleBinProvider>().Verify(v => v.DeleteFile(It.IsAny<string>(), It.IsAny<string>()), Times.Never());
             Mocker.GetMock<IMediaFileService>().Verify(v => v.Delete(_movieFile, DeleteMediaFileReason.Manual), Times.Never());
         }
     }

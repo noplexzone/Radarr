@@ -6,5 +6,8 @@ namespace NzbDrone.Core.Messaging.Events
     {
         void PublishEvent<TEvent>(TEvent @event)
             where TEvent : class, IEvent;
+
+        void PublishEventStrict<TEvent>(TEvent @event)
+            where TEvent : class, IEvent;
     }
 }

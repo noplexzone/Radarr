@@ -7,6 +7,7 @@ using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Configuration;
 using NzbDrone.Core.Exceptions;
 using NzbDrone.Core.MediaFiles.Events;
+using NzbDrone.Core.MediaFiles.RecoverableOperations;
 using NzbDrone.Core.Messaging;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
@@ -25,7 +26,7 @@ namespace NzbDrone.Core.MediaFiles
     {
         private readonly IDiskProvider _diskProvider;
         private readonly IRecycleBinProvider _recycleBinProvider;
-        private readonly IMediaFileService _mediaFileService;
+        private readonly IRecoverableMovieFileDeletionCoordinator _recoverableMovieFileDeletionCoordinator;
         private readonly IMovieService _movieService;
         private readonly IConfigService _configService;
         private readonly IEventAggregator _eventAggregator;
@@ -33,7 +34,7 @@ namespace NzbDrone.Core.MediaFiles
 
         public MediaFileDeletionService(IDiskProvider diskProvider,
                                         IRecycleBinProvider recycleBinProvider,
-                                        IMediaFileService mediaFileService,
+                                        IRecoverableMovieFileDeletionCoordinator recoverableMovieFileDeletionCoordinator,
                                         IMovieService movieService,
                                         IConfigService configService,
                                         IEventAggregator eventAggregator,
@@ -41,7 +42,7 @@ namespace NzbDrone.Core.MediaFiles
         {
             _diskProvider = diskProvider;
             _recycleBinProvider = recycleBinProvider;
-            _mediaFileService = mediaFileService;
+            _recoverableMovieFileDeletionCoordinator = recoverableMovieFileDeletionCoordinator;
             _movieService = movieService;
             _configService = configService;
             _eventAggregator = eventAggregator;
@@ -65,27 +66,7 @@ namespace NzbDrone.Core.MediaFiles
                 throw new NzbDroneClientException(HttpStatusCode.Conflict, "Movie's root folder ({0}) is empty. Rescan will not update movies as a failsafe.", rootFolder);
             }
 
-            if (_diskProvider.FolderExists(movie.Path) && _diskProvider.FileExists(fullPath))
-            {
-                _logger.Info("Deleting movie file: {0}", fullPath);
-
-                var subfolder = _diskProvider.GetParentFolder(movie.Path).GetRelativePath(_diskProvider.GetParentFolder(fullPath));
-
-                try
-                {
-                    _recycleBinProvider.DeleteFile(fullPath, subfolder);
-                }
-                catch (Exception e)
-                {
-                    _logger.Error(e, "Unable to delete movie file");
-                    throw new NzbDroneClientException(HttpStatusCode.InternalServerError, "Unable to delete movie file");
-                }
-            }
-
-            // Delete the movie file from the database to clean it up even if the file was already deleted
-            _mediaFileService.Delete(movieFile, DeleteMediaFileReason.Manual);
-
-            _eventAggregator.PublishEvent(new DeleteCompletedEvent());
+            _recoverableMovieFileDeletionCoordinator.DeleteMovieFile(movie, movieFile);
         }
 
         public void HandleAsync(MoviesDeletedEvent message)

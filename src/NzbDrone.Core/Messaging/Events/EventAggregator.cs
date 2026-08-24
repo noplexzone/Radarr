@@ -124,6 +124,41 @@ namespace NzbDrone.Core.Messaging.Events
             }
         }
 
+        public void PublishEventStrict<TEvent>(TEvent @event)
+            where TEvent : class, IEvent
+        {
+            Ensure.That(@event, () => @event).IsNotNull();
+
+            var eventName = GetEventName(@event.GetType());
+            _logger.Trace("Strictly publishing {0}", eventName);
+
+            EventSubscribers<TEvent> subscribers;
+            lock (_eventSubscribers)
+            {
+                if (!_eventSubscribers.TryGetValue(eventName, out var target))
+                {
+                    _eventSubscribers[eventName] = target = new EventSubscribers<TEvent>(_serviceFactory);
+                }
+
+                subscribers = target as EventSubscribers<TEvent>;
+            }
+
+            foreach (var handler in subscribers._syncHandlers)
+            {
+                handler.Handle(@event);
+            }
+
+            foreach (var handler in subscribers._globalHandlers)
+            {
+                handler.HandleAsync(@event);
+            }
+
+            foreach (var handler in subscribers._asyncHandlers)
+            {
+                handler.HandleAsync(@event);
+            }
+        }
+
         private static string GetEventName(Type eventType)
         {
             if (!eventType.IsGenericType)
