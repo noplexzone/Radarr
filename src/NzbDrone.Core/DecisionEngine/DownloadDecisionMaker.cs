@@ -12,6 +12,7 @@ using NzbDrone.Core.DecisionEngine.Specifications.Search;
 using NzbDrone.Core.Download.Aggregation;
 using NzbDrone.Core.IndexerSearch.Definitions;
 using NzbDrone.Core.MediaFiles;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
@@ -33,6 +34,7 @@ namespace NzbDrone.Core.DecisionEngine
         private readonly ICustomFormatCalculationService _formatCalculator;
         private readonly IRemoteMovieAggregationService _aggregationService;
         private readonly IMovieEditionSlotService _editionSlotService;
+        private readonly IMovieEditionMatcher _editionMatcher;
         private readonly IMediaFileService _mediaFileService;
         private readonly IQualityProfileService _qualityProfileService;
         private readonly Logger _logger;
@@ -43,6 +45,7 @@ namespace NzbDrone.Core.DecisionEngine
                                      ICustomFormatCalculationService formatCalculator,
                                      IRemoteMovieAggregationService aggregationService,
                                      IMovieEditionSlotService editionSlotService,
+                                     IMovieEditionMatcher editionMatcher,
                                      IMediaFileService mediaFileService,
                                      IQualityProfileService qualityProfileService,
                                      Logger logger)
@@ -53,6 +56,7 @@ namespace NzbDrone.Core.DecisionEngine
             _formatCalculator = formatCalculator;
             _aggregationService = aggregationService;
             _editionSlotService = editionSlotService;
+            _editionMatcher = editionMatcher;
             _mediaFileService = mediaFileService;
             _qualityProfileService = qualityProfileService;
             _logger = logger;
@@ -103,20 +107,14 @@ namespace NzbDrone.Core.DecisionEngine
                         else
                         {
                             _aggregationService.Augment(remoteMovie);
-                            DownloadRejection rssEditionRejection = null;
+                            if (searchCriteria is MovieSearchCriteria movieSearchCriteria)
+                            {
+                                remoteMovie.AcquisitionTarget = movieSearchCriteria.AcquisitionTarget;
+                            }
 
-                            // Slot context must be available before custom-format scoring and
-                            // decision specifications evaluate the release.
-                            if (searchCriteria is MovieSearchCriteria movieSearchCriteria && movieSearchCriteria.MovieEditionSlotId.HasValue)
-                            {
-                                StampExplicitEditionSlotContext(remoteMovie, movieSearchCriteria);
-                            }
-                            else if (searchCriteria == null)
-                            {
-                                // For RSS, match a parsed edition to a monitored slot so
-                                // scoring and disk-comparison specs use the slot context.
-                                rssEditionRejection = StampRssEditionSlotContext(remoteMovie);
-                            }
+                            // Resolve edition identity and target isolation before custom-format
+                            // scoring and every downstream decision specification.
+                            var editionRejection = PrepareEditionContext(remoteMovie, searchCriteria);
 
                             remoteMovie.CustomFormats = _formatCalculator.ParseCustomFormat(remoteMovie, remoteMovie.Release.Size);
                             var effectiveQualityProfile = remoteMovie.SlotQualityProfile ??
@@ -126,10 +124,10 @@ namespace NzbDrone.Core.DecisionEngine
 
                             _logger.Trace("Custom Format Score of '{0}' [{1}] calculated for '{2}'", remoteMovie.CustomFormatScore, remoteMovie.CustomFormats?.ConcatToString(), report.Title);
 
-                            remoteMovie.DownloadAllowed = remoteMovie.Movie != null && rssEditionRejection == null;
-                            decision = rssEditionRejection == null
+                            remoteMovie.DownloadAllowed = remoteMovie.Movie != null && editionRejection == null;
+                            decision = editionRejection == null
                                 ? GetDecisionForReport(remoteMovie, searchCriteria)
-                                : new DownloadDecision(remoteMovie, rssEditionRejection);
+                                : new DownloadDecision(remoteMovie, editionRejection);
                         }
                     }
 
@@ -208,57 +206,97 @@ namespace NzbDrone.Core.DecisionEngine
             }
         }
 
-        private void StampExplicitEditionSlotContext(RemoteMovie remoteMovie, MovieSearchCriteria searchCriteria)
-        {
-            var requestedSlotId = searchCriteria.MovieEditionSlotId.Value;
-            var slot = _editionSlotService.GetForMovie(remoteMovie.Movie.Id)
-                ?.FirstOrDefault(s => s.Id == requestedSlotId && s.MovieId == remoteMovie.Movie.Id);
-
-            if (slot == null)
-            {
-                return;
-            }
-
-            StampEditionSlotContext(remoteMovie, slot, searchCriteria.OverrideQualityProfile);
-        }
-
-        private DownloadRejection StampRssEditionSlotContext(RemoteMovie remoteMovie)
+        private DownloadRejection PrepareEditionContext(RemoteMovie remoteMovie, SearchCriteriaBase searchCriteria)
         {
             var slots = _editionSlotService.GetForMovie(remoteMovie.Movie.Id) ?? new List<MovieEditionSlot>();
-            var normalizedParsedEdition = EditionNormalizer.Normalize(remoteMovie.ParsedMovieInfo?.Edition);
-            MovieEditionSlot slot;
+            var match = _editionMatcher.Match(remoteMovie, slots);
+            remoteMovie.EditionMatchResult = match;
 
-            if (!normalizedParsedEdition.IsNullOrWhiteSpace())
-            {
-                // Parsed edition identity is authoritative and must never fall through to main.
-                slot = slots.FirstOrDefault(s => MatchesParsedEditionSlot(normalizedParsedEdition, s));
-            }
-            else
-            {
-                // A configured title term is also edition-targeted, including unmonitored slots.
-                slot = slots.FirstOrDefault(s => MatchesRssEditionTitle(remoteMovie, s));
-            }
+            var target = remoteMovie.AcquisitionTarget;
+            _logger.Debug("Edition match movieId={0} targetKind={1} targetSlotId={2} candidateSlotIds=[{3}] source={4} status={5} reason={6}",
+                remoteMovie.Movie.Id,
+                target.Kind,
+                target.EditionSlotId,
+                string.Join(",", match.CandidateSlotIds),
+                match.Source,
+                match.Status,
+                match.Reason);
 
-            if (slot == null)
+            // RSS and release-push have no preselected slot target. A unique deterministic
+            // match establishes the exact slot target; absent evidence remains ordinary Main.
+            if (searchCriteria == null)
             {
-                if (normalizedParsedEdition.IsNullOrWhiteSpace())
+                if (match.Status == EditionMatchStatus.NoEditionEvidence)
                 {
                     return null;
                 }
 
-                return new DownloadRejection(DownloadRejectionReason.WrongEdition,
-                    $"Parsed release edition is not configured for this movie: {remoteMovie.ParsedMovieInfo.Edition}");
+                if (match.Status != EditionMatchStatus.UniqueSlot)
+                {
+                    return RejectUnsafeEditionMatch(match);
+                }
+
+                if (!match.SelectedSlot.Monitored)
+                {
+                    return new DownloadRejection(DownloadRejectionReason.WrongEdition,
+                        $"Release matches unmonitored edition slot: {match.SelectedSlot.EditionName}");
+                }
+
+                remoteMovie.AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(match.SelectedSlot.Id);
+                StampEditionSlotContext(remoteMovie, match.SelectedSlot);
+                return null;
             }
 
-            if (!slot.Monitored)
+            if (target.Kind == MovieAcquisitionTargetKind.Main)
+            {
+                if (match.Status == EditionMatchStatus.NoEditionEvidence)
+                {
+                    return null;
+                }
+
+                if (match.Status == EditionMatchStatus.UniqueSlot)
+                {
+                    return new DownloadRejection(DownloadRejectionReason.WrongEdition,
+                        $"Release matches configured edition '{match.SelectedSlot.EditionName}' (slot {match.SelectedSlot.Id}), not Main");
+                }
+
+                return RejectUnsafeEditionMatch(match);
+            }
+
+            if (target.Kind != MovieAcquisitionTargetKind.EditionSlot || !target.EditionSlotId.HasValue)
             {
                 return new DownloadRejection(DownloadRejectionReason.WrongEdition,
-                    $"Release matches unmonitored edition slot: {slot.EditionName}");
+                    "Release acquisition target is unknown and cannot be matched safely");
             }
 
-            _logger.Debug("RSS release '{0}' matched edition slot '{1}' (id={2})", remoteMovie.Release.Title, slot.EditionName, slot.Id);
-            StampEditionSlotContext(remoteMovie, slot);
+            if (match.Status != EditionMatchStatus.UniqueSlot)
+            {
+                return RejectUnsafeEditionMatch(match);
+            }
+
+            if (match.SelectedSlot.Id != target.EditionSlotId.Value)
+            {
+                return new DownloadRejection(DownloadRejectionReason.WrongEdition,
+                    $"Edition target mismatch: release matches slot {match.SelectedSlot.Id}, but slot {target.EditionSlotId.Value} was requested");
+            }
+
+            StampEditionSlotContext(remoteMovie, match.SelectedSlot,
+                (searchCriteria as MovieSearchCriteria)?.OverrideQualityProfile);
             return null;
+        }
+
+        private static DownloadRejection RejectUnsafeEditionMatch(EditionMatchResult match)
+        {
+            var message = match.Status switch
+            {
+                EditionMatchStatus.Ambiguous => $"Release edition evidence matches multiple configured edition slots ({string.Join(", ", match.CandidateSlotIds)}): {match.Reason}",
+                EditionMatchStatus.UnknownEdition => match.Reason,
+                EditionMatchStatus.Invalid => $"Release edition could not be mapped safely: {match.Reason}",
+                EditionMatchStatus.NoEditionEvidence => "Release edition could not be mapped safely to the requested edition slot",
+                _ => match.Reason
+            };
+
+            return new DownloadRejection(DownloadRejectionReason.WrongEdition, message);
         }
 
         private void StampEditionSlotContext(RemoteMovie remoteMovie, MovieEditionSlot slot, QualityProfile overrideQualityProfile = null)
@@ -277,28 +315,6 @@ namespace NzbDrone.Core.DecisionEngine
             remoteMovie.SlotQualityProfile ??= remoteMovie.Movie.QualityProfile;
             remoteMovie.SlotMovieFile = _mediaFileService.GetFilesByMovie(remoteMovie.Movie.Id)
                 .SingleOrDefault(f => f.MovieEditionSlotId == slot.Id);
-        }
-
-        private static bool MatchesParsedEditionSlot(string normalizedParsedEdition, MovieEditionSlot slot)
-        {
-            var normalizedEditionName = EditionNormalizer.Normalize(slot.EditionName);
-            var normalizedSearchTerm = EditionNormalizer.Normalize(slot.SearchTerm);
-
-            return normalizedParsedEdition == normalizedEditionName ||
-                   normalizedParsedEdition == normalizedSearchTerm ||
-                   (slot.Aliases ?? new List<string>()).Any(alias => normalizedParsedEdition == EditionNormalizer.Normalize(alias));
-        }
-
-        private static bool MatchesRssEditionTitle(RemoteMovie remoteMovie, MovieEditionSlot slot)
-        {
-            return (!slot.EditionName.IsNullOrWhiteSpace() && TitleContainsExactEditionTerm(remoteMovie, slot.EditionName)) ||
-                   (!slot.SearchTerm.IsNullOrWhiteSpace() && TitleContainsExactEditionTerm(remoteMovie, slot.SearchTerm)) ||
-                   (slot.Aliases ?? new List<string>()).Any(alias => TitleContainsExactEditionTerm(remoteMovie, alias));
-        }
-
-        private static bool TitleContainsExactEditionTerm(RemoteMovie remoteMovie, string editionTerm)
-        {
-            return MovieEditionSpecification.TitleContainsEditionTerm(remoteMovie, editionTerm);
         }
 
         private DownloadDecision GetDecisionForReport(RemoteMovie remoteMovie, SearchCriteriaBase searchCriteria = null)

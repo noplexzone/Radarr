@@ -1,8 +1,11 @@
+using System.Collections.Generic;
 using FluentAssertions;
 using NUnit.Framework;
 using NzbDrone.Core.DecisionEngine;
 using NzbDrone.Core.DecisionEngine.Specifications.Search;
 using NzbDrone.Core.IndexerSearch.Definitions;
+using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Test.Common;
 
@@ -162,6 +165,56 @@ namespace NzbDrone.Core.Test.DecisionEngineTests.Search
             remote.ParsedMovieInfo.ReleaseGroup = "IMAX";
 
             Subject.IsSatisfiedBy(remote, EditionCriteria("IMAX")).Accepted.Should().BeFalse();
+        }
+
+        [Test]
+        public void structured_unique_slot_match_should_reject_explicit_main_target()
+        {
+            var slot = new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Director's Cut" };
+            var remote = BuildRemote(parsedEdition: "Director's Cut");
+            remote.EditionMatchResult = EditionMatchResult.Unique(EditionMatchSource.ParsedMetadata,
+                new[] { slot }, slot, slot.EditionName, EditionIdentityType.CanonicalName, "unique");
+
+            var result = Subject.IsSatisfiedBy(remote,
+                new MovieSearchCriteria { AcquisitionTarget = MovieAcquisitionTarget.Main });
+
+            result.Accepted.Should().BeFalse();
+            result.Reason.Should().Be(DownloadRejectionReason.WrongEdition);
+            result.Message.Should().Contain("not Main");
+        }
+
+        [Test]
+        public void structured_unique_slot_match_should_accept_only_the_same_immutable_slot_target()
+        {
+            var slot = new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Director's Cut" };
+            var remote = BuildRemote(parsedEdition: "Director's Cut");
+            remote.EditionMatchResult = EditionMatchResult.Unique(EditionMatchSource.ParsedMetadata,
+                new[] { slot }, slot, slot.EditionName, EditionIdentityType.CanonicalName, "unique");
+
+            Subject.IsSatisfiedBy(remote,
+                new MovieSearchCriteria { AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(42) })
+                .Accepted.Should().BeTrue();
+
+            var mismatch = Subject.IsSatisfiedBy(remote,
+                new MovieSearchCriteria { AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(41) });
+            mismatch.Accepted.Should().BeFalse();
+            mismatch.Message.ToLowerInvariant().Should().Contain("target mismatch");
+        }
+
+        [Test]
+        public void structured_ambiguous_match_should_fail_closed_for_explicit_target()
+        {
+            var first = new MovieEditionSlot { Id = 41, MovieId = 7, EditionName = "Director's Cut" };
+            var second = new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Definitive Cut" };
+            var remote = BuildRemote(parsedEdition: "DC");
+            remote.EditionMatchResult = EditionMatchResult.Ambiguous(EditionMatchSource.ParsedMetadata,
+                new List<MovieEditionSlot> { second, first }, "identity maps to multiple slots");
+
+            var result = Subject.IsSatisfiedBy(remote,
+                new MovieSearchCriteria { AcquisitionTarget = MovieAcquisitionTarget.Main });
+
+            result.Accepted.Should().BeFalse();
+            result.Message.ToLowerInvariant().Should().Contain("multiple");
         }
 
         [TestCase("IMAX", "IMAX")]

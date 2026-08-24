@@ -5,11 +5,9 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
 {
     public static class EditionNormalizer
     {
-        // Strip separators/punctuation so "Director's Cut", `Directors.Cut`, and
-        // `"Directors Cut"` all collapse to the same token for comparison.
-        // Double-quotes are included so user-supplied values with surrounding
-        // quotes don't create false mismatches at the decision engine.
-        private static readonly Regex NormalizeRegex = new Regex(@"[\s\-_.'""]+", RegexOptions.Compiled);
+        // Strip Unicode punctuation, separators, and symbols so apostrophe and release-style
+        // punctuation variants collapse to the same deterministic identity.
+        private static readonly Regex NormalizeRegex = new Regex(@"[\p{P}\p{Z}\p{S}\s_]+", RegexOptions.Compiled);
 
         public static string Normalize(string value)
         {

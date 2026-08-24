@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using NLog;
 using NzbDrone.Core.IndexerSearch.Definitions;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser.Model;
 
@@ -22,7 +23,17 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.Search
 
         public DownloadSpecDecision IsSatisfiedBy(RemoteMovie subject, SearchCriteriaBase searchCriteria)
         {
-            if (searchCriteria is not MovieSearchCriteria movieCriteria || movieCriteria.MovieEditionSlotId is null)
+            if (searchCriteria is not MovieSearchCriteria movieCriteria)
+            {
+                return DownloadSpecDecision.Accept();
+            }
+
+            if (subject.EditionMatchResult != null)
+            {
+                return EvaluateStructuredMatch(subject.EditionMatchResult, movieCriteria.AcquisitionTarget);
+            }
+
+            if (movieCriteria.MovieEditionSlotId is null)
             {
                 return DownloadSpecDecision.Accept();
             }
@@ -63,6 +74,63 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.Search
             _logger.Debug("Release edition does not match requested edition: wanted '{0}'", movieCriteria.EditionSearchTerm);
             return DownloadSpecDecision.Reject(DownloadRejectionReason.WrongEdition,
                 $"Release edition does not match requested edition: wanted {movieCriteria.EditionSearchTerm}");
+        }
+
+        private DownloadSpecDecision EvaluateStructuredMatch(EditionMatchResult match, MovieAcquisitionTarget target)
+        {
+            if (target.Kind == MovieAcquisitionTargetKind.Main)
+            {
+                if (match.Status == EditionMatchStatus.NoEditionEvidence)
+                {
+                    return DownloadSpecDecision.Accept();
+                }
+
+                if (match.Status == EditionMatchStatus.UniqueSlot)
+                {
+                    return DownloadSpecDecision.Reject(DownloadRejectionReason.WrongEdition,
+                        $"Release matches configured edition '{match.SelectedSlot.EditionName}' (slot {match.SelectedSlot.Id}), not Main");
+                }
+
+                return RejectUnsafeStructuredMatch(match);
+            }
+
+            if (target.Kind != MovieAcquisitionTargetKind.EditionSlot || !target.EditionSlotId.HasValue)
+            {
+                return DownloadSpecDecision.Reject(DownloadRejectionReason.WrongEdition,
+                    "Release acquisition target is unknown and cannot be matched safely");
+            }
+
+            if (match.Status != EditionMatchStatus.UniqueSlot)
+            {
+                return RejectUnsafeStructuredMatch(match);
+            }
+
+            if (match.SelectedSlot.Id != target.EditionSlotId.Value)
+            {
+                return DownloadSpecDecision.Reject(DownloadRejectionReason.WrongEdition,
+                    $"Edition target mismatch: release matches slot {match.SelectedSlot.Id}, but slot {target.EditionSlotId.Value} was requested");
+            }
+
+            return DownloadSpecDecision.Accept();
+        }
+
+        private DownloadSpecDecision RejectUnsafeStructuredMatch(EditionMatchResult match)
+        {
+            var message = match.Status switch
+            {
+                EditionMatchStatus.Ambiguous => $"Release edition evidence matches multiple configured edition slots ({string.Join(", ", match.CandidateSlotIds)}): {match.Reason}",
+                EditionMatchStatus.UnknownEdition => match.Reason,
+                EditionMatchStatus.Invalid => $"Release edition could not be mapped safely: {match.Reason}",
+                EditionMatchStatus.NoEditionEvidence => "Release edition could not be mapped safely to the requested edition slot",
+                _ => match.Reason
+            };
+
+            _logger.Debug("Edition target rejected: target-independent status={0} source={1} candidateSlotIds=[{2}] reason={3}",
+                match.Status,
+                match.Source,
+                string.Join(",", match.CandidateSlotIds),
+                message);
+            return DownloadSpecDecision.Reject(DownloadRejectionReason.WrongEdition, message);
         }
 
         public static bool TitleContainsEditionTerm(RemoteMovie subject, string editionTerm)

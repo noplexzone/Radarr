@@ -4,6 +4,7 @@ using NzbDrone.Core.Download.Clients;
 using NzbDrone.Core.Languages;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Profiles.Qualities;
 
 namespace NzbDrone.Core.Parser.Model
@@ -43,6 +44,7 @@ namespace NzbDrone.Core.Parser.Model
         public MovieFile SlotMovieFile { get; set; }
         public QualityProfile SlotQualityProfile { get; set; }
         public int? SlotMinimumCustomFormatScore { get; set; }
+        public EditionMatchResult EditionMatchResult { get; set; }
 
         public RemoteMovie()
         {

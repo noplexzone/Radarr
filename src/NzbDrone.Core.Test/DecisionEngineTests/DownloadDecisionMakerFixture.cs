@@ -44,13 +44,13 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
             _fail2 = new Mock<IDownloadDecisionEngineSpecification>();
             _fail3 = new Mock<IDownloadDecisionEngineSpecification>();
 
-            _pass1.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), null)).Returns(DownloadSpecDecision.Accept);
-            _pass2.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), null)).Returns(DownloadSpecDecision.Accept);
-            _pass3.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), null)).Returns(DownloadSpecDecision.Accept);
+            _pass1.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), It.IsAny<SearchCriteriaBase>())).Returns(DownloadSpecDecision.Accept);
+            _pass2.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), It.IsAny<SearchCriteriaBase>())).Returns(DownloadSpecDecision.Accept);
+            _pass3.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), It.IsAny<SearchCriteriaBase>())).Returns(DownloadSpecDecision.Accept);
 
-            _fail1.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), null)).Returns(DownloadSpecDecision.Reject(DownloadRejectionReason.Unknown, "fail1"));
-            _fail2.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), null)).Returns(DownloadSpecDecision.Reject(DownloadRejectionReason.Unknown, "fail2"));
-            _fail3.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), null)).Returns(DownloadSpecDecision.Reject(DownloadRejectionReason.Unknown, "fail3"));
+            _fail1.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), It.IsAny<SearchCriteriaBase>())).Returns(DownloadSpecDecision.Reject(DownloadRejectionReason.Unknown, "fail1"));
+            _fail2.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), It.IsAny<SearchCriteriaBase>())).Returns(DownloadSpecDecision.Reject(DownloadRejectionReason.Unknown, "fail2"));
+            _fail3.Setup(c => c.IsSatisfiedBy(It.IsAny<RemoteMovie>(), It.IsAny<SearchCriteriaBase>())).Returns(DownloadSpecDecision.Reject(DownloadRejectionReason.Unknown, "fail3"));
 
             _reports = new List<ReleaseInfo> { new ReleaseInfo { Title = "Movie.2018.1080p.AMZN.WEB-DL.DD5.1.H.264-NTG" } };
             _remoteEpisode = new RemoteMovie
@@ -65,6 +65,8 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
             Mocker.GetMock<IMediaFileService>()
                 .Setup(s => s.GetFilesByMovie(It.IsAny<int>()))
                 .Returns(new List<MovieFile>());
+
+            Mocker.SetConstant<IMovieEditionMatcher>(new MovieEditionMatcher());
         }
 
         private void GivenSpecifications(params Mock<IDownloadDecisionEngineSpecification>[] mocks)
@@ -173,6 +175,7 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
             var slotProfile = new QualityProfile { Id = 12, Name = "Slot Profile" };
             var criteria = new MovieSearchCriteria { MovieEditionSlotId = 42 };
             var specification = new Mock<IDownloadDecisionEngineSpecification>();
+            _remoteEpisode.ParsedMovieInfo.Edition = "IMAX";
 
             Mocker.GetMock<IMovieEditionSlotService>()
                 .Setup(s => s.GetForMovie(_remoteEpisode.Movie.Id))
@@ -598,6 +601,123 @@ namespace NzbDrone.Core.Test.DecisionEngineTests
                 };
 
             Subject.GetRssDecision(_reports).Should().HaveCount(1);
+        }
+
+        [Test]
+        public void automatic_main_search_should_reject_release_uniquely_matching_configured_edition()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.Edition = "Director's Cut";
+            GivenEditionSlots(new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Director's Cut", Monitored = true });
+
+            var result = Subject.GetSearchDecision(_reports, new MovieSearchCriteria { AcquisitionTarget = MovieAcquisitionTarget.Main }).Single();
+
+            result.Approved.Should().BeFalse();
+            result.Rejections.Single().Message.Should().Contain("not Main");
+            result.RemoteMovie.EditionMatchResult.Status.Should().Be(EditionMatchStatus.UniqueSlot);
+            result.RemoteMovie.ReleaseSource.Should().Be(ReleaseSourceType.Search);
+        }
+
+        [Test]
+        public void interactive_main_search_should_reject_ambiguous_edition_evidence()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.Edition = "DC";
+            GivenEditionSlots(
+                new MovieEditionSlot { Id = 41, MovieId = 7, EditionName = "Director's Cut", Aliases = new List<string> { "DC" }, Monitored = true },
+                new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Definitive Cut", Aliases = new List<string> { "DC" }, Monitored = true });
+
+            var criteria = new MovieSearchCriteria { AcquisitionTarget = MovieAcquisitionTarget.Main, InteractiveSearch = true };
+            var result = Subject.GetSearchDecision(_reports, criteria).Single();
+
+            result.Approved.Should().BeFalse();
+            result.Rejections.Single().Message.ToLowerInvariant().Should().Contain("multiple");
+            result.RemoteMovie.EditionMatchResult.CandidateSlotIds.Should().Equal(41, 42);
+            result.RemoteMovie.ReleaseSource.Should().Be(ReleaseSourceType.InteractiveSearch);
+        }
+
+        [Test]
+        public void exact_slot_search_should_accept_only_unique_match_for_same_immutable_slot_id()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.Edition = "Director's Cut";
+            GivenEditionSlots(
+                new MovieEditionSlot { Id = 41, MovieId = 7, EditionName = "Theatrical", Monitored = true },
+                new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Director's Cut", Monitored = true });
+
+            var criteria = new MovieSearchCriteria { AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(42) };
+            var result = Subject.GetSearchDecision(_reports, criteria).Single();
+
+            result.Approved.Should().BeTrue();
+            result.RemoteMovie.AcquisitionTarget.Should().Be(MovieAcquisitionTarget.ForEditionSlot(42));
+            result.RemoteMovie.SlotContextStamped.Should().BeTrue();
+        }
+
+        [Test]
+        public void explicit_slot_search_should_reject_unique_match_for_different_slot_with_target_mismatch_reason()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.Edition = "Theatrical";
+            GivenEditionSlots(
+                new MovieEditionSlot { Id = 41, MovieId = 7, EditionName = "Theatrical", Monitored = true },
+                new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Director's Cut", Monitored = true });
+
+            var result = Subject.GetSearchDecision(_reports,
+                new MovieSearchCriteria { AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(42) }).Single();
+
+            result.Approved.Should().BeFalse();
+            result.Rejections.Single().Message.ToLowerInvariant().Should().Contain("target mismatch");
+        }
+
+        [Test]
+        public void rss_should_reject_ambiguous_title_evidence_without_order_winner()
+        {
+            GivenSpecifications(_pass1);
+            _reports[0].Title = "Movie.2018.DC.1080p.BluRay";
+            GivenEditionSlots(
+                new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Definitive Cut", Aliases = new List<string> { "DC" }, Monitored = true },
+                new MovieEditionSlot { Id = 41, MovieId = 7, EditionName = "Director's Cut", Aliases = new List<string> { "DC" }, Monitored = true });
+
+            var result = Subject.GetRssDecision(_reports).Single();
+
+            result.Approved.Should().BeFalse();
+            result.RemoteMovie.EditionMatchResult.Status.Should().Be(EditionMatchStatus.Ambiguous);
+            result.Rejections.Single().Message.ToLowerInvariant().Should().Contain("multiple");
+            result.RemoteMovie.ReleaseSource.Should().Be(ReleaseSourceType.Rss);
+        }
+
+        [Test]
+        public void release_push_should_fail_closed_for_unknown_parsed_edition()
+        {
+            GivenSpecifications(_pass1);
+            _remoteEpisode.ParsedMovieInfo.Edition = "Producer's Cut";
+            GivenEditionSlots(new MovieEditionSlot { Id = 42, MovieId = 7, EditionName = "Director's Cut", Monitored = true });
+
+            var result = Subject.GetRssDecision(_reports, true).Single();
+
+            result.Approved.Should().BeFalse();
+            result.Rejections.Single().Message.Should().Contain("could not be mapped safely");
+            result.RemoteMovie.ReleaseSource.Should().Be(ReleaseSourceType.ReleasePush);
+        }
+
+        [Test]
+        public void main_search_with_no_slots_and_no_edition_evidence_should_preserve_legacy_approval()
+        {
+            GivenSpecifications(_pass1);
+            GivenEditionSlots();
+
+            var result = Subject.GetSearchDecision(_reports,
+                new MovieSearchCriteria { AcquisitionTarget = MovieAcquisitionTarget.Main }).Single();
+
+            result.Approved.Should().BeTrue();
+            result.RemoteMovie.EditionMatchResult.Status.Should().Be(EditionMatchStatus.NoEditionEvidence);
+        }
+
+        private void GivenEditionSlots(params MovieEditionSlot[] slots)
+        {
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(service => service.GetForMovie(_remoteEpisode.Movie.Id))
+                .Returns(slots.ToList());
         }
     }
 }
