@@ -25,7 +25,7 @@ namespace NzbDrone.Core.Download.TrackedDownloads
         TrackedDownload Find(string downloadId);
         void StopTracking(string downloadId);
         void StopTracking(List<string> downloadIds);
-        TrackedDownload TrackDownload(DownloadClientDefinition downloadClient, DownloadClientItem downloadItem);
+        List<TrackedDownload> TrackDownload(DownloadClientDefinition downloadClient, DownloadClientItem downloadItem);
         List<TrackedDownload> GetTrackedDownloads();
         void UpdateTrackable(List<TrackedDownload> trackedDownloads);
     }
@@ -78,43 +78,101 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
         public TrackedDownload Find(string downloadId)
         {
-            return _cache.Find(downloadId);
+            return _cache.Values.FirstOrDefault(trackedDownload =>
+                trackedDownload.DownloadItem.DownloadId.Equals(downloadId, StringComparison.Ordinal));
         }
 
         public void StopTracking(string downloadId)
         {
-            var trackedDownload = _cache.Find(downloadId);
-
-            _cache.Remove(downloadId);
-            _eventAggregator.PublishEvent(new TrackedDownloadsRemovedEvent(new List<TrackedDownload> { trackedDownload }));
+            StopTracking(new List<string> { downloadId });
         }
 
         public void StopTracking(List<string> downloadIds)
         {
-            var trackedDownloads = new List<TrackedDownload>();
+            var trackedDownloads = _cache.Values
+                .Where(trackedDownload => downloadIds.Contains(trackedDownload.DownloadItem.DownloadId))
+                .ToList();
 
-            foreach (var downloadId in downloadIds)
+            foreach (var trackedDownload in trackedDownloads)
             {
-                var trackedDownload = _cache.Find(downloadId);
-
-                _cache.Remove(downloadId);
-                trackedDownloads.Add(trackedDownload);
+                _cache.Remove(GetCacheKey(trackedDownload));
             }
 
             _eventAggregator.PublishEvent(new TrackedDownloadsRemovedEvent(trackedDownloads));
         }
 
-        public TrackedDownload TrackDownload(DownloadClientDefinition downloadClient, DownloadClientItem downloadItem)
+        public List<TrackedDownload> TrackDownload(DownloadClientDefinition downloadClient, DownloadClientItem downloadItem)
         {
-            var existingItem = Find(downloadItem.DownloadId);
+            var trackedDownloads = new List<TrackedDownload>();
+
+            try
+            {
+                var historyItems = _historyService.FindByDownloadId(downloadItem.DownloadId)
+                    .OrderByDescending(history => history.Date)
+                    .ToList();
+                var movieGrabs = historyItems
+                    .Where(history => history.EventType == MovieHistoryEventType.Grabbed)
+                    .GroupBy(history => new { history.MovieId, Target = ReadHistoryTarget(history.Data) })
+                    .Select(group => group.First())
+                    .ToList();
+
+                if (movieGrabs.Count == 0)
+                {
+                    var latestDownloadGrab = _downloadHistoryService.GetLatestGrab(downloadItem.DownloadId);
+                    var sourceHistory = historyItems.FirstOrDefault();
+                    var target = latestDownloadGrab != null
+                        ? ReadHistoryTarget(latestDownloadGrab.Data)
+                        : sourceHistory != null
+                            ? ReadHistoryTarget(sourceHistory.Data)
+                            : MovieAcquisitionTarget.Unknown;
+                    var movieId = latestDownloadGrab?.MovieId ?? sourceHistory?.MovieId ?? 0;
+                    trackedDownloads.Add(TrackLogicalDownload(downloadClient, downloadItem, movieId, target, sourceHistory, latestDownloadGrab));
+                }
+                else if (movieGrabs.Count == 1)
+                {
+                    var movieGrab = movieGrabs[0];
+                    var movieTarget = ReadHistoryTarget(movieGrab.Data);
+                    var latestDownloadGrab = _downloadHistoryService.GetLatestGrab(downloadItem.DownloadId);
+                    var target = ResolveReconstructionTarget(movieGrab, movieTarget, latestDownloadGrab, ReadHistoryTarget(latestDownloadGrab?.Data));
+                    trackedDownloads.Add(TrackLogicalDownload(downloadClient, downloadItem, movieGrab.MovieId, target, movieGrab, latestDownloadGrab));
+                }
+                else
+                {
+                    foreach (var movieGrab in movieGrabs)
+                    {
+                        var target = ReadHistoryTarget(movieGrab.Data);
+                        var downloadGrab = _downloadHistoryService.GetLatestGrabForTarget(downloadItem.DownloadId, target);
+                        trackedDownloads.Add(TrackLogicalDownload(downloadClient, downloadItem, movieGrab.MovieId, target, movieGrab, downloadGrab));
+                    }
+                }
+            }
+            catch (MultipleMoviesFoundException e)
+            {
+                _logger.Debug(e, "Found multiple movies for " + downloadItem.Title);
+            }
+            catch (Exception e)
+            {
+                _logger.Debug(e, "Failed to find movie for " + downloadItem.Title);
+            }
+
+            return trackedDownloads.Where(trackedDownload => trackedDownload != null).ToList();
+        }
+
+        private TrackedDownload TrackLogicalDownload(DownloadClientDefinition downloadClient,
+                                                     DownloadClientItem downloadItem,
+                                                     int movieId,
+                                                     MovieAcquisitionTarget target,
+                                                     MovieHistory movieGrab,
+                                                     DownloadHistory downloadGrab)
+        {
+            var cacheKey = GetCacheKey(downloadClient.Id, downloadItem.DownloadId, movieId, target);
+            var existingItem = _cache.Find(cacheKey);
 
             if (existingItem != null && existingItem.State != TrackedDownloadState.Downloading)
             {
                 LogItemChange(existingItem, existingItem.DownloadItem, downloadItem);
-
                 existingItem.DownloadItem = downloadItem;
                 existingItem.IsTrackable = true;
-
                 return existingItem;
             }
 
@@ -122,60 +180,28 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             {
                 DownloadClient = downloadClient.Id,
                 DownloadItem = downloadItem,
+                MovieId = movieId,
+                AcquisitionTarget = target,
                 Protocol = downloadClient.Protocol,
                 IsTrackable = true,
                 HasNotifiedManualInteractionRequired = existingItem?.HasNotifiedManualInteractionRequired ?? false
             };
 
-            try
+            var downloadHistory = _downloadHistoryService.GetLatestDownloadHistoryItemForTarget(downloadItem.DownloadId, target);
+            if (downloadHistory != null)
             {
-                var historyItems = _historyService.FindByDownloadId(downloadItem.DownloadId)
-                    .OrderByDescending(h => h.Date)
-                    .ToList();
-                var latestMovieGrab = historyItems.FirstOrDefault(h => h.EventType == MovieHistoryEventType.Grabbed);
-                var latestDownloadGrab = _downloadHistoryService.GetLatestGrab(downloadItem.DownloadId);
-                var movieGrabTarget = ReadHistoryTarget(latestMovieGrab?.Data);
-                var downloadGrabTarget = ReadHistoryTarget(latestDownloadGrab?.Data);
-                var target = ResolveReconstructionTarget(latestMovieGrab, movieGrabTarget, latestDownloadGrab, downloadGrabTarget);
-                if (target.Kind == MovieAcquisitionTargetKind.Unknown && latestMovieGrab == null && latestDownloadGrab == null && historyItems.Any())
-                {
-                    // Pre-target histories represented ordinary Main implicitly. Keep that
-                    // compatibility isolated to durable legacy history reconstruction.
-                    target = ReadHistoryTarget(historyItems.First().Data);
-                }
-
-                trackedDownload.AcquisitionTarget = target;
-
-                var downloadHistory = _downloadHistoryService.GetLatestDownloadHistoryItemForTarget(downloadItem.DownloadId, target);
-                if (downloadHistory != null)
-                {
-                    trackedDownload.State = GetStateFromHistory(downloadHistory.EventType);
-                }
-
-                var movieGrab = historyItems.FirstOrDefault(h => h.EventType == MovieHistoryEventType.Grabbed && MatchesTarget(h.Data, target));
-                var downloadGrab = _downloadHistoryService.GetLatestGrabForTarget(downloadItem.DownloadId, target);
-                RehydrateRemoteMovie(trackedDownload, target, historyItems, movieGrab, downloadGrab);
-
-                if (trackedDownload.RemoteMovie == null)
-                {
-                    _logger.Trace("No Movie found for download '{0}'", trackedDownload.DownloadItem.Title);
-                }
+                trackedDownload.State = GetStateFromHistory(downloadHistory.EventType);
             }
-            catch (MultipleMoviesFoundException e)
-            {
-                _logger.Debug(e, "Found multiple movies for " + downloadItem.Title);
 
-                trackedDownload.Warn("Unable to import automatically, found multiple movies: {0}", string.Join(", ", e.Movies));
-            }
-            catch (Exception e)
+            RehydrateRemoteMovie(trackedDownload, target, movieGrab, downloadGrab);
+
+            if (trackedDownload.RemoteMovie == null)
             {
-                _logger.Debug(e, "Failed to find movie for " + downloadItem.Title);
-                return null;
+                _logger.Trace("No Movie found for download '{0}'", trackedDownload.DownloadItem.Title);
             }
 
             LogItemChange(trackedDownload, existingItem?.DownloadItem, trackedDownload.DownloadItem);
-
-            _cache.Set(trackedDownload.DownloadItem.DownloadId, trackedDownload);
+            _cache.Set(cacheKey, trackedDownload);
             return trackedDownload;
         }
 
@@ -186,7 +212,8 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
         public void UpdateTrackable(List<TrackedDownload> trackedDownloads)
         {
-            var untrackable = GetTrackedDownloads().ExceptBy(t => t.DownloadItem.DownloadId, trackedDownloads, t => t.DownloadItem.DownloadId, StringComparer.CurrentCulture).ToList();
+            var trackedKeys = trackedDownloads.Select(GetCacheKey).ToHashSet(StringComparer.Ordinal);
+            var untrackable = GetTrackedDownloads().Where(trackedDownload => !trackedKeys.Contains(GetCacheKey(trackedDownload))).ToList();
 
             foreach (var trackedDownload in untrackable)
             {
@@ -197,17 +224,17 @@ namespace NzbDrone.Core.Download.TrackedDownloads
         private void UpdateCachedItem(TrackedDownload trackedDownload)
         {
             var target = trackedDownload.AcquisitionTarget;
-            var historyItems = _historyService.FindByDownloadId(trackedDownload.DownloadItem.DownloadId)
-                .OrderByDescending(h => h.Date)
-                .ToList();
-            var movieGrab = historyItems.FirstOrDefault(h => h.EventType == MovieHistoryEventType.Grabbed && MatchesTarget(h.Data, target));
+            var movieGrab = _historyService.FindByDownloadId(trackedDownload.DownloadItem.DownloadId)
+                .OrderByDescending(history => history.Date)
+                .FirstOrDefault(history => history.EventType == MovieHistoryEventType.Grabbed &&
+                                           history.MovieId == trackedDownload.MovieId &&
+                                           MatchesTarget(history.Data, target));
             var downloadGrab = _downloadHistoryService.GetLatestGrabForTarget(trackedDownload.DownloadItem.DownloadId, target);
-            RehydrateRemoteMovie(trackedDownload, target, historyItems, movieGrab, downloadGrab);
+            RehydrateRemoteMovie(trackedDownload, target, movieGrab, downloadGrab);
         }
 
         private void RehydrateRemoteMovie(TrackedDownload trackedDownload,
                                           MovieAcquisitionTarget target,
-                                          List<MovieHistory> historyItems,
                                           MovieHistory movieGrab,
                                           DownloadHistory downloadGrab)
         {
@@ -215,13 +242,12 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             var parsedMovieInfo = Parser.Parser.ParseMovieTitle(trackedDownload.DownloadItem.Title);
             trackedDownload.RemoteMovie = parsedMovieInfo == null ? null : _parsingService.Map(parsedMovieInfo, "", 0, null);
 
-            var sourceHistory = historyItems.FirstOrDefault(h => MatchesTarget(h.Data, target)) ?? historyItems.FirstOrDefault();
-            if ((parsedMovieInfo == null || trackedDownload.RemoteMovie?.Movie == null) && sourceHistory != null)
+            if ((parsedMovieInfo == null || trackedDownload.RemoteMovie?.Movie == null) && movieGrab != null)
             {
-                parsedMovieInfo = Parser.Parser.ParseMovieTitle(sourceHistory.SourceTitle);
+                parsedMovieInfo = Parser.Parser.ParseMovieTitle(movieGrab.SourceTitle);
                 if (parsedMovieInfo != null)
                 {
-                    trackedDownload.RemoteMovie = _parsingService.Map(parsedMovieInfo, sourceHistory.MovieId);
+                    trackedDownload.RemoteMovie = _parsingService.Map(parsedMovieInfo, movieGrab.MovieId);
                 }
             }
 
@@ -276,6 +302,20 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
             _aggregationService.Augment(remoteMovie);
             remoteMovie.CustomFormats = _formatCalculator.ParseCustomFormat(remoteMovie, trackedDownload.DownloadItem.TotalSize);
+        }
+
+
+        private static string GetCacheKey(TrackedDownload trackedDownload)
+        {
+            return GetCacheKey(trackedDownload.DownloadClient,
+                trackedDownload.DownloadItem.DownloadId,
+                trackedDownload.MovieId,
+                trackedDownload.AcquisitionTarget);
+        }
+
+        private static string GetCacheKey(int downloadClientId, string downloadId, int movieId, MovieAcquisitionTarget target)
+        {
+            return $"{downloadClientId}{downloadId}{movieId}{target.Kind}{target.EditionSlotId}";
         }
 
         private static MovieAcquisitionTarget ReadHistoryTarget(IReadOnlyDictionary<string, string> data)

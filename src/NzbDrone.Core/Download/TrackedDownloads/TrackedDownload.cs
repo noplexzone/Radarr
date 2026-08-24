@@ -13,6 +13,7 @@ namespace NzbDrone.Core.Download.TrackedDownloads
         public TrackedDownloadState State { get; set; }
         public TrackedDownloadStatus Status { get; private set; }
         public RemoteMovie RemoteMovie { get; set; }
+        public int MovieId { get; set; }
         private MovieAcquisitionTarget _acquisitionTarget = MovieAcquisitionTarget.Unknown;
 
         public MovieAcquisitionTarget AcquisitionTarget

@@ -104,24 +104,23 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
             foreach (var downloadItem in downloadClientItems)
             {
-                var item = ProcessClientItem(downloadClient, downloadItem);
-                trackedDownloads.AddIfNotNull(item);
+                trackedDownloads.AddRange(ProcessClientItem(downloadClient, downloadItem));
             }
 
             return trackedDownloads;
         }
 
-        private TrackedDownload ProcessClientItem(IDownloadClient downloadClient, DownloadClientItem downloadItem)
+        private List<TrackedDownload> ProcessClientItem(IDownloadClient downloadClient, DownloadClientItem downloadItem)
         {
-            TrackedDownload trackedDownload = null;
+            var trackedDownloads = new List<TrackedDownload>();
 
             try
             {
-                trackedDownload =
+                trackedDownloads =
                     _trackedDownloadService.TrackDownload((DownloadClientDefinition)downloadClient.Definition,
                         downloadItem);
 
-                if (trackedDownload is { State: TrackedDownloadState.Downloading or TrackedDownloadState.ImportBlocked })
+                foreach (var trackedDownload in trackedDownloads.Where(trackedDownload => trackedDownload is { State: TrackedDownloadState.Downloading or TrackedDownloadState.ImportBlocked }))
                 {
                     _failedDownloadService.Check(trackedDownload);
                     _completedDownloadService.Check(trackedDownload);
@@ -132,7 +131,7 @@ namespace NzbDrone.Core.Download.TrackedDownloads
                 _logger.Error(e, "Couldn't process tracked download {0}", downloadItem.Title);
             }
 
-            return trackedDownload;
+            return trackedDownloads;
         }
 
         private bool DownloadIsTrackable(TrackedDownload trackedDownload)

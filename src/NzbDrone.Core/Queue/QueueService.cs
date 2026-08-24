@@ -81,7 +81,7 @@ namespace NzbDrone.Core.Queue
                 AcquisitionTarget = trackedDownload.AcquisitionTarget
             };
 
-            queue.Id = HashConverter.GetHashInt31($"trackedDownload-{trackedDownload.DownloadClient}-{trackedDownload.DownloadItem.DownloadId}");
+            queue.Id = HashConverter.GetHashInt31($"trackedDownload-{trackedDownload.DownloadClient}-{trackedDownload.DownloadItem.DownloadId}-{trackedDownload.MovieId}-{trackedDownload.AcquisitionTarget}");
 
             if (queue.TimeLeft.HasValue)
             {

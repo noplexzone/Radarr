@@ -41,7 +41,8 @@ namespace NzbDrone.Core.Test.QueueTests
                 .With(v => v.IsTrackable = true)
                 .With(v => v.DownloadItem = downloadItem)
                 .With(v => v.RemoteMovie = remoteEpisode)
-                .With(v => v.MovieEditionSlotId = null)
+                .With(v => v.MovieId = series.Id)
+                .With(v => v.AcquisitionTarget = MovieAcquisitionTarget.Main)
                 .Build()
                 .ToList();
         }
@@ -55,6 +56,37 @@ namespace NzbDrone.Core.Test.QueueTests
             Subject.Handle(new TrackedDownloadRefreshedEvent(_trackedDownloads));
 
             Subject.GetQueue().Single().MovieEditionSlotId.Should().Be(42);
+        }
+
+        [Test]
+        public void queue_ids_should_be_distinct_for_main_and_each_slot_of_same_download()
+        {
+            var original = _trackedDownloads.Single();
+            original.DownloadClient = 7;
+            original.DownloadItem.DownloadId = "shared";
+            original.MovieId = 1;
+            original.AcquisitionTarget = MovieAcquisitionTarget.Main;
+            var slotA = Builder<TrackedDownload>.CreateNew()
+                .With(v => v.IsTrackable = true)
+                .With(v => v.DownloadClient = 7)
+                .With(v => v.DownloadItem = original.DownloadItem)
+                .With(v => v.RemoteMovie = (RemoteMovie)null)
+                .With(v => v.MovieId = 1)
+                .With(v => v.AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(42))
+                .Build();
+            var slotB = Builder<TrackedDownload>.CreateNew()
+                .With(v => v.IsTrackable = true)
+                .With(v => v.DownloadClient = 7)
+                .With(v => v.DownloadItem = original.DownloadItem)
+                .With(v => v.RemoteMovie = (RemoteMovie)null)
+                .With(v => v.MovieId = 1)
+                .With(v => v.AcquisitionTarget = MovieAcquisitionTarget.ForEditionSlot(43))
+                .Build();
+
+            Subject.Handle(new TrackedDownloadRefreshedEvent(new List<TrackedDownload> { original, slotA, slotB }));
+
+            Subject.GetQueue().Should().HaveCount(3);
+            Subject.GetQueue().Select(q => q.Id).Should().OnlyHaveUniqueItems();
         }
 
         [Test]

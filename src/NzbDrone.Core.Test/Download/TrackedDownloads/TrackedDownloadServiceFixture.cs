@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using FluentAssertions;
@@ -44,8 +45,157 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
                         DownloadId = "35238",
                         SourceTitle = "TV Series S01",
                         MovieId = 3,
+                        EventType = MovieHistoryEventType.Grabbed,
                     }
                 });
+        }
+
+        private static MovieHistory Grab(string downloadId, int movieId, MovieAcquisitionTarget target, DateTime date, string sourceTitle = "Movie.2024.1080p")
+        {
+            var history = new MovieHistory
+            {
+                DownloadId = downloadId,
+                MovieId = movieId,
+                EventType = MovieHistoryEventType.Grabbed,
+                Date = date,
+                SourceTitle = sourceTitle
+            };
+            MovieAcquisitionTargetSerializer.Write(history.Data, target);
+            return history;
+        }
+
+        private static DownloadClientItem Item(DownloadClientDefinition client, string downloadId, string title = "Movie.2024.1080p")
+        {
+            return new DownloadClientItem
+            {
+                Title = title,
+                DownloadId = downloadId,
+                DownloadClientInfo = new DownloadClientItemClientInfo { Protocol = client.Protocol, Id = client.Id, Name = client.Name }
+            };
+        }
+
+        private void GivenMappedMovie(int movieId)
+        {
+            Mocker.GetMock<IParsingService>()
+                .Setup(s => s.Map(It.IsAny<ParsedMovieInfo>(), It.IsAny<string>(), It.IsAny<int>(), null))
+                .Returns(new RemoteMovie
+                {
+                    Movie = new Movie { Id = movieId },
+                    ParsedMovieInfo = new ParsedMovieInfo { MovieTitles = new List<string> { "Movie" }, Year = 2024 }
+                });
+            Mocker.GetMock<IParsingService>()
+                .Setup(s => s.Map(It.IsAny<ParsedMovieInfo>(), movieId))
+                .Returns(new RemoteMovie
+                {
+                    Movie = new Movie { Id = movieId },
+                    ParsedMovieInfo = new ParsedMovieInfo { MovieTitles = new List<string> { "Movie" }, Year = 2024 }
+                });
+        }
+
+        [Test]
+        public void should_reconstruct_main_and_each_slot_as_distinct_logical_downloads()
+        {
+            var now = DateTime.UtcNow;
+            var main = MovieAcquisitionTarget.Main;
+            var slotA = MovieAcquisitionTarget.ForEditionSlot(42);
+            var slotB = MovieAcquisitionTarget.ForEditionSlot(43);
+            var movieGrabs = new List<MovieHistory>
+            {
+                Grab("shared", 1, slotB, now),
+                Grab("shared", 1, slotA, now.AddMinutes(-1)),
+                Grab("shared", 1, main, now.AddMinutes(-2))
+            };
+            Mocker.GetMock<IHistoryService>().Setup(s => s.FindByDownloadId("shared")).Returns(movieGrabs);
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetForMovie(1)).Returns(new List<MovieEditionSlot>
+            {
+                new MovieEditionSlot { Id = 42, MovieId = 1 },
+                new MovieEditionSlot { Id = 43, MovieId = 1 }
+            });
+            GivenMappedMovie(1);
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+
+            Subject.TrackDownload(client, Item(client, "shared"));
+
+            Subject.GetTrackedDownloads().Should().HaveCount(3);
+            Subject.GetTrackedDownloads().Select(t => t.AcquisitionTarget).Should().BeEquivalentTo(new[] { main, slotA, slotB });
+            Subject.GetTrackedDownloads().Should().OnlyContain(t => t.MovieId == 1);
+        }
+
+        [Test]
+        public void reused_download_id_for_new_slot_should_not_mutate_terminal_old_slot()
+        {
+            var now = DateTime.UtcNow;
+            var slotA = MovieAcquisitionTarget.ForEditionSlot(42);
+            var slotB = MovieAcquisitionTarget.ForEditionSlot(43);
+            var movieGrabs = new List<MovieHistory> { Grab("reused", 1, slotA, now.AddMinutes(-1)) };
+            Mocker.GetMock<IHistoryService>().Setup(s => s.FindByDownloadId("reused")).Returns(movieGrabs);
+            Mocker.GetMock<IDownloadHistoryService>()
+                .Setup(s => s.GetLatestDownloadHistoryItemForTarget("reused", It.Is<MovieAcquisitionTarget>(t => t.Equals(slotA))))
+                .Returns(new DownloadHistory { EventType = DownloadHistoryEventType.DownloadFailed });
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetForMovie(1)).Returns(new List<MovieEditionSlot>
+            {
+                new MovieEditionSlot { Id = 42, MovieId = 1 },
+                new MovieEditionSlot { Id = 43, MovieId = 1 }
+            });
+            GivenMappedMovie(1);
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+            var oldSlot = Subject.TrackDownload(client, Item(client, "reused")).Single();
+            oldSlot.State.Should().Be(TrackedDownloadState.Failed);
+
+            movieGrabs.Insert(0, Grab("reused", 1, slotB, now));
+            Subject.TrackDownload(client, Item(client, "reused", "Movie.2024.New.Release.1080p"));
+
+            Subject.GetTrackedDownloads().Should().HaveCount(2);
+            Subject.GetTrackedDownloads().Single(t => t.AcquisitionTarget.Equals(slotA)).Should().BeSameAs(oldSlot);
+            oldSlot.State.Should().Be(TrackedDownloadState.Failed);
+            Subject.GetTrackedDownloads().Single(t => t.AcquisitionTarget.Equals(slotB)).State.Should().Be(TrackedDownloadState.Downloading);
+        }
+
+        [Test]
+        public void malformed_target_should_create_only_an_unknown_fail_closed_envelope()
+        {
+            var malformed = new MovieHistory
+            {
+                DownloadId = "malformed",
+                MovieId = 1,
+                EventType = MovieHistoryEventType.Grabbed,
+                Date = DateTime.UtcNow,
+                SourceTitle = "Movie.2024.1080p"
+            };
+            malformed.Data[MovieHistory.ACQUISITION_TARGET] = "editionSlot";
+            malformed.Data[MovieHistory.MOVIE_EDITION_SLOT_ID] = "broken";
+            Mocker.GetMock<IHistoryService>().Setup(s => s.FindByDownloadId("malformed")).Returns(new List<MovieHistory> { malformed });
+            GivenMappedMovie(1);
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+
+            var tracked = Subject.TrackDownload(client, Item(client, "malformed")).Single();
+
+            tracked.AcquisitionTarget.Should().BeSameAs(MovieAcquisitionTarget.Unknown);
+            tracked.MovieId.Should().Be(1);
+            tracked.RemoteMovie.Should().BeNull();
+        }
+
+        [Test]
+        public void rehydration_should_not_fall_back_to_unrelated_history()
+        {
+            var slotA = MovieAcquisitionTarget.ForEditionSlot(42);
+            var exact = Grab("exact-only", 1, slotA, DateTime.UtcNow, "!!!");
+            var unrelated = new MovieHistory
+            {
+                DownloadId = "exact-only",
+                MovieId = 99,
+                EventType = MovieHistoryEventType.MovieFileRenamed,
+                Date = DateTime.UtcNow.AddMinutes(1),
+                SourceTitle = "Unrelated.Movie.2024.1080p"
+            };
+            Mocker.GetMock<IHistoryService>().Setup(s => s.FindByDownloadId("exact-only")).Returns(new List<MovieHistory> { unrelated, exact });
+            Mocker.GetMock<IParsingService>().Setup(s => s.Map(It.IsAny<ParsedMovieInfo>(), It.IsAny<string>(), It.IsAny<int>(), null)).Returns((RemoteMovie)null);
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetForMovie(1)).Returns(new List<MovieEditionSlot> { new MovieEditionSlot { Id = 42, MovieId = 1 } });
+            var client = new DownloadClientDefinition { Id = 7, Protocol = DownloadProtocol.Torrent };
+
+            Subject.TrackDownload(client, Item(client, "exact-only", "!!!"));
+
+            Mocker.GetMock<IParsingService>().Verify(s => s.Map(It.IsAny<ParsedMovieInfo>(), 99), Times.Never());
         }
 
         [Test]
@@ -86,7 +236,7 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
                 }
             };
 
-            var trackedDownload = Subject.TrackDownload(client, item);
+            var trackedDownload = Subject.TrackDownload(client, item).Single();
 
             trackedDownload.Should().NotBeNull();
             trackedDownload.RemoteMovie.Should().NotBeNull();
@@ -157,7 +307,7 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
                 }
             };
 
-            var trackedDownload = Subject.TrackDownload(client, item);
+            var trackedDownload = Subject.TrackDownload(client, item).Single();
 
             trackedDownload.Should().NotBeNull();
             trackedDownload.RemoteMovie.Should().NotBeNull();
@@ -273,7 +423,7 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
                 DownloadClientInfo = new DownloadClientItemClientInfo { Protocol = client.Protocol, Id = client.Id, Name = client.Name }
             };
 
-            var trackedDownload = Subject.TrackDownload(client, item);
+            var trackedDownload = Subject.TrackDownload(client, item).Single();
 
             trackedDownload.Should().NotBeNull();
             trackedDownload.RemoteMovie.Should().NotBeNull();
@@ -297,7 +447,7 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
             Mocker.GetMock<IParsingService>().Setup(s => s.Map(It.IsAny<ParsedMovieInfo>(), It.IsAny<string>(), It.IsAny<int>(), null)).Returns(remoteMovie);
             var client = new DownloadClientDefinition { Id = 1, Protocol = DownloadProtocol.Torrent };
             var item = new DownloadClientItem { Title = "Movie.2024.Directors.Cut.1080p", DownloadId = "refresh-slot", DownloadClientInfo = new DownloadClientItemClientInfo() };
-            Subject.TrackDownload(client, item).RemoteMovie.MovieEditionSlotId.Should().Be(42);
+            Subject.TrackDownload(client, item).Single().RemoteMovie.MovieEditionSlotId.Should().Be(42);
 
             Subject.Handle(new MovieEditedEvent(new Movie { Id = 1, TmdbId = 10 }, remoteMovie.Movie));
             Subject.GetTrackedDownloads().Single().RemoteMovie.MovieEditionSlotId.Should().Be(42);
@@ -353,7 +503,7 @@ namespace NzbDrone.Core.Test.Download.TrackedDownloads
                 DownloadClientInfo = new DownloadClientItemClientInfo { Protocol = client.Protocol, Id = client.Id, Name = client.Name }
             };
 
-            var trackedDownload = Subject.TrackDownload(client, item);
+            var trackedDownload = Subject.TrackDownload(client, item).Single();
 
             trackedDownload.Should().NotBeNull();
             trackedDownload.RemoteMovie.Should().NotBeNull();
