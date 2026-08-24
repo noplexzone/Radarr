@@ -169,7 +169,16 @@ namespace NzbDrone.Core.Download.Pending
         {
             var blockedIndexers = new HashSet<int>(_indexerStatusService.GetBlockedProviders().Select(v => v.ProviderId));
 
-            return releases.Where(release => !blockedIndexers.Contains(release.Release.IndexerId)).ToList();
+            return releases.Where(release =>
+            {
+                if (release.Release == null)
+                {
+                    _logger.Warn("Skipping malformed pending release {0} for movie {1}: release metadata is missing", release.Id, release.MovieId);
+                    return false;
+                }
+
+                return !blockedIndexers.Contains(release.Release.IndexerId);
+            }).ToList();
         }
 
         public List<RemoteMovie> GetPendingRemoteMovies(int movieId)
@@ -236,10 +245,13 @@ namespace NzbDrone.Core.Download.Pending
 
         public RemoteMovie OldestPendingRelease(int movieId, MovieAcquisitionTarget acquisitionTarget)
         {
-            var movieReleases = GetPendingReleases(movieId);
+            var durableMatches = _repository.AllByMovieId(movieId)
+                .Where(r => GetAcquisitionTarget(r).Equals(acquisitionTarget))
+                .Where(r => r.Release != null)
+                .ToList();
+            var movieReleases = IncludeRemoteMovies(durableMatches, augment: false);
 
             return movieReleases.Select(r => r.RemoteMovie)
-                                 .Where(r => r.AcquisitionTarget.Equals(acquisitionTarget))
                                  .MaxBy(p => p.Release.AgeHours);
         }
 
@@ -276,6 +288,12 @@ namespace NzbDrone.Core.Download.Pending
 
             foreach (var release in releases)
             {
+                if (release.Release == null)
+                {
+                    _logger.Warn("Skipping malformed pending release {0} for movie {1}: release metadata is missing", release.Id, release.MovieId);
+                    continue;
+                }
+
                 var movie = movieMap.GetValueOrDefault(release.MovieId);
 
                 // Just in case the movie was removed, but wasn't cleaned up yet (housekeeper will clean it up)
@@ -409,7 +427,8 @@ namespace NzbDrone.Core.Download.Pending
 
         private static Func<PendingRelease, bool> MatchingReleasePredicate(ReleaseInfo release)
         {
-            return p => p.Title == release.Title &&
+            return p => p.Release != null &&
+                   p.Title == release.Title &&
                    p.Release.PublishDate == release.PublishDate &&
                    p.Release.Indexer == release.Indexer;
         }
@@ -425,12 +444,11 @@ namespace NzbDrone.Core.Download.Pending
 
         private void RemoveGrabbed(RemoteMovie remoteMovie)
         {
-            var pendingReleases = GetPendingReleases(remoteMovie.Movie.Id);
-
-            var existingReports = pendingReleases.Where(r =>
-                                                                 r.RemoteMovie.Movie.Id == remoteMovie.Movie.Id &&
-                                                                 r.RemoteMovie.AcquisitionTarget.Equals(remoteMovie.AcquisitionTarget))
-                                                             .ToList();
+            var durableMatches = _repository.AllByMovieId(remoteMovie.Movie.Id)
+                .Where(r => GetAcquisitionTarget(r).Equals(remoteMovie.AcquisitionTarget))
+                .Where(r => r.Release != null && r.ParsedMovieInfo?.Quality != null)
+                .ToList();
+            var existingReports = IncludeRemoteMovies(durableMatches, augment: false);
 
             if (existingReports.Empty())
             {

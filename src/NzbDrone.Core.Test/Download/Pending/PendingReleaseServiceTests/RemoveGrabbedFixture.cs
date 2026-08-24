@@ -6,6 +6,7 @@ using NUnit.Framework;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.DecisionEngine;
 using NzbDrone.Core.Download;
+using NzbDrone.Core.Download.Aggregation;
 using NzbDrone.Core.Download.Pending;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Parser.Model;
@@ -124,6 +125,48 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
             Subject.Handle(new MovieGrabbedEvent(_remoteMovie));
 
             VerifyNoDelete();
+        }
+
+        [Test]
+        public void should_isolate_targets_before_reconstructing_grabbed_cleanup_rows()
+        {
+            var slotA = MovieAcquisitionTarget.ForEditionSlot(41);
+            var slotB = MovieAcquisitionTarget.ForEditionSlot(42);
+            var malformedSlotA = BuildHeldRelease(1, slotA, _parsedMovieInfo.Quality);
+            malformedSlotA.ParsedMovieInfo = null;
+            var main = BuildHeldRelease(2, MovieAcquisitionTarget.Main, _parsedMovieInfo.Quality);
+            var validSlotB = BuildHeldRelease(3, slotB, _parsedMovieInfo.Quality);
+            _heldReleases.AddRange(new[] { malformedSlotA, main, validSlotB });
+            _remoteMovie.AcquisitionTarget = slotB;
+            Mocker.GetMock<IRemoteMovieAggregationService>()
+                  .Setup(v => v.Augment(It.Is<RemoteMovie>(r => r.ParsedMovieInfo == null)))
+                  .Throws(new System.InvalidOperationException("malformed slot A"));
+
+            Subject.Handle(new MovieGrabbedEvent(_remoteMovie));
+
+            Mocker.GetMock<IPendingReleaseRepository>()
+                  .Verify(v => v.Delete(It.Is<PendingRelease>(p => p.Id == validSlotB.Id)), Times.Once());
+            Mocker.GetMock<IPendingReleaseRepository>()
+                  .Verify(v => v.Delete(It.Is<PendingRelease>(p => p.Id == malformedSlotA.Id || p.Id == main.Id)), Times.Never());
+            Mocker.GetMock<IRemoteMovieAggregationService>()
+                  .Verify(v => v.Augment(It.IsAny<RemoteMovie>()), Times.Never());
+        }
+
+        private PendingRelease BuildHeldRelease(int id, MovieAcquisitionTarget target, QualityModel quality)
+        {
+            var additionalInfo = new PendingReleaseAdditionalInfo();
+            additionalInfo.SerializeAcquisitionTarget(target);
+            var parsedMovieInfo = _parsedMovieInfo.JsonClone();
+            parsedMovieInfo.Quality = quality;
+
+            return new PendingRelease
+            {
+                Id = id,
+                MovieId = _movie.Id,
+                Release = _release.JsonClone(),
+                ParsedMovieInfo = parsedMovieInfo,
+                AdditionalInfo = additionalInfo
+            };
         }
 
         private void VerifyDelete()

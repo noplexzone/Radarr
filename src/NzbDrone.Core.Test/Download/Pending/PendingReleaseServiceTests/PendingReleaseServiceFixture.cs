@@ -114,5 +114,42 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
             results[1].Release.Title.Should().Be("Valid.Release");
             rows[0].AdditionalInfo.AcquisitionTargetKind.Should().Be(MovieAcquisitionTargetKind.EditionSlot);
         }
+
+        [Test]
+        public void should_skip_a_null_release_row_and_return_the_valid_later_pending_row()
+        {
+            var movie = new Movie { Id = 1 };
+            var rows = new List<PendingRelease>
+            {
+                new PendingRelease
+                {
+                    Id = 1,
+                    MovieId = movie.Id,
+                    Title = "Malformed.Null.Release",
+                    Release = null,
+                    ParsedMovieInfo = new ParsedMovieInfo()
+                },
+                new PendingRelease
+                {
+                    Id = 2,
+                    MovieId = movie.Id,
+                    Title = "Valid.Release",
+                    Release = new ReleaseInfo { Title = "Valid.Release", IndexerId = 1 },
+                    ParsedMovieInfo = new ParsedMovieInfo()
+                }
+            };
+            Mocker.GetMock<IPendingReleaseRepository>().Setup(v => v.All()).Returns(rows);
+            Mocker.GetMock<IMovieService>()
+                  .Setup(v => v.GetMovies(It.IsAny<IEnumerable<int>>()))
+                  .Returns(new List<Movie> { movie });
+            Mocker.GetMock<IIndexerStatusService>()
+                  .Setup(v => v.GetBlockedProviders())
+                  .Returns(new List<IndexerStatus>());
+
+            var results = Subject.GetPending();
+
+            results.Should().ContainSingle();
+            results[0].Release.Title.Should().Be("Valid.Release");
+        }
     }
 }

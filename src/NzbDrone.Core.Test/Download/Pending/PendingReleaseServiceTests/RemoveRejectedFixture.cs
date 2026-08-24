@@ -176,6 +176,40 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
         }
 
         [Test]
+        public void should_skip_a_null_release_row_and_remove_the_valid_later_exact_row()
+        {
+            var malformed = new PendingRelease
+            {
+                Id = 1,
+                MovieId = _movie.Id,
+                Title = _release.Title,
+                Release = null,
+                ParsedMovieInfo = _parsedMovieInfo
+            };
+            var valid = new PendingRelease
+            {
+                Id = 2,
+                MovieId = _movie.Id,
+                Title = _release.Title,
+                Release = _release.JsonClone(),
+                ParsedMovieInfo = _parsedMovieInfo
+            };
+            Mocker.GetMock<IPendingReleaseRepository>()
+                  .Setup(s => s.All())
+                  .Returns(new List<PendingRelease> { malformed, valid });
+
+            Assert.DoesNotThrow(() => Subject.Handle(new RssSyncCompleteEvent(
+                new ProcessedDecisions(new List<DownloadDecision>(),
+                                       new List<DownloadDecision>(),
+                                       new List<DownloadDecision> { _temporarilyRejected }))));
+
+            Mocker.GetMock<IPendingReleaseRepository>()
+                  .Verify(v => v.Delete(It.Is<PendingRelease>(p => p.Id == valid.Id)), Times.Once());
+            Mocker.GetMock<IPendingReleaseRepository>()
+                  .Verify(v => v.Delete(It.Is<PendingRelease>(p => p.Id == malformed.Id)), Times.Never());
+        }
+
+        [Test]
         public void should_not_remove_if_title_is_different()
         {
             GivenHeldRelease(_release.Title + "-RP", _release.Indexer, _release.PublishDate);

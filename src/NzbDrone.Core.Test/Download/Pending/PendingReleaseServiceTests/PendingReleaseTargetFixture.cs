@@ -4,6 +4,7 @@ using System.Linq;
 using FluentAssertions;
 using Moq;
 using NUnit.Framework;
+using NzbDrone.Core.Download.Aggregation;
 using NzbDrone.Core.Download.Pending;
 using NzbDrone.Core.Indexers;
 using NzbDrone.Core.Jobs;
@@ -190,6 +191,33 @@ namespace NzbDrone.Core.Test.Download.Pending.PendingReleaseServiceTests
 
             selected.AcquisitionTarget.Should().Be(target);
             selected.RemoteMovie.AcquisitionTarget.Should().Be(target);
+        }
+
+        [Test]
+        public void oldest_pending_release_should_isolate_targets_before_reconstruction()
+        {
+            var slotA = MovieAcquisitionTarget.ForEditionSlot(41);
+            var slotB = MovieAcquisitionTarget.ForEditionSlot(42);
+            var malformedSlotA = BuildPending(1, slotA);
+            malformedSlotA.ParsedMovieInfo = null;
+            var main = BuildPending(2, MovieAcquisitionTarget.Main);
+            var validSlotB = BuildPending(3, slotB);
+            main.Release.PublishDate = DateTime.UtcNow.AddMinutes(-30);
+            validSlotB.Release.PublishDate = DateTime.UtcNow.AddMinutes(-20);
+            _pending.AddRange(new[] { malformedSlotA, main, validSlotB });
+            Mocker.GetMock<IRemoteMovieAggregationService>()
+                  .Setup(v => v.Augment(It.Is<RemoteMovie>(r => r.ParsedMovieInfo == null)))
+                  .Throws(new InvalidOperationException("malformed slot A"));
+
+            var oldestMain = Subject.OldestPendingRelease(_movie.Id, MovieAcquisitionTarget.Main);
+            var oldestSlotB = Subject.OldestPendingRelease(_movie.Id, slotB);
+
+            oldestMain.Release.Title.Should().Be(main.Release.Title);
+            oldestMain.AcquisitionTarget.Should().Be(MovieAcquisitionTarget.Main);
+            oldestSlotB.Release.Title.Should().Be(validSlotB.Release.Title);
+            oldestSlotB.AcquisitionTarget.Should().Be(slotB);
+            Mocker.GetMock<IRemoteMovieAggregationService>()
+                  .Verify(v => v.Augment(It.IsAny<RemoteMovie>()), Times.Never());
         }
     }
 }
