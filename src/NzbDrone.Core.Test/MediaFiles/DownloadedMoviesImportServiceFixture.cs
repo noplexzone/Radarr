@@ -8,10 +8,13 @@ using NUnit.Framework;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Download;
+using NzbDrone.Core.Download.History;
 using NzbDrone.Core.Download.TrackedDownloads;
+using NzbDrone.Core.History;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.MovieImport;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Test.Framework;
@@ -493,6 +496,259 @@ namespace NzbDrone.Core.Test.MediaFiles
 
             result.Count.Should().Be(1);
             result.First().Result.Should().Be(ImportResultType.Rejected);
+        }
+
+        private static PhysicalDownloadImportEnvelope Envelope(int clientId, string downloadId, int movieId, MovieAcquisitionTarget target)
+        {
+            var item = new DownloadClientItem { DownloadId = downloadId, OutputPath = new OsPath(@"C:\drop\shared".AsOsAgnostic()) };
+            var remote = new RemoteMovie { Movie = new Movie { Id = movieId }, AcquisitionTarget = target };
+            return new PhysicalDownloadImportEnvelope(new TrackedDownloadKey(clientId, downloadId, movieId, target), remote, item);
+        }
+
+        private void GivenGroupedDecisions()
+        {
+            Mocker.GetMock<IMakeImportDecision>()
+                .Setup(service => service.GetImportDecisions(It.IsAny<List<string>>(), It.IsAny<Movie>(), It.IsAny<DownloadClientItem>(), It.IsAny<ParsedMovieInfo>(), true))
+                .Returns<List<string>, Movie, DownloadClientItem, ParsedMovieInfo, bool>((files, movie, _, _, _) =>
+                    files.Select(file => new ImportDecision(new LocalMovie { Path = file, Movie = movie })).ToList());
+            Mocker.GetMock<IMakeImportDecision>()
+                .Setup(service => service.GetDecision(It.IsAny<LocalMovie>(), It.IsAny<DownloadClientItem>()))
+                .Returns<LocalMovie, DownloadClientItem>((movie, _) => new ImportDecision(movie));
+            Mocker.GetMock<IMovieEditionSlotService>()
+                .Setup(service => service.GetForMovie(It.IsAny<int>()))
+                .Returns(new List<MovieEditionSlot>());
+        }
+
+        [Test]
+        public void physical_group_should_use_exact_download_history_grab_without_movie_history_fallback()
+        {
+            var path = @"C:\drop\shared\Movie.mkv".AsOsAgnostic();
+            Mocker.GetMock<IDiskScanService>().Setup(service => service.GetVideoFiles(It.IsAny<string>(), It.IsAny<bool>())).Returns(new[] { path });
+            var main = Envelope(7, "shared", 1, MovieAcquisitionTarget.Main);
+            var slot = Envelope(7, "shared", 1, MovieAcquisitionTarget.ForEditionSlot(42));
+            GivenGroupedDecisions();
+            Mocker.GetMock<IMovieEditionMatcher>().Setup(service => service.Match(It.IsAny<RemoteMovie>(), It.IsAny<IReadOnlyCollection<MovieEditionSlot>>()))
+                .Returns(EditionMatchResult.NoEvidence());
+            var grab = new DownloadHistory
+            {
+                EventType = DownloadHistoryEventType.DownloadGrabbed,
+                DownloadId = "shared",
+                DownloadClientId = 7,
+                MovieId = 1,
+                SourceTitle = "Exact.Source",
+                Release = new ReleaseInfo { Title = "Exact.Release", Indexer = "Exact.Indexer", Size = 123 }
+            };
+            MovieAcquisitionTargetSerializer.Write(grab.Data, MovieAcquisitionTarget.Main);
+            Mocker.GetMock<IDownloadHistoryService>()
+                .Setup(service => service.GetLatestGrabForTarget("shared", 7, 1, MovieAcquisitionTarget.Main))
+                .Returns(grab);
+            List<ImportDecision> captured = null;
+            Mocker.GetMock<IImportApprovedMovie>()
+                .Setup(service => service.Import(It.IsAny<List<ImportDecision>>(), true, main.ImportItem, ImportMode.Copy))
+                .Callback<List<ImportDecision>, bool, DownloadClientItem, ImportMode>((decisions, _, _, _) => captured = decisions)
+                .Returns<List<ImportDecision>, bool, DownloadClientItem, ImportMode>((decisions, _, _, _) => decisions.Select(decision => new ImportResult(decision)).ToList());
+
+            Subject.ProcessPhysicalGroup(@"C:\drop\shared".AsOsAgnostic(), new[] { main, slot });
+
+            captured.Single().LocalMovie.Release.Title.Should().Be("Exact.Source");
+            captured.Single().LocalMovie.Release.Indexer.Should().Be("Exact.Indexer");
+            captured.Single().LocalMovie.Release.Size.Should().Be(123);
+            captured.Single().LocalMovie.Release.MovieIds.Should().Equal(1);
+            captured.Single().LocalMovie.Release.AcquisitionTarget.Should().Be(MovieAcquisitionTarget.Main);
+            Mocker.GetMock<IHistoryService>().Verify(service => service.FindByDownloadId(It.IsAny<string>()), Times.Never());
+        }
+
+        [Test]
+        public void physical_group_should_support_same_target_value_for_distinct_movies_and_import_once()
+        {
+            var firstPath = @"C:\drop\shared\Movie1.mkv".AsOsAgnostic();
+            var secondPath = @"C:\drop\shared\Movie2.mkv".AsOsAgnostic();
+            Mocker.GetMock<IDiskScanService>().Setup(service => service.GetVideoFiles(It.IsAny<string>(), It.IsAny<bool>())).Returns(new[] { firstPath, secondPath });
+            var first = Envelope(7, "shared", 1, MovieAcquisitionTarget.Main);
+            var second = Envelope(7, "shared", 2, MovieAcquisitionTarget.Main);
+            GivenGroupedDecisions();
+            Mocker.GetMock<IMovieEditionMatcher>()
+                .Setup(service => service.Match(It.IsAny<RemoteMovie>(), It.IsAny<IReadOnlyCollection<MovieEditionSlot>>()))
+                .Returns<RemoteMovie, IReadOnlyCollection<MovieEditionSlot>>((movie, _) =>
+                    Path.GetFileNameWithoutExtension(movie.Release.Title).EndsWith(movie.Movie.Id.ToString())
+                        ? EditionMatchResult.NoEvidence()
+                        : EditionMatchResult.Unknown(EditionMatchSource.NormalizedTitleFallback, "different movie"));
+            Mocker.GetMock<IImportApprovedMovie>()
+                .Setup(service => service.Import(It.IsAny<List<ImportDecision>>(), true, first.ImportItem, ImportMode.Copy))
+                .Returns<List<ImportDecision>, bool, DownloadClientItem, ImportMode>((decisions, _, _, _) => decisions.Select(decision => new ImportResult(decision)).ToList());
+
+            var results = Subject.ProcessPhysicalGroup(@"C:\drop\shared".AsOsAgnostic(), new[] { first, second });
+
+            results.Single(result => result.Key == first.Key).ImportResults.Single().ImportDecision.LocalMovie.Path.Should().Be(firstPath);
+            results.Single(result => result.Key == second.Key).ImportResults.Single().ImportDecision.LocalMovie.Path.Should().Be(secondPath);
+            Mocker.GetMock<IImportApprovedMovie>().Verify(service => service.Import(It.Is<List<ImportDecision>>(decisions => decisions.Count == 2), true, first.ImportItem, ImportMode.Copy), Times.Once());
+        }
+
+        [Test]
+        public void physical_group_should_reject_duplicate_normalized_source_for_all_targets_before_mutation()
+        {
+            var path = @"C:\drop\shared\Movie.mkv".AsOsAgnostic();
+            Mocker.GetMock<IDiskScanService>().Setup(service => service.GetVideoFiles(It.IsAny<string>(), It.IsAny<bool>())).Returns(new[] { path });
+            var first = Envelope(7, "shared", 1, MovieAcquisitionTarget.Main);
+            var second = Envelope(7, "shared", 2, MovieAcquisitionTarget.Main);
+            GivenGroupedDecisions();
+            Mocker.GetMock<IMovieEditionMatcher>().Setup(service => service.Match(It.IsAny<RemoteMovie>(), It.IsAny<IReadOnlyCollection<MovieEditionSlot>>()))
+                .Returns(EditionMatchResult.NoEvidence());
+            Mocker.GetMock<IImportApprovedMovie>()
+                .Setup(service => service.Import(It.IsAny<List<ImportDecision>>(), true, first.ImportItem, ImportMode.Copy))
+                .Returns<List<ImportDecision>, bool, DownloadClientItem, ImportMode>((decisions, _, _, _) => decisions.Select(decision => new ImportResult(decision, decision.Rejections.Select(rejection => rejection.Message).ToArray())).ToList());
+
+            Subject.ProcessPhysicalGroup(@"C:\drop\shared".AsOsAgnostic(), new[] { first, second });
+
+            Mocker.GetMock<IImportApprovedMovie>().Verify(service => service.Import(
+                It.Is<List<ImportDecision>>(decisions => decisions.Count == 2 && decisions.All(decision => !decision.Approved)),
+                true, first.ImportItem, ImportMode.Copy), Times.Once());
+            Mocker.GetMock<IMakeImportDecision>().Verify(service => service.GetDecision(It.IsAny<LocalMovie>(), It.IsAny<DownloadClientItem>()), Times.Never());
+        }
+
+        [Test]
+        public void physical_group_retry_exclusion_should_be_client_scoped()
+        {
+            var path = @"C:\drop\shared\Movie.mkv".AsOsAgnostic();
+            Mocker.GetMock<IDiskScanService>().Setup(service => service.GetVideoFiles(It.IsAny<string>(), It.IsAny<bool>())).Returns(new[] { path });
+            var main = Envelope(7, "shared", 1, MovieAcquisitionTarget.Main);
+            var slot = Envelope(7, "shared", 1, MovieAcquisitionTarget.ForEditionSlot(42));
+            GivenGroupedDecisions();
+            Mocker.GetMock<IMovieEditionMatcher>().Setup(service => service.Match(It.IsAny<RemoteMovie>(), It.IsAny<IReadOnlyCollection<MovieEditionSlot>>()))
+                .Returns(EditionMatchResult.NoEvidence());
+            var otherClient = new DownloadHistory
+            {
+                EventType = DownloadHistoryEventType.FileImported,
+                DownloadId = "shared",
+                DownloadClientId = 8,
+                MovieId = 1,
+                SourceTitle = path
+            };
+            MovieAcquisitionTargetSerializer.Write(otherClient.Data, MovieAcquisitionTarget.Main);
+            Mocker.GetMock<IDownloadHistoryService>().Setup(service => service.GetHistory("shared", 7))
+                .Returns(new List<DownloadHistory> { otherClient });
+            Mocker.GetMock<IImportApprovedMovie>()
+                .Setup(service => service.Import(It.IsAny<List<ImportDecision>>(), true, main.ImportItem, ImportMode.Copy))
+                .Returns<List<ImportDecision>, bool, DownloadClientItem, ImportMode>((decisions, _, _, _) => decisions.Select(decision => new ImportResult(decision)).ToList());
+
+            Subject.ProcessPhysicalGroup(@"C:\drop\shared".AsOsAgnostic(), new[] { main, slot });
+
+            Mocker.GetMock<IMakeImportDecision>().Verify(service => service.GetImportDecisions(
+                It.Is<List<string>>(files => files.Contains(path)), main.RemoteMovie.Movie, main.ImportItem, It.IsAny<ParsedMovieInfo>(), true), Times.Once());
+        }
+
+        [Test]
+        public void physical_group_should_use_all_exact_keys_but_make_decisions_only_for_pending_envelopes()
+        {
+            var path = @"C:\drop\shared\Movie.IMAX.mkv".AsOsAgnostic();
+            Mocker.GetMock<IDiskScanService>().Setup(service => service.GetVideoFiles(It.IsAny<string>(), It.IsAny<bool>())).Returns(new[] { path });
+            var imported = Envelope(7, "shared", 1, MovieAcquisitionTarget.Main) with { ShouldImport = false };
+            var pending = Envelope(7, "shared", 1, MovieAcquisitionTarget.ForEditionSlot(42));
+            GivenGroupedDecisions();
+            Mocker.GetMock<IMovieEditionMatcher>().Setup(service => service.Match(It.IsAny<RemoteMovie>(), It.IsAny<IReadOnlyCollection<MovieEditionSlot>>()))
+                .Returns(EditionMatchResult.Unique(EditionMatchSource.ParsedMetadata, new[] { new MovieEditionSlot { Id = 42 } }, new MovieEditionSlot { Id = 42 }, "IMAX", EditionIdentityType.CanonicalName, "exact"));
+            Mocker.GetMock<IImportApprovedMovie>()
+                .Setup(service => service.Import(It.IsAny<List<ImportDecision>>(), true, pending.ImportItem, ImportMode.Copy))
+                .Returns<List<ImportDecision>, bool, DownloadClientItem, ImportMode>((decisions, _, _, _) => decisions.Select(decision => new ImportResult(decision)).ToList());
+
+            Subject.ProcessPhysicalGroup(@"C:\drop\shared".AsOsAgnostic(), new[] { imported, pending });
+
+            Mocker.GetMock<IMakeImportDecision>().Verify(service => service.GetImportDecisions(
+                It.IsAny<List<string>>(), imported.RemoteMovie.Movie, imported.ImportItem, It.IsAny<ParsedMovieInfo>(), true), Times.Never());
+            Mocker.GetMock<IMakeImportDecision>().Verify(service => service.GetImportDecisions(
+                It.Is<List<string>>(files => files.SequenceEqual(new[] { path })), pending.RemoteMovie.Movie, pending.ImportItem, It.IsAny<ParsedMovieInfo>(), true), Times.Once());
+            Mocker.GetMock<IDownloadHistoryService>().Verify(service => service.GetLatestDownloadHistoryItemForTarget(
+                "shared", 7, 1, MovieAcquisitionTarget.Main), Times.Once());
+            Mocker.GetMock<IDownloadHistoryService>().Verify(service => service.GetLatestDownloadHistoryItemForTarget(
+                "shared", 7, 1, pending.Key.AcquisitionTarget), Times.Once());
+        }
+
+        [Test]
+        public void physical_group_retry_should_exclude_current_attempt_source_owned_by_imported_sibling()
+        {
+            var now = System.DateTime.UtcNow;
+            var path = @"C:\drop\shared\Movie.mkv".AsOsAgnostic();
+            Mocker.GetMock<IDiskScanService>().Setup(service => service.GetVideoFiles(It.IsAny<string>(), It.IsAny<bool>())).Returns(new[] { path });
+            var imported = Envelope(7, "shared", 1, MovieAcquisitionTarget.Main) with { ShouldImport = false };
+            var pending = Envelope(7, "shared", 1, MovieAcquisitionTarget.ForEditionSlot(42));
+            GivenGroupedDecisions();
+            var grab = new DownloadHistory
+            {
+                EventType = DownloadHistoryEventType.DownloadGrabbed, DownloadId = "shared", DownloadClientId = 7, MovieId = 1, Date = now.AddMinutes(-2)
+            };
+            MovieAcquisitionTargetSerializer.Write(grab.Data, MovieAcquisitionTarget.Main);
+            var fileImported = new DownloadHistory
+            {
+                EventType = DownloadHistoryEventType.FileImported, DownloadId = "shared", DownloadClientId = 7, MovieId = 1, SourceTitle = path, Date = now.AddMinutes(-1)
+            };
+            MovieAcquisitionTargetSerializer.Write(fileImported.Data, MovieAcquisitionTarget.Main);
+            var completed = new DownloadHistory
+            {
+                EventType = DownloadHistoryEventType.DownloadImported, DownloadId = "shared", DownloadClientId = 7, MovieId = 1, Date = now
+            };
+            MovieAcquisitionTargetSerializer.Write(completed.Data, MovieAcquisitionTarget.Main);
+            Mocker.GetMock<IDownloadHistoryService>().Setup(service => service.GetHistory("shared", 7))
+                .Returns(new List<DownloadHistory> { completed, fileImported, grab });
+            Mocker.GetMock<IDownloadHistoryService>().Setup(service => service.GetLatestDownloadHistoryItemForTarget(
+                    "shared", 7, 1, MovieAcquisitionTarget.Main))
+                .Returns(completed);
+            Mocker.GetMock<IImportApprovedMovie>()
+                .Setup(service => service.Import(It.IsAny<List<ImportDecision>>(), true, pending.ImportItem, ImportMode.Copy))
+                .Returns(new List<ImportResult>());
+
+            Subject.ProcessPhysicalGroup(@"C:\drop\shared".AsOsAgnostic(), new[] { imported, pending });
+
+            Mocker.GetMock<IMovieEditionMatcher>().Verify(service => service.Match(
+                It.IsAny<RemoteMovie>(), It.IsAny<IReadOnlyCollection<MovieEditionSlot>>()), Times.Never());
+            Mocker.GetMock<IImportApprovedMovie>().Verify(service => service.Import(
+                It.Is<List<ImportDecision>>(decisions => decisions.Count == 0), true, pending.ImportItem, ImportMode.Copy), Times.Once());
+        }
+
+        [TestCase(DownloadHistoryEventType.DownloadGrabbed)]
+        [TestCase(DownloadHistoryEventType.DownloadFailed)]
+        [TestCase(DownloadHistoryEventType.DownloadIgnored)]
+        public void physical_group_should_not_exclude_old_import_source_after_newer_exact_lifecycle(DownloadHistoryEventType newestEvent)
+        {
+            var now = System.DateTime.UtcNow;
+            var path = @"C:\drop\shared\Movie.mkv".AsOsAgnostic();
+            Mocker.GetMock<IDiskScanService>().Setup(service => service.GetVideoFiles(It.IsAny<string>(), It.IsAny<bool>())).Returns(new[] { path });
+            var main = Envelope(7, "shared", 1, MovieAcquisitionTarget.Main);
+            var slot = Envelope(7, "shared", 1, MovieAcquisitionTarget.ForEditionSlot(42));
+            GivenGroupedDecisions();
+            Mocker.GetMock<IMovieEditionMatcher>().Setup(service => service.Match(It.IsAny<RemoteMovie>(), It.IsAny<IReadOnlyCollection<MovieEditionSlot>>()))
+                .Returns(EditionMatchResult.NoEvidence());
+            var oldImport = new DownloadHistory
+            {
+                EventType = DownloadHistoryEventType.FileImported,
+                DownloadId = "shared",
+                DownloadClientId = 7,
+                MovieId = 1,
+                SourceTitle = path,
+                Date = now.AddMinutes(-2)
+            };
+            MovieAcquisitionTargetSerializer.Write(oldImport.Data, MovieAcquisitionTarget.Main);
+            var newest = new DownloadHistory
+            {
+                EventType = newestEvent,
+                DownloadId = "shared",
+                DownloadClientId = 7,
+                MovieId = 1,
+                Date = now.AddMinutes(-1)
+            };
+            MovieAcquisitionTargetSerializer.Write(newest.Data, MovieAcquisitionTarget.Main);
+            Mocker.GetMock<IDownloadHistoryService>().Setup(service => service.GetHistory("shared", 7))
+                .Returns(new List<DownloadHistory> { newest, oldImport });
+            Mocker.GetMock<IDownloadHistoryService>().Setup(service => service.GetLatestDownloadHistoryItemForTarget(
+                    "shared", 7, 1, MovieAcquisitionTarget.Main))
+                .Returns(newest);
+            Mocker.GetMock<IImportApprovedMovie>()
+                .Setup(service => service.Import(It.IsAny<List<ImportDecision>>(), true, main.ImportItem, ImportMode.Copy))
+                .Returns<List<ImportDecision>, bool, DownloadClientItem, ImportMode>((decisions, _, _, _) => decisions.Select(decision => new ImportResult(decision)).ToList());
+
+            Subject.ProcessPhysicalGroup(@"C:\drop\shared".AsOsAgnostic(), new[] { main, slot });
+
+            Mocker.GetMock<IMakeImportDecision>().Verify(service => service.GetImportDecisions(
+                It.Is<List<string>>(files => files.Contains(path)), main.RemoteMovie.Movie, main.ImportItem, It.IsAny<ParsedMovieInfo>(), true), Times.Once());
         }
 
         private void VerifyNoImport()

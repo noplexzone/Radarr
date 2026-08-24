@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using NzbDrone.Core.Download.History;
 using NzbDrone.Core.History;
 using NzbDrone.Core.Movies;
 
@@ -18,6 +19,18 @@ namespace NzbDrone.Core.Parser.Model
 
         [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
         public int? MovieEditionSlotId => AcquisitionTarget.EditionSlotId;
+
+
+        public GrabbedReleaseInfo(DownloadHistory grabbedHistory)
+        {
+            var release = grabbedHistory.Release;
+            Title = grabbedHistory.SourceTitle ?? release?.Title;
+            Indexer = release?.Indexer ?? grabbedHistory.Data.GetValueOrDefault("Indexer");
+            Size = release?.Size ?? 0;
+            IndexerFlags = release?.IndexerFlags ?? default;
+            MovieIds = new List<int> { grabbedHistory.MovieId };
+            AcquisitionTarget = MovieAcquisitionTargetSerializer.Read(grabbedHistory.Data);
+        }
 
         public GrabbedReleaseInfo(List<MovieHistory> grabbedHistories)
         {

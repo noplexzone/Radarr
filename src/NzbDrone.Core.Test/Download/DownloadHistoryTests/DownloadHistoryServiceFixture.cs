@@ -109,6 +109,21 @@ namespace NzbDrone.Core.Test.Download.DownloadHistoryTests
         }
 
         [Test]
+        public void exact_lifecycle_should_include_file_imported_and_choose_newest_date()
+        {
+            var target = MovieAcquisitionTarget.Main;
+            var olderGrab = History(DownloadHistoryEventType.DownloadGrabbed, 1, 7, target);
+            olderGrab.Date = System.DateTime.UtcNow.AddMinutes(-1);
+            var newerImport = History(DownloadHistoryEventType.FileImported, 1, 7, target);
+            newerImport.Date = System.DateTime.UtcNow;
+            Mocker.GetMock<IDownloadHistoryRepository>()
+                .Setup(repository => repository.FindByDownloadId("reused"))
+                .Returns(new List<DownloadHistory> { olderGrab, newerImport });
+
+            Subject.GetLatestDownloadHistoryItemForTarget("reused", 7, 1, target).Should().BeSameAs(newerImport);
+        }
+
+        [Test]
         public void should_filter_lifecycle_and_grab_by_exact_logical_identity()
         {
             var target = MovieAcquisitionTarget.ForEditionSlot(42);

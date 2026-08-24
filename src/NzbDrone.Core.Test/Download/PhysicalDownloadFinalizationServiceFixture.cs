@@ -96,7 +96,7 @@ namespace NzbDrone.Core.Test.Download
         }
 
         [Test]
-        public void last_of_three_imported_should_mark_and_configured_remove_once_even_when_repeated()
+        public void last_of_three_grouped_imported_should_mark_once_and_retain_client_data()
         {
             var item = PhysicalItem();
             var main = LogicalDownload(TrackedDownloadState.Imported, downloadItem: item);
@@ -108,11 +108,11 @@ namespace NzbDrone.Core.Test.Download
             Subject.FinalizeTerminalDownload(slotB);
 
             _client.Verify(c => c.MarkItemAsImported(It.IsAny<DownloadClientItem>()), Times.Once());
-            _client.Verify(c => c.RemoveItem(It.IsAny<DownloadClientItem>(), true), Times.Once());
+            _client.Verify(c => c.RemoveItem(It.IsAny<DownloadClientItem>(), It.IsAny<bool>()), Times.Never());
         }
 
         [Test]
-        public void all_failed_should_remove_once_when_configured_even_when_repeated()
+        public void grouped_all_failed_should_retain_client_data_even_when_configured()
         {
             var item = PhysicalItem();
             var main = LogicalDownload(TrackedDownloadState.Failed, downloadItem: item);
@@ -123,7 +123,7 @@ namespace NzbDrone.Core.Test.Download
             Subject.FinalizeTerminalDownload(main);
 
             _client.Verify(c => c.MarkItemAsImported(It.IsAny<DownloadClientItem>()), Times.Never());
-            _client.Verify(c => c.RemoveItem(It.IsAny<DownloadClientItem>(), true), Times.Once());
+            _client.Verify(c => c.RemoveItem(It.IsAny<DownloadClientItem>(), true), Times.Never());
         }
 
         [Test]

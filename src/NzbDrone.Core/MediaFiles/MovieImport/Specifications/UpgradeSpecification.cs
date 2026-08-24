@@ -26,19 +26,15 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Specifications
         public ImportSpecDecision IsSatisfiedBy(LocalMovie localMovie, DownloadClientItem downloadClientItem)
         {
             var downloadPropersAndRepacks = _configService.DownloadPropersAndRepacks;
-            var qualityProfile = localMovie.Movie.QualityProfile;
+            var qualityProfile = localMovie.TargetQualityProfile ?? localMovie.Movie.QualityProfile;
             var qualityComparer = new QualityModelComparer(qualityProfile);
+            var movieFile = localMovie.TargetMovieFile ??
+                            (localMovie.AcquisitionTarget.Kind == NzbDrone.Core.Movies.MovieAcquisitionTargetKind.Main
+                                ? localMovie.Movie.MovieFile
+                                : null);
 
-            if (localMovie.Movie.MovieFileId > 0)
+            if (movieFile != null)
             {
-                var movieFile = localMovie.Movie.MovieFile;
-
-                if (movieFile == null)
-                {
-                    _logger.Trace("Unable to get movie file details from the DB. MovieId: {0} MovieFileId: {1}", localMovie.Movie.Id, localMovie.Movie.MovieFileId);
-
-                    return ImportSpecDecision.Accept();
-                }
 
                 var qualityCompare = qualityComparer.Compare(localMovie.Quality.Quality, movieFile.Quality.Quality);
 

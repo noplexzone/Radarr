@@ -26,6 +26,7 @@ namespace NzbDrone.Core.Download.History
         DownloadHistory GetLatestGrabForTarget(string downloadId, MovieAcquisitionTarget target);
         DownloadHistory GetLatestGrabForTarget(string downloadId, int downloadClientId, int movieId, MovieAcquisitionTarget target);
         List<DownloadHistory> GetGrabs(string downloadId, int downloadClientId);
+        List<DownloadHistory> GetHistory(string downloadId, int downloadClientId);
     }
 
     public class DownloadHistoryService : IDownloadHistoryService,
@@ -112,8 +113,10 @@ namespace NzbDrone.Core.Download.History
         {
             return _repository.FindByDownloadId(downloadId)
                 .Where(history => MatchesIdentity(history, downloadClientId, movieId, target))
+                .OrderByDescending(history => history.Date)
                 .FirstOrDefault(history => history.EventType == DownloadHistoryEventType.DownloadIgnored ||
                                            history.EventType == DownloadHistoryEventType.DownloadGrabbed ||
+                                           history.EventType == DownloadHistoryEventType.FileImported ||
                                            history.EventType == DownloadHistoryEventType.DownloadImported ||
                                            history.EventType == DownloadHistoryEventType.DownloadFailed);
         }
@@ -159,8 +162,15 @@ namespace NzbDrone.Core.Download.History
 
         public List<DownloadHistory> GetGrabs(string downloadId, int downloadClientId)
         {
+            return GetHistory(downloadId, downloadClientId)
+                .Where(history => history.EventType == DownloadHistoryEventType.DownloadGrabbed)
+                .ToList();
+        }
+
+        public List<DownloadHistory> GetHistory(string downloadId, int downloadClientId)
+        {
             return _repository.FindByDownloadId(downloadId)
-                .Where(history => history.EventType == DownloadHistoryEventType.DownloadGrabbed && history.DownloadClientId == downloadClientId)
+                .Where(history => history.DownloadClientId == downloadClientId)
                 .ToList();
         }
 

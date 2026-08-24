@@ -6,6 +6,7 @@ using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.MediaInfo;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Qualities;
+using NzbDrone.Core.Profiles.Qualities;
 
 namespace NzbDrone.Core.Parser.Model
 {
@@ -97,6 +98,10 @@ namespace NzbDrone.Core.Parser.Model
         public bool OtherVideoFiles { get; set; }
         public List<CustomFormat> CustomFormats { get; set; }
         public int CustomFormatScore { get; set; }
+        public QualityProfile TargetQualityProfile { get; set; }
+        public MovieFile TargetMovieFile { get; set; }
+        public int? TargetMinimumCustomFormatScore { get; set; }
+        public bool HasExactTargetContext { get; set; }
         public GrabbedReleaseInfo Release { get; set; }
         public bool ScriptImported { get; set; }
         public string FileNameBeforeRename { get; set; }

@@ -68,13 +68,14 @@ namespace NzbDrone.Core.Download
                     var markResult = MarkItemAsImportedOnce(trackedDownload, siblings, downloadClient);
 
                     if (markResult != PhysicalMutationResult.Failed &&
+                        siblings.Count == 1 &&
                         definition?.RemoveCompletedDownloads == true &&
                         CanRemoveCompleted(trackedDownload))
                     {
                         RemoveItemOnce(trackedDownload, siblings, downloadClient);
                     }
                 }
-                else if (definition?.RemoveFailedDownloads == true && CanRemoveFailed(trackedDownload))
+                else if (siblings.Count == 1 && definition?.RemoveFailedDownloads == true && CanRemoveFailed(trackedDownload))
                 {
                     RemoveItemOnce(trackedDownload, siblings, downloadClient);
                 }

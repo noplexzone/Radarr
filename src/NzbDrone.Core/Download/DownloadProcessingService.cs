@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using NLog;
 using NzbDrone.Core.Configuration;
@@ -44,29 +45,69 @@ namespace NzbDrone.Core.Download
             }
         }
 
+        private void ProcessImportGroup(List<TrackedDownload> downloads)
+        {
+            try
+            {
+                if (downloads.Count > 1)
+                {
+                    _completedDownloadService.ImportPhysicalGroup(downloads);
+                }
+                else
+                {
+                    _completedDownloadService.Import(downloads[0]);
+                }
+            }
+            catch (Exception e)
+            {
+                _logger.Debug(e, "Failed to process download: {0}", downloads[0].DownloadItem.Title);
+            }
+        }
+
+        private static bool HasKnownPhysicalIdentity(TrackedDownload download)
+        {
+            return download?.Key.IsValid == true &&
+                   download.AcquisitionTarget.Kind != NzbDrone.Core.Movies.MovieAcquisitionTargetKind.Unknown;
+        }
+
         public void Execute(ProcessMonitoredDownloadsCommand message)
         {
             var enableCompletedDownloadHandling = _configService.EnableCompletedDownloadHandling;
-            var trackedDownloads = _trackedDownloadService.GetTrackedDownloads()
-                                              .Where(t => t.IsTrackable)
-                                              .ToList();
+            var allTrackedDownloads = _trackedDownloadService.GetTrackedDownloads().ToList();
+            var trackedDownloads = allTrackedDownloads.Where(t => t.IsTrackable).ToList();
 
-            foreach (var trackedDownload in trackedDownloads)
+            if (enableCompletedDownloadHandling)
+            {
+                var pending = trackedDownloads.Where(download => download.State == TrackedDownloadState.ImportPending).ToList();
+                var pendingGroups = pending
+                    .Where(HasKnownPhysicalIdentity)
+                    .GroupBy(download => (download.DownloadClient, download.DownloadItem.DownloadId))
+                    .ToList();
+                var groupedPending = pendingGroups.SelectMany(group => group).ToHashSet();
+
+                foreach (var pendingGroup in pendingGroups)
+                {
+                    var physicalSiblings = allTrackedDownloads
+                        .Where(HasKnownPhysicalIdentity)
+                        .Where(download => download.DownloadClient == pendingGroup.Key.DownloadClient &&
+                                           download.DownloadItem.DownloadId.Equals(pendingGroup.Key.DownloadId, StringComparison.Ordinal))
+                        .ToList();
+                    ProcessImportGroup(physicalSiblings);
+                }
+
+                // Malformed/unknown identities deliberately retain the legacy one-item path.
+                foreach (var trackedDownload in pending.Where(download => !groupedPending.Contains(download)))
+                {
+                    ProcessImportGroup(new List<TrackedDownload> { trackedDownload });
+                }
+            }
+
+            // Process failures after imports so a failed import can be handled in this execution.
+            foreach (var trackedDownload in trackedDownloads.Where(download => download.State == TrackedDownloadState.FailedPending))
             {
                 try
                 {
-                    // Process completed items followed by failed, this allows failed imports to have
-                    // their state changed and be processed immediately instead of the next execution.
-
-                    if (enableCompletedDownloadHandling && trackedDownload.State == TrackedDownloadState.ImportPending)
-                    {
-                        _completedDownloadService.Import(trackedDownload);
-                    }
-
-                    if (trackedDownload.State == TrackedDownloadState.FailedPending)
-                    {
-                        _failedDownloadService.ProcessFailed(trackedDownload);
-                    }
+                    _failedDownloadService.ProcessFailed(trackedDownload);
                 }
                 catch (Exception e)
                 {

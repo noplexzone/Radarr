@@ -6,6 +6,7 @@ using NLog;
 using NzbDrone.Common.EnvironmentInfo;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Common.Instrumentation.Extensions;
+using NzbDrone.Core.Download.History;
 using NzbDrone.Core.Download.TrackedDownloads;
 using NzbDrone.Core.History;
 using NzbDrone.Core.MediaFiles;
@@ -21,6 +22,7 @@ namespace NzbDrone.Core.Download
     {
         void Check(TrackedDownload trackedDownload);
         void Import(TrackedDownload trackedDownload);
+        void ImportPhysicalGroup(IReadOnlyList<TrackedDownload> trackedDownloads);
         bool VerifyImport(TrackedDownload trackedDownload, List<ImportResult> importResults);
     }
 
@@ -28,6 +30,7 @@ namespace NzbDrone.Core.Download
     {
         private readonly IEventAggregator _eventAggregator;
         private readonly IHistoryService _historyService;
+        private readonly IDownloadHistoryService _downloadHistoryService;
         private readonly IProvideImportItemService _provideImportItemService;
         private readonly IDownloadedMovieImportService _downloadedMovieImportService;
         private readonly IParsingService _parsingService;
@@ -38,6 +41,7 @@ namespace NzbDrone.Core.Download
 
         public CompletedDownloadService(IEventAggregator eventAggregator,
                                         IHistoryService historyService,
+                                        IDownloadHistoryService downloadHistoryService,
                                         IProvideImportItemService provideImportItemService,
                                         IDownloadedMovieImportService downloadedMovieImportService,
                                         IParsingService parsingService,
@@ -48,6 +52,7 @@ namespace NzbDrone.Core.Download
         {
             _eventAggregator = eventAggregator;
             _historyService = historyService;
+            _downloadHistoryService = downloadHistoryService;
             _provideImportItemService = provideImportItemService;
             _downloadedMovieImportService = downloadedMovieImportService;
             _parsingService = parsingService;
@@ -144,7 +149,89 @@ namespace NzbDrone.Core.Download
                 trackedDownload.RemoteMovie.Movie,
                 trackedDownload.ImportItem);
 
-            if (VerifyImport(trackedDownload, importResults))
+            HandleImportResults(trackedDownload, outputPath, importResults, false);
+        }
+
+        public void ImportPhysicalGroup(IReadOnlyList<TrackedDownload> trackedDownloads)
+        {
+            if (trackedDownloads == null || trackedDownloads.Count < 2)
+            {
+                foreach (var trackedDownload in trackedDownloads ?? Array.Empty<TrackedDownload>())
+                {
+                    Import(trackedDownload);
+                }
+
+                return;
+            }
+
+            var pendingDownloads = trackedDownloads.Where(download => download.State == TrackedDownloadState.ImportPending).ToList();
+            if (pendingDownloads.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var trackedDownload in trackedDownloads)
+            {
+                SetImportItem(trackedDownload);
+            }
+
+            var first = trackedDownloads[0];
+            var outputPath = first.ImportItem?.OutputPath.FullPath;
+            var valid = first.Key.IsValid &&
+                        first.AcquisitionTarget.Kind != MovieAcquisitionTargetKind.Unknown &&
+                        trackedDownloads.Select(download => download.Key).Distinct().Count() == trackedDownloads.Count &&
+                        trackedDownloads.All(download =>
+                            download.Key.IsValid &&
+                            download.AcquisitionTarget.Kind != MovieAcquisitionTargetKind.Unknown &&
+                            download.DownloadClient == first.DownloadClient &&
+                            download.DownloadItem.DownloadId.Equals(first.DownloadItem.DownloadId, StringComparison.Ordinal) &&
+                            download.ImportItem?.OutputPath.FullPath.Equals(outputPath, StringComparison.Ordinal) == true &&
+                            download.RemoteMovie?.Movie?.Id == download.Key.MovieId &&
+                            download.RemoteMovie.AcquisitionTarget.Equals(download.Key.AcquisitionTarget) &&
+                            ValidatePath(download));
+
+            if (!valid)
+            {
+                foreach (var trackedDownload in pendingDownloads)
+                {
+                    trackedDownload.Warn("Grouped import context did not match the exact physical download and target.");
+                    SetStateToImportBlocked(trackedDownload, true);
+                }
+
+                return;
+            }
+
+            foreach (var trackedDownload in pendingDownloads)
+            {
+                trackedDownload.State = TrackedDownloadState.Importing;
+            }
+
+            var envelopes = trackedDownloads
+                .Select(download => new PhysicalDownloadImportEnvelope(download.Key, download.RemoteMovie, download.ImportItem, pendingDownloads.Contains(download)))
+                .ToList();
+            try
+            {
+                var groupedResults = _downloadedMovieImportService.ProcessPhysicalGroup(outputPath, envelopes);
+                foreach (var trackedDownload in pendingDownloads)
+                {
+                    var result = groupedResults.SingleOrDefault(item => item.Key == trackedDownload.Key);
+                    HandleImportResults(trackedDownload, outputPath, result?.ImportResults ?? new List<ImportResult>(), true);
+                }
+            }
+            catch
+            {
+                foreach (var trackedDownload in trackedDownloads.Where(download => download.State == TrackedDownloadState.Importing))
+                {
+                    trackedDownload.State = TrackedDownloadState.ImportBlocked;
+                }
+
+                throw;
+            }
+        }
+
+        private void HandleImportResults(TrackedDownload trackedDownload, string outputPath, List<ImportResult> importResults, bool requireExactTarget)
+        {
+            if (VerifyImport(trackedDownload, importResults, requireExactTarget))
             {
                 return;
             }
@@ -155,47 +242,50 @@ namespace NzbDrone.Core.Download
             {
                 trackedDownload.Warn("No files found are eligible for import in {0}", outputPath);
 
+                if (requireExactTarget)
+                {
+                    SetStateToImportBlocked(trackedDownload, true);
+                }
+
                 return;
             }
 
-            if (importResults.Count == 1)
+            if (importResults.Count == 1 && _rejectedImportService.Process(trackedDownload, importResults.First()))
             {
-                var firstResult = importResults.First();
-
-                if (_rejectedImportService.Process(trackedDownload, firstResult))
+                if (requireExactTarget && trackedDownload.State == TrackedDownloadState.ImportPending)
                 {
-                    return;
+                    SetStateToImportBlocked(trackedDownload, true);
                 }
+
+                return;
             }
 
             var statusMessages = new List<TrackedDownloadStatusMessage>
-                                 {
-                                    new TrackedDownloadStatusMessage("One or more movies expected in this release were not imported or missing", new List<string>())
-                                 };
-
-            if (importResults.Any(c => c.Result != ImportResultType.Imported))
             {
-                statusMessages.AddRange(
-                    importResults
-                        .Where(v => v.Result != ImportResultType.Imported && v.ImportDecision.LocalMovie != null)
-                        .OrderBy(v => v.ImportDecision.LocalMovie.Path)
-                        .Select(v =>
-                            new TrackedDownloadStatusMessage(Path.GetFileName(v.ImportDecision.LocalMovie.Path),
-                                v.Errors)));
-            }
+                new TrackedDownloadStatusMessage("One or more movies expected in this release were not imported or missing", new List<string>())
+            };
 
-            if (statusMessages.Any())
-            {
-                trackedDownload.Warn(statusMessages.ToArray());
-                SetStateToImportBlocked(trackedDownload);
-            }
+            statusMessages.AddRange(importResults
+                .Where(result => result.Result != ImportResultType.Imported && result.ImportDecision.LocalMovie != null)
+                .OrderBy(result => result.ImportDecision.LocalMovie.Path)
+                .Select(result => new TrackedDownloadStatusMessage(Path.GetFileName(result.ImportDecision.LocalMovie.Path), result.Errors)));
+
+            trackedDownload.Warn(statusMessages.ToArray());
+            SetStateToImportBlocked(trackedDownload, requireExactTarget);
         }
 
         public bool VerifyImport(TrackedDownload trackedDownload, List<ImportResult> importResults)
         {
-            var allMoviesImported = importResults.Where(c => c.Result == ImportResultType.Imported)
-                                       .Select(c => c.ImportDecision.LocalMovie.Movie)
-                                       .Any();
+            return VerifyImport(trackedDownload, importResults, false);
+        }
+
+        private bool VerifyImport(TrackedDownload trackedDownload, List<ImportResult> importResults, bool requireExactTarget)
+        {
+            var allMoviesImported = importResults.Any(result =>
+                result.Result == ImportResultType.Imported &&
+                (!requireExactTarget ||
+                 (result.ImportDecision.LocalMovie?.Movie?.Id == trackedDownload.Key.MovieId &&
+                  result.ImportDecision.LocalMovie.AcquisitionTarget.Equals(trackedDownload.Key.AcquisitionTarget))));
 
             if (allMoviesImported)
             {
@@ -210,11 +300,24 @@ namespace NzbDrone.Core.Download
             // episode files and still mark the download complete when all files are imported.
             var atLeastOneMovieImported = importResults.Any(c => c.Result == ImportResultType.Imported);
 
-            var historyItems = _historyService.FindByDownloadId(trackedDownload.DownloadItem.DownloadId)
-                                                  .OrderByDescending(h => h.Date)
-                                                  .ToList();
-
-            var allMoviesImportedInHistory = _trackedDownloadAlreadyImported.IsImported(trackedDownload, historyItems);
+            bool allMoviesImportedInHistory;
+            if (requireExactTarget)
+            {
+                var latestLifecycle = _downloadHistoryService.GetLatestDownloadHistoryItemForTarget(
+                    trackedDownload.Key.DownloadId,
+                    trackedDownload.Key.DownloadClientId,
+                    trackedDownload.Key.MovieId,
+                    trackedDownload.Key.AcquisitionTarget);
+                allMoviesImportedInHistory = latestLifecycle?.EventType == DownloadHistoryEventType.DownloadImported ||
+                                             latestLifecycle?.EventType == DownloadHistoryEventType.FileImported;
+            }
+            else
+            {
+                var historyItems = _historyService.FindByDownloadId(trackedDownload.DownloadItem.DownloadId)
+                    .OrderByDescending(h => h.Date)
+                    .ToList();
+                allMoviesImportedInHistory = _trackedDownloadAlreadyImported.IsImported(trackedDownload, historyItems);
+            }
 
             if (allMoviesImportedInHistory)
             {
@@ -246,17 +349,32 @@ namespace NzbDrone.Core.Download
             return false;
         }
 
-        private void SetStateToImportBlocked(TrackedDownload trackedDownload)
+        private void SetStateToImportBlocked(TrackedDownload trackedDownload, bool requireExactTarget = false)
         {
             trackedDownload.State = TrackedDownloadState.ImportBlocked;
 
             if (!trackedDownload.HasNotifiedManualInteractionRequired)
             {
-                var grabbedHistories = _historyService.FindByDownloadId(trackedDownload.DownloadItem.DownloadId).Where(h => h.EventType == MovieHistoryEventType.Grabbed).ToList();
+                GrabbedReleaseInfo releaseInfo;
+                if (requireExactTarget)
+                {
+                    var grabbedHistory = _downloadHistoryService.GetLatestGrabForTarget(
+                        trackedDownload.Key.DownloadId,
+                        trackedDownload.Key.DownloadClientId,
+                        trackedDownload.Key.MovieId,
+                        trackedDownload.Key.AcquisitionTarget);
+                    releaseInfo = grabbedHistory == null ? null : new GrabbedReleaseInfo(grabbedHistory);
+                }
+                else
+                {
+                    var grabbedHistories = _historyService.FindByDownloadId(trackedDownload.DownloadItem.DownloadId)
+                        .Where(h => h.EventType == MovieHistoryEventType.Grabbed)
+                        .ToList();
+                    releaseInfo = grabbedHistories.Count > 0 ? new GrabbedReleaseInfo(grabbedHistories) : null;
+                }
 
                 trackedDownload.HasNotifiedManualInteractionRequired = true;
 
-                var releaseInfo = grabbedHistories.Count > 0 ? new GrabbedReleaseInfo(grabbedHistories) : null;
                 var manualInteractionEvent = new ManualInteractionRequiredEvent(trackedDownload, releaseInfo);
 
                 _eventAggregator.PublishEvent(manualInteractionEvent);

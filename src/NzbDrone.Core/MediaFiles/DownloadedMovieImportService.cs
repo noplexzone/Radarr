@@ -3,14 +3,18 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using NLog;
+using NzbDrone.Common;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.EnvironmentInfo;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Configuration;
 using NzbDrone.Core.Download;
+using NzbDrone.Core.Download.History;
+using NzbDrone.Core.Download.TrackedDownloads;
 using NzbDrone.Core.History;
 using NzbDrone.Core.MediaFiles.MovieImport;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.MovieEditionSlots;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
 
@@ -20,6 +24,7 @@ namespace NzbDrone.Core.MediaFiles
     {
         List<ImportResult> ProcessRootFolder(DirectoryInfo directoryInfo);
         List<ImportResult> ProcessPath(string path, ImportMode importMode = ImportMode.Auto, Movie movie = null, DownloadClientItem downloadClientItem = null);
+        List<PhysicalDownloadImportResult> ProcessPhysicalGroup(string path, IReadOnlyList<PhysicalDownloadImportEnvelope> envelopes);
         bool ShouldDeleteFolder(DirectoryInfo directoryInfo, Movie movie);
     }
 
@@ -35,6 +40,9 @@ namespace NzbDrone.Core.MediaFiles
         private readonly IRuntimeInfo _runtimeInfo;
         private readonly IConfigService _config;
         private readonly IHistoryService _historyService;
+        private readonly IDownloadHistoryService _downloadHistoryService;
+        private readonly IMovieEditionSlotService _movieEditionSlotService;
+        private readonly IMovieEditionMatcher _movieEditionMatcher;
         private readonly Logger _logger;
 
         public DownloadedMovieImportService(IDiskProvider diskProvider,
@@ -47,6 +55,9 @@ namespace NzbDrone.Core.MediaFiles
                                                IRuntimeInfo runtimeInfo,
                                                IConfigService config,
                                                IHistoryService historyService,
+                                               IDownloadHistoryService downloadHistoryService,
+                                               IMovieEditionSlotService movieEditionSlotService,
+                                               IMovieEditionMatcher movieEditionMatcher,
                                                Logger logger)
         {
             _diskProvider = diskProvider;
@@ -59,6 +70,9 @@ namespace NzbDrone.Core.MediaFiles
             _runtimeInfo = runtimeInfo;
             _config = config;
             _historyService = historyService;
+            _downloadHistoryService = downloadHistoryService;
+            _movieEditionSlotService = movieEditionSlotService;
+            _movieEditionMatcher = movieEditionMatcher;
             _logger = logger;
         }
 
@@ -111,6 +125,189 @@ namespace NzbDrone.Core.MediaFiles
 
             LogInaccessiblePathError(path);
             return new List<ImportResult>();
+        }
+
+        public List<PhysicalDownloadImportResult> ProcessPhysicalGroup(string path, IReadOnlyList<PhysicalDownloadImportEnvelope> envelopes)
+        {
+            var results = envelopes.Select(envelope => new PhysicalDownloadImportResult(envelope.Key, new List<ImportResult>())).ToList();
+            if (envelopes.Count < 2)
+            {
+                return results;
+            }
+
+            List<string> videoFiles;
+            ParsedMovieInfo folderInfo = null;
+            if (_diskProvider.FolderExists(path))
+            {
+                if (envelopes.Select(envelope => envelope.Key.MovieId).Distinct().Any(movieId => _movieService.MoviePathExists(path)))
+                {
+                    return results;
+                }
+
+                var directoryInfo = new DirectoryInfo(path);
+                folderInfo = Parser.Parser.ParseMovieTitle(GetCleanedUpFolderName(directoryInfo.Name));
+                videoFiles = _diskScanService.FilterPaths(path, _diskScanService.GetVideoFiles(path)).ToList();
+            }
+            else if (_diskProvider.FileExists(path))
+            {
+                videoFiles = new List<string> { path };
+            }
+            else
+            {
+                LogInaccessiblePathError(path);
+                return results;
+            }
+
+            var envelopeByKey = envelopes.ToDictionary(envelope => envelope.Key);
+            var filesByKey = envelopes.ToDictionary(envelope => envelope.Key, _ => new List<string>());
+            var activeEnvelopes = envelopes.Where(envelope => envelope.ShouldImport).ToList();
+            if (activeEnvelopes.Count == 0)
+            {
+                return results;
+            }
+
+            var histories = _downloadHistoryService.GetHistory(envelopes[0].Key.DownloadId, envelopes[0].Key.DownloadClientId) ?? new List<DownloadHistory>();
+            var importedSourcePaths = new HashSet<string>(PathEqualityComparer.Instance);
+            foreach (var envelope in envelopes)
+            {
+                var latestLifecycle = _downloadHistoryService.GetLatestDownloadHistoryItemForTarget(
+                    envelope.Key.DownloadId,
+                    envelope.Key.DownloadClientId,
+                    envelope.Key.MovieId,
+                    envelope.Key.AcquisitionTarget);
+                if (latestLifecycle?.EventType != DownloadHistoryEventType.DownloadImported &&
+                    latestLifecycle?.EventType != DownloadHistoryEventType.FileImported)
+                {
+                    continue;
+                }
+
+                var exactHistory = histories
+                    .Where(history => history.DownloadClientId == envelope.Key.DownloadClientId &&
+                                      string.Equals(history.DownloadId, envelope.Key.DownloadId, StringComparison.Ordinal) &&
+                                      history.MovieId == envelope.Key.MovieId &&
+                                      MovieAcquisitionTargetSerializer.Read(history.Data).Equals(envelope.Key.AcquisitionTarget))
+                    .ToList();
+                var latestGrab = exactHistory
+                    .Where(history => history.EventType == DownloadHistoryEventType.DownloadGrabbed)
+                    .OrderByDescending(history => history.Date)
+                    .FirstOrDefault();
+                foreach (var imported in exactHistory.Where(history =>
+                             history.EventType == DownloadHistoryEventType.FileImported &&
+                             history.SourceTitle.IsNotNullOrWhiteSpace() &&
+                             (latestGrab == null || history.Date >= latestGrab.Date)))
+                {
+                    importedSourcePaths.Add(imported.SourceTitle.CleanFilePath());
+                }
+            }
+
+            videoFiles = videoFiles.Where(file => !importedSourcePaths.Contains(file.CleanFilePath())).ToList();
+
+            var slotsByMovie = envelopes.Select(envelope => envelope.Key.MovieId)
+                .Distinct()
+                .ToDictionary(movieId => movieId, movieId => _movieEditionSlotService.GetForMovie(movieId));
+            var conflictingPaths = new HashSet<string>(PathEqualityComparer.Instance);
+
+            foreach (var file in videoFiles)
+            {
+                var claims = new HashSet<TrackedDownloadKey>();
+                foreach (var movieGroup in envelopes.GroupBy(envelope => envelope.Key.MovieId))
+                {
+                    var context = movieGroup.First().RemoteMovie;
+                    var candidate = new RemoteMovie
+                    {
+                        Movie = context.Movie,
+                        ParsedMovieInfo = Parser.Parser.ParseMoviePath(file),
+                        Release = new ReleaseInfo { Title = Path.GetFileNameWithoutExtension(file) }
+                    };
+                    var match = _movieEditionMatcher.Match(candidate, slotsByMovie[movieGroup.Key]);
+                    var candidateTarget = match.Status == EditionMatchStatus.UniqueSlot
+                        ? MovieAcquisitionTarget.ForEditionSlot(match.SelectedSlotId.Value)
+                        : match.Status == EditionMatchStatus.NoEditionEvidence
+                            ? MovieAcquisitionTarget.Main
+                            : null;
+                    if (candidateTarget == null)
+                    {
+                        continue;
+                    }
+
+                    foreach (var envelope in movieGroup.Where(item => item.Key.AcquisitionTarget.Equals(candidateTarget)))
+                    {
+                        claims.Add(envelope.Key);
+                    }
+                }
+
+                if (claims.Count > 1)
+                {
+                    conflictingPaths.Add(file.CleanFilePath());
+                }
+
+                foreach (var claim in claims)
+                {
+                    filesByKey[claim].Add(file);
+                }
+            }
+
+            var decisionsByKey = new Dictionary<TrackedDownloadKey, List<ImportDecision>>();
+            foreach (var envelope in activeEnvelopes)
+            {
+                var decisions = _importDecisionMaker.GetImportDecisions(filesByKey[envelope.Key],
+                    envelope.RemoteMovie.Movie, envelope.ImportItem, folderInfo, true);
+
+                for (var index = 0; index < decisions.Count; index++)
+                {
+                    var localMovie = decisions[index].LocalMovie;
+                    if (localMovie == null)
+                    {
+                        continue;
+                    }
+
+                    localMovie.AcquisitionTarget = envelope.Key.AcquisitionTarget;
+                    localMovie.Release = GetExactGrabbedRelease(envelope);
+                    localMovie.TargetQualityProfile = envelope.Key.AcquisitionTarget.Kind == MovieAcquisitionTargetKind.EditionSlot
+                        ? envelope.RemoteMovie.SlotQualityProfile
+                        : envelope.RemoteMovie.Movie.QualityProfile;
+                    localMovie.TargetMovieFile = envelope.Key.AcquisitionTarget.Kind == MovieAcquisitionTargetKind.EditionSlot
+                        ? envelope.RemoteMovie.SlotMovieFile
+                        : envelope.RemoteMovie.Movie.MovieFile;
+                    localMovie.TargetMinimumCustomFormatScore = envelope.Key.AcquisitionTarget.Kind == MovieAcquisitionTargetKind.EditionSlot
+                        ? envelope.RemoteMovie.SlotMinimumCustomFormatScore
+                        : null;
+                    localMovie.HasExactTargetContext = true;
+                    localMovie.CustomFormatScore = localMovie.TargetQualityProfile?.CalculateCustomFormatScore(localMovie.CustomFormats) ?? 0;
+                    decisions[index] = conflictingPaths.Contains(localMovie.Path.CleanFilePath())
+                        ? new ImportDecision(localMovie, new ImportRejection(ImportRejectionReason.InvalidFilePath, "Source path was claimed by more than one exact import target"))
+                        : _importDecisionMaker.GetDecision(localMovie, envelope.ImportItem);
+                }
+
+                decisionsByKey[envelope.Key] = decisions;
+            }
+
+            var combinedDecisions = decisionsByKey.Values.SelectMany(decisions => decisions).ToList();
+            var combinedResults = _importApprovedMovie.Import(combinedDecisions, true, activeEnvelopes[0].ImportItem, ImportMode.Copy);
+            foreach (var importResult in combinedResults)
+            {
+                var localMovie = importResult.ImportDecision.LocalMovie;
+                if (localMovie == null)
+                {
+                    continue;
+                }
+
+                var matchingKey = envelopeByKey.Keys.SingleOrDefault(key =>
+                    key.MovieId == localMovie.Movie?.Id && key.AcquisitionTarget.Equals(localMovie.AcquisitionTarget));
+                if (matchingKey != null)
+                {
+                    results.Single(result => result.Key == matchingKey).ImportResults.Add(importResult);
+                }
+            }
+
+            return results;
+        }
+
+        private GrabbedReleaseInfo GetExactGrabbedRelease(PhysicalDownloadImportEnvelope envelope)
+        {
+            var history = _downloadHistoryService.GetLatestGrabForTarget(envelope.Key.DownloadId,
+                envelope.Key.DownloadClientId, envelope.Key.MovieId, envelope.Key.AcquisitionTarget);
+            return history == null ? null : new GrabbedReleaseInfo(history);
         }
 
         public bool ShouldDeleteFolder(DirectoryInfo directoryInfo, Movie movie)

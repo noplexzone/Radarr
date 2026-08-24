@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using NLog;
+using NzbDrone.Common;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Download;
@@ -70,8 +71,20 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
             var importResults = new List<ImportResult>();
             var validatedImports = new List<(ImportDecision Decision, MovieEditionSlot Slot)>();
             var slots = new Dictionary<int, MovieEditionSlot>();
+            var duplicateSourceDecisions = decisions
+                .Where(decision => decision.Approved && decision.LocalMovie?.Path.IsNotNullOrWhiteSpace() == true)
+                .GroupBy(decision => decision.LocalMovie.Path.CleanFilePath(), PathEqualityComparer.Instance)
+                .Where(group => group
+                    .Select(decision => (decision.LocalMovie.Movie.Id, decision.LocalMovie.AcquisitionTarget))
+                    .Distinct()
+                    .Count() > 1)
+                .SelectMany(group => group)
+                .ToHashSet();
 
-            foreach (var decision in decisions.Where(decision => decision.Approved))
+            importResults.AddRange(duplicateSourceDecisions.Select(decision =>
+                new ImportResult(decision, "Failed to import movie, source path was approved for multiple exact targets.")));
+
+            foreach (var decision in decisions.Where(decision => decision.Approved && !duplicateSourceDecisions.Contains(decision)))
             {
                 try
                 {
@@ -114,10 +127,14 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                 .SelectMany(group =>
                 {
                     var slot = group.First().Slot;
-                    var profile = slot?.QualityProfileId is int profileId
-                        ? _qualityProfileService.Get(profileId)
-                        : group.First().Decision.LocalMovie.Movie.QualityProfile;
-                    var minimumScore = slot?.MinimumCustomFormatScore;
+                    var targetContext = group.First().Decision.LocalMovie;
+                    var profile = targetContext.TargetQualityProfile ??
+                                  (slot?.QualityProfileId is int profileId
+                                      ? _qualityProfileService.Get(profileId)
+                                      : targetContext.Movie.QualityProfile);
+                    var minimumScore = targetContext.HasExactTargetContext
+                        ? targetContext.TargetMinimumCustomFormatScore
+                        : targetContext.TargetMinimumCustomFormatScore ?? slot?.MinimumCustomFormatScore;
 
                     return group
                         .OrderByDescending(item => !minimumScore.HasValue || profile.CalculateCustomFormatScore(item.Decision.LocalMovie.CustomFormats) >= minimumScore.Value)
@@ -160,7 +177,11 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                         : null;
                     movieFile.ImportTarget = localMovie.ImportTarget;
 
-                    if (downloadClientItem?.DownloadId.IsNotNullOrWhiteSpace() == true)
+                    if (localMovie.HasExactTargetContext)
+                    {
+                        movieFile.IndexerFlags = localMovie.Release?.IndexerFlags ?? default;
+                    }
+                    else if (downloadClientItem?.DownloadId.IsNotNullOrWhiteSpace() == true)
                     {
                         var grabHistory = _historyService.FindByDownloadId(downloadClientItem.DownloadId)
                             .OrderByDescending(h => h.Date)

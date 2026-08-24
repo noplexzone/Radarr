@@ -538,6 +538,80 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
         }
 
         [Test]
+        public void exact_grouped_import_should_use_release_indexer_flags_without_movie_history()
+        {
+            var localMovie = _approvedDecisions.First().LocalMovie;
+            localMovie.HasExactTargetContext = true;
+            localMovie.Release = new GrabbedReleaseInfo(new NzbDrone.Core.Download.History.DownloadHistory
+            {
+                MovieId = localMovie.Movie.Id,
+                Release = new ReleaseInfo { IndexerFlags = IndexerFlags.G_Freeleech }
+            });
+            _downloadClientItem.DownloadId = "shared";
+            MovieFile captured = null;
+            Mocker.GetMock<IMediaFileService>()
+                .Setup(service => service.Add(It.IsAny<MovieFile>()))
+                .Callback<MovieFile>(file => captured = file)
+                .Returns<MovieFile>(file => file);
+
+            Subject.Import(_approvedDecisions, true, _downloadClientItem, ImportMode.Copy);
+
+            captured.IndexerFlags.Should().Be(IndexerFlags.G_Freeleech);
+            Mocker.GetMock<IHistoryService>().Verify(service => service.FindByDownloadId(It.IsAny<string>()), Times.Never());
+        }
+
+        [Test]
+        public void exact_grouped_null_minimum_should_not_fall_back_to_later_slot_minimum()
+        {
+            var movie = _approvedDecisions.First().LocalMovie.Movie;
+            var slotProfile = new QualityProfile
+            {
+                Id = 20,
+                Items = new List<QualityProfileQualityItem>
+                {
+                    new QualityProfileQualityItem { Allowed = true, Quality = Quality.Bluray1080p },
+                    new QualityProfileQualityItem { Allowed = true, Quality = Quality.Bluray720p }
+                }
+            };
+            var preferredFormat = new CustomFormat { Id = 100, Name = "Preferred" };
+            slotProfile.FormatItems = new List<ProfileFormatItem>
+            {
+                new ProfileFormatItem { Format = preferredFormat, Score = 100 }
+            };
+            var slot = new MovieEditionSlot { Id = 10, MovieId = movie.Id, QualityProfileId = slotProfile.Id, MinimumCustomFormatScore = 100 };
+            Mocker.GetMock<IMovieEditionSlotService>().Setup(service => service.GetById(slot.Id)).Returns(slot);
+
+            var higherQualityWithoutMinimum = new ImportDecision(new LocalMovie
+            {
+                Movie = movie,
+                Path = Path.Combine(movie.Path, "higher.mkv"),
+                Quality = new QualityModel(Quality.Bluray720p),
+                CustomFormats = new List<CustomFormat>(),
+                MovieEditionSlotId = slot.Id,
+                TargetQualityProfile = slotProfile,
+                TargetMinimumCustomFormatScore = null,
+                HasExactTargetContext = true,
+                Size = 9.Gigabytes()
+            });
+            var lowerQualityMeetingMutableMinimum = new ImportDecision(new LocalMovie
+            {
+                Movie = movie,
+                Path = Path.Combine(movie.Path, "lower.mkv"),
+                Quality = new QualityModel(Quality.Bluray1080p),
+                CustomFormats = new List<CustomFormat> { preferredFormat },
+                MovieEditionSlotId = slot.Id,
+                TargetQualityProfile = slotProfile,
+                TargetMinimumCustomFormatScore = null,
+                HasExactTargetContext = true,
+                Size = 1.Gigabytes()
+            });
+
+            var result = Subject.Import(new List<ImportDecision> { higherQualityWithoutMinimum, lowerQualityMeetingMutableMinimum }, true);
+
+            result.Should().ContainSingle(item => item.Result == ImportResultType.Imported && item.ImportDecision == higherQualityWithoutMinimum);
+        }
+
+        [Test]
         public void changing_a_slot_target_to_unassigned_should_clear_stale_slot_identity_before_upgrade()
         {
             var localMovie = _approvedDecisions.First().LocalMovie;
