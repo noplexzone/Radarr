@@ -35,16 +35,19 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
         private readonly IMovieService _movieService;
         private readonly IMediaFileService _mediaFileService;
         private readonly IMovieEditionSlotService _slotService;
+        private readonly IMovieEditionSlotMutationStore _mutationStore;
         private readonly IDeleteMediaFiles _deleteMediaFiles;
 
         public MovieFileAssignmentService(IMovieService movieService,
                                           IMediaFileService mediaFileService,
                                           IMovieEditionSlotService slotService,
+                                          IMovieEditionSlotMutationStore mutationStore,
                                           IDeleteMediaFiles deleteMediaFiles)
         {
             _movieService = movieService;
             _mediaFileService = mediaFileService;
             _slotService = slotService;
+            _mutationStore = mutationStore;
             _deleteMediaFiles = deleteMediaFiles;
         }
 
@@ -80,8 +83,8 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
                 return;
             }
 
+            _mutationStore.AssignFile(movieId, movieFileId, slotId, file.MovieEditionSlotId);
             file.MovieEditionSlotId = slotId;
-            _mediaFileService.Update(file);
         }
 
         public void UnassignEditionFile(int slotId)
@@ -92,8 +95,7 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
                 return;
             }
 
-            file.MovieEditionSlotId = null;
-            _mediaFileService.Update(file);
+            UnassignFile(file);
         }
 
         public void MakeFileMain(int movieId, int movieFileId, ExistingMainFileAction existingMainAction)
@@ -143,8 +145,7 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
 
             if (file.MovieEditionSlotId.HasValue)
             {
-                file.MovieEditionSlotId = null;
-                _mediaFileService.Update(file);
+                UnassignFile(file);
             }
 
             movie.MovieFileId = movieFileId;
@@ -193,8 +194,7 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
             switch (attachedFileAction)
             {
                 case AttachedEditionFileAction.KeepUnassigned:
-                    file.MovieEditionSlotId = null;
-                    _mediaFileService.Update(file);
+                    UnassignFile(file);
                     _slotService.Delete(slotId);
                     break;
                 case AttachedEditionFileAction.DeleteRecycle:
@@ -250,6 +250,13 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
             }
 
             return files;
+        }
+
+        private void UnassignFile(MovieFile file)
+        {
+            var slotId = file.MovieEditionSlotId ?? throw new InvalidOperationException($"Movie file {file.Id} is not assigned to an edition slot.");
+            _mutationStore.UnassignFile(file.Id, slotId);
+            file.MovieEditionSlotId = null;
         }
 
         private MovieFile FindEditionFile(MovieEditionSlot slot)

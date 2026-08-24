@@ -34,14 +34,17 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
     {
         private readonly IMovieEditionSlotRepository _repo;
         private readonly IMovieEditionSlotAliasRepository _aliasRepo;
+        private readonly IMovieEditionSlotMutationStore _mutationStore;
         private readonly IMediaFileService _mediaFileService;
 
         public MovieEditionSlotService(IMovieEditionSlotRepository repo,
                                        IMovieEditionSlotAliasRepository aliasRepo,
+                                       IMovieEditionSlotMutationStore mutationStore,
                                        IMediaFileService mediaFileService)
         {
             _repo = repo;
             _aliasRepo = aliasRepo;
+            _mutationStore = mutationStore;
             _mediaFileService = mediaFileService;
         }
 
@@ -64,11 +67,7 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
                 slot.DateAdded = DateTime.UtcNow;
             }
 
-            var aliases = slot.Aliases.ToList();
-            var added = _repo.Insert(slot);
-            SaveAliases(added.Id, aliases);
-            added.Aliases = aliases;
-            return added;
+            return _mutationStore.Add(slot);
         }
 
         public MovieEditionSlot Update(MovieEditionSlot slot)
@@ -90,11 +89,7 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
 
             Normalize(slot);
             ValidateTerms(slot);
-            var aliases = slot.Aliases.ToList();
-            var updated = _repo.Update(slot);
-            SaveAliases(updated.Id, aliases);
-            updated.Aliases = aliases;
-            return updated;
+            return _mutationStore.Update(slot);
         }
 
         public void Delete(int id)
@@ -105,8 +100,7 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
                 throw new InvalidOperationException($"Edition '{slot.EditionName}' still has an assigned movie file. Remove it through the movie file assignment service.");
             }
 
-            _aliasRepo.DeleteForSlot(id);
-            _repo.Delete(id);
+            _mutationStore.Delete(id);
         }
 
         public Dictionary<int, (int Monitored, int Missing)> GetSlotStatusSummary(IEnumerable<int> movieIds)
@@ -153,10 +147,8 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
             {
                 foreach (var slot in _repo.FindByMovieId(movie.Id))
                 {
-                    _aliasRepo.DeleteForSlot(slot.Id);
+                    _mutationStore.DeleteForMovie(slot.Id);
                 }
-
-                _repo.DeleteForMovie(movie.Id);
             }
         }
 
@@ -206,58 +198,9 @@ namespace NzbDrone.Core.Movies.MovieEditionSlots
             return slots;
         }
 
-        private void SaveAliases(int slotId, IEnumerable<string> aliases)
-        {
-            _aliasRepo.DeleteForSlot(slotId);
-            foreach (var alias in aliases)
-            {
-                _aliasRepo.Insert(new MovieEditionSlotAlias
-                {
-                    MovieEditionSlotId = slotId,
-                    Alias = alias,
-                    NormalizedAlias = EditionNormalizer.Normalize(alias)
-                });
-            }
-        }
-
         private static void Normalize(MovieEditionSlot slot)
         {
-            slot.EditionName = slot.EditionName?.Trim() ?? string.Empty;
-            slot.CanonicalEditionKey = EditionNormalizer.Normalize(slot.EditionName);
-            slot.SearchTerm = slot.SearchTerm.IsNullOrWhiteSpace() ? null : slot.SearchTerm.Trim();
-            slot.Aliases = (slot.Aliases ?? new List<string>())
-                .Where(a => a.IsNotNullOrWhiteSpace())
-                .Select(a => a.Trim())
-                .ToList();
-
-            if (slot.CanonicalEditionKey.IsNullOrWhiteSpace())
-            {
-                throw new ValidationException(new[]
-                {
-                    new ValidationFailure("EditionName", "Edition name must contain letters or numbers.")
-                });
-            }
-
-            if (slot.SearchTerm != null && EditionNormalizer.Normalize(slot.SearchTerm).IsNullOrWhiteSpace())
-            {
-                throw new ValidationException(new[]
-                {
-                    new ValidationFailure("SearchTerm", "Search term must contain letters or numbers.")
-                });
-            }
-
-            if (slot.Aliases.Any(alias => EditionNormalizer.Normalize(alias).IsNullOrWhiteSpace()))
-            {
-                throw new ValidationException(new[]
-                {
-                    new ValidationFailure("Aliases", "Aliases must contain letters or numbers.")
-                });
-            }
-
-            slot.Aliases = slot.Aliases
-                .GroupBy(EditionNormalizer.Normalize)
-                .Select(g => g.First())
-                .ToList();
+            MovieEditionSlotMutationStore.Normalize(slot);
         }
     }
 }

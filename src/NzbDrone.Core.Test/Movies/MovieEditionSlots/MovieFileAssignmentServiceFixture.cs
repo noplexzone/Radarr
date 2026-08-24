@@ -42,7 +42,8 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
         public void assign_should_write_the_durable_file_side_assignment()
         {
             Subject.AssignFileToEdition(MovieId, _file.Id, SlotId);
-            Mocker.GetMock<IMediaFileService>().Verify(s => s.Update(It.Is<MovieFile>(f => f.Id == _file.Id && f.MovieEditionSlotId == SlotId)), Times.Once);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(s => s.AssignFile(MovieId, _file.Id, SlotId, null), Times.Once);
+            Assert.That(_file.MovieEditionSlotId, Is.EqualTo(SlotId));
         }
 
         [Test]
@@ -108,7 +109,7 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
             Assert.That(_file.MovieEditionSlotId, Is.Null);
             Assert.That(_movie.MovieFileId, Is.EqualTo(_file.Id));
             Mocker.GetMock<IDeleteMediaFiles>().Verify(s => s.DeleteMovieFile(It.IsAny<Movie>(), It.IsAny<MovieFile>()), Times.Never);
-            Mocker.GetMock<IMediaFileService>().Verify(s => s.Update(_file), Times.Once);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(s => s.UnassignFile(_file.Id, SlotId), Times.Once);
             Mocker.GetMock<IMediaFileService>().Verify(s => s.Update(previousMain), Times.Never);
             Mocker.GetMock<IMovieService>().Verify(s => s.UpdateMovie(_movie), Times.Once);
         }
@@ -157,10 +158,10 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
         {
             _file.MovieEditionSlotId = SlotId;
             var detached = false;
-            Mocker.GetMock<IMediaFileService>().Setup(s => s.Update(_file)).Callback(() => detached = !_file.MovieEditionSlotId.HasValue);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Setup(s => s.UnassignFile(_file.Id, SlotId)).Callback(() => detached = true);
             Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.Delete(SlotId)).Callback(() => Assert.That(detached, Is.True));
             Subject.RemoveEdition(SlotId, AttachedEditionFileAction.KeepUnassigned);
-            Mocker.GetMock<IMediaFileService>().Verify(s => s.Update(_file), Times.Once);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(s => s.UnassignFile(_file.Id, SlotId), Times.Once);
             Mocker.GetMock<IMovieEditionSlotService>().Verify(s => s.Delete(SlotId), Times.Once);
             Mocker.GetMock<IDeleteMediaFiles>().Verify(s => s.DeleteMovieFile(It.IsAny<Movie>(), It.IsAny<MovieFile>()), Times.Never);
         }
@@ -231,6 +232,8 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
             Subject.RemoveEdition(SlotId, AttachedEditionFileAction.KeepUnassigned);
             Mocker.GetMock<IMovieEditionSlotService>().Verify(s => s.Delete(SlotId), Times.Once);
             Mocker.GetMock<IMediaFileService>().Verify(s => s.Update(It.IsAny<MovieFile>()), Times.Never);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(s => s.AssignFile(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int?>()), Times.Never);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(s => s.UnassignFile(It.IsAny<int>(), It.IsAny<int>()), Times.Never);
             Mocker.GetMock<IDeleteMediaFiles>().Verify(s => s.DeleteMovieFile(It.IsAny<Movie>(), It.IsAny<MovieFile>()), Times.Never);
         }
 
@@ -266,6 +269,8 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
         private void VerifyNoWrites()
         {
             Mocker.GetMock<IMediaFileService>().Verify(s => s.Update(It.IsAny<MovieFile>()), Times.Never);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(s => s.AssignFile(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int?>()), Times.Never);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(s => s.UnassignFile(It.IsAny<int>(), It.IsAny<int>()), Times.Never);
             Mocker.GetMock<IMovieService>().Verify(s => s.UpdateMovie(It.IsAny<Movie>()), Times.Never);
             Mocker.GetMock<IMovieEditionSlotService>().Verify(s => s.Delete(It.IsAny<int>()), Times.Never);
             Mocker.GetMock<IDeleteMediaFiles>().Verify(s => s.DeleteMovieFile(It.IsAny<Movie>(), It.IsAny<MovieFile>()), Times.Never);

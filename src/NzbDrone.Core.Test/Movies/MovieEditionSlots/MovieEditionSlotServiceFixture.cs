@@ -32,19 +32,21 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
             Mocker.GetMock<IMediaFileService>()
                 .Setup(s => s.FindByEditionSlotId(It.IsAny<int>()))
                 .Returns((MovieFile)null);
-        }
-
-        [Test]
-        public void add_should_persist_normalized_canonical_key_and_durable_aliases()
-        {
-            Mocker.GetMock<IMovieEditionSlotRepository>()
-                .Setup(r => r.Insert(It.IsAny<MovieEditionSlot>()))
+            Mocker.GetMock<IMovieEditionSlotMutationStore>()
+                .Setup(s => s.Add(It.IsAny<MovieEditionSlot>()))
                 .Returns<MovieEditionSlot>(slot =>
                 {
                     slot.Id = 7;
                     return slot;
                 });
+            Mocker.GetMock<IMovieEditionSlotMutationStore>()
+                .Setup(s => s.Update(It.IsAny<MovieEditionSlot>()))
+                .Returns<MovieEditionSlot>(slot => slot);
+        }
 
+        [Test]
+        public void add_should_persist_normalized_canonical_key_and_durable_aliases()
+        {
             var result = Subject.Add(new MovieEditionSlot
             {
                 MovieId = MovieId,
@@ -54,10 +56,8 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
 
             result.CanonicalEditionKey.Should().Be("directorscut");
             result.Aliases.Should().Equal("Directors.Cut", "DC");
-            Mocker.GetMock<IMovieEditionSlotAliasRepository>().Verify(r => r.Insert(It.Is<MovieEditionSlotAlias>(a =>
-                a.MovieEditionSlotId == 7 && a.Alias == "Directors.Cut" && a.NormalizedAlias == "directorscut")), Times.Once);
-            Mocker.GetMock<IMovieEditionSlotAliasRepository>().Verify(r => r.Insert(It.Is<MovieEditionSlotAlias>(a =>
-                a.MovieEditionSlotId == 7 && a.Alias == "DC" && a.NormalizedAlias == "dc")), Times.Once);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(r => r.Add(It.Is<MovieEditionSlot>(candidate =>
+                candidate.CanonicalEditionKey == "directorscut" && candidate.Aliases.SequenceEqual(new[] { "Directors.Cut", "DC" }))), Times.Once);
         }
 
         [Test]
@@ -103,7 +103,7 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
                 Aliases = alias == null ? new List<string>() : new List<string> { alias }
             }));
 
-            Mocker.GetMock<IMovieEditionSlotRepository>().Verify(r => r.Insert(It.IsAny<MovieEditionSlot>()), Times.Never);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(r => r.Add(It.IsAny<MovieEditionSlot>()), Times.Never);
         }
 
         [Test]
@@ -119,7 +119,7 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
                 EditionName = "IMAX"
             }));
 
-            Mocker.GetMock<IMovieEditionSlotRepository>().Verify(r => r.Update(It.IsAny<MovieEditionSlot>()), Times.Never);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(r => r.Update(It.IsAny<MovieEditionSlot>()), Times.Never);
         }
 
         [Test]
@@ -141,7 +141,7 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
                 EditionName = "IMAX"
             }));
 
-            Mocker.GetMock<IMovieEditionSlotRepository>().Verify(r => r.Update(It.IsAny<MovieEditionSlot>()), Times.Never);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(r => r.Update(It.IsAny<MovieEditionSlot>()), Times.Never);
         }
 
         [Test]
@@ -154,8 +154,8 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
             Subject.Handle(new MovieFileDeletedEvent(file, DeleteMediaFileReason.Manual));
             Subject.ReconcileForMovie(MovieId, new List<MovieFile> { file });
 
-            Mocker.GetMock<IMovieEditionSlotRepository>().Verify(r => r.Insert(It.IsAny<MovieEditionSlot>()), Times.Never);
-            Mocker.GetMock<IMovieEditionSlotRepository>().Verify(r => r.Update(It.IsAny<MovieEditionSlot>()), Times.Never);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(r => r.Add(It.IsAny<MovieEditionSlot>()), Times.Never);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(r => r.Update(It.IsAny<MovieEditionSlot>()), Times.Never);
             Mocker.GetMock<IMediaFileService>().Verify(s => s.Update(It.IsAny<MovieFile>()), Times.Never);
         }
 
@@ -172,7 +172,7 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
             });
 
             Assert.Throws<InvalidOperationException>(() => Subject.Delete(4));
-            Mocker.GetMock<IMovieEditionSlotRepository>().Verify(r => r.Delete(It.IsAny<int>()), Times.Never);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(r => r.Delete(It.IsAny<int>()), Times.Never);
         }
 
         [Test]

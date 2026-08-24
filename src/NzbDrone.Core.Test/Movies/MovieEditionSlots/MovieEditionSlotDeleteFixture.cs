@@ -23,8 +23,9 @@ namespace NzbDrone.Core.Test.MovieEditionSlots
                 deleteFiles: false,
                 addImportListExclusion: false));
 
-            Mocker.GetMock<IMovieEditionSlotAliasRepository>().Verify(r => r.DeleteForSlot(slot.Id), Times.Once);
-            Mocker.GetMock<IMovieEditionSlotRepository>().Verify(r => r.DeleteForMovie(movieId), Times.Once);
+            Mocker.GetMock<IMovieEditionSlotMutationStore>().Verify(r => r.DeleteForMovie(slot.Id), Times.Once);
+            Mocker.GetMock<IMovieEditionSlotAliasRepository>().Verify(r => r.DeleteForSlot(It.IsAny<int>()), Times.Never);
+            Mocker.GetMock<IMovieEditionSlotRepository>().Verify(r => r.DeleteForMovie(It.IsAny<int>()), Times.Never);
         }
     }
 }
