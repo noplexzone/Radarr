@@ -10,70 +10,6 @@
   min-height: 32px;
 }
 
-.addForm {
-  display: flex;
-  gap: 8px;
-
-  align-items: center;
-  margin-bottom: 12px;
-}
-
-.addInput {
-  flex: 1;
-  padding: 4px 8px;
-  min-width: 0;
-  border: 1px solid var(--inputBorderColor);
-  border-radius: 4px;
-  background: var(--inputBackgroundColor);
-  color: var(--inputColor);
-}
-
-.editInput {
-  padding: 2px 6px;
-  width: 100%;
-  border: 1px solid var(--inputBorderColor);
-  border-radius: 4px;
-  background: var(--inputBackgroundColor);
-  color: var(--inputColor);
-}
-
-.statusHasFile {
-  color: var(--successColor);
-}
-
-.statusMissing {
-  color: var(--dangerColor);
-}
-
-.monitorCell {
-  width: 56px;
-}
-
-.actionsCell {
-  white-space: nowrap;
-}
-
-.emptyMessage {
-  padding: 10px;
-}
-
-.statusUnmonitored {
-  color: var(--disabledColor);
-}
-
-.smallEditInput {
-  padding: 2px 6px;
-  width: 90px;
-  border: 1px solid var(--inputBorderColor);
-  border-radius: 4px;
-  background: var(--inputBackgroundColor);
-  color: var(--inputColor);
-}
-
-.customFormatScoreCell {
-  white-space: nowrap;
-}
-
 .header {
   display: flex;
   gap: 12px;
@@ -98,9 +34,18 @@
   background: var(--inputBackgroundColor);
 }
 
-.addField {
+.addForm {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1fr) auto;
+  gap: 10px;
+
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.addField,
+.inlineField {
   display: flex;
-  flex: 1;
   flex-direction: column;
   gap: 4px;
 
@@ -109,14 +54,122 @@
   font-size: 12px;
 }
 
-.table {
-  width: 100%;
-  border-collapse: collapse;
+.addInput,
+.editInput,
+.smallEditInput {
+  border: 1px solid var(--inputBorderColor);
+  border-radius: 4px;
+  background: var(--inputBackgroundColor);
+  color: var(--inputColor);
 }
 
-.fileCell {
-  max-width: 240px;
-  word-break: break-all;
+.addInput,
+.editInput {
+  padding: 5px 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.smallEditInput {
+  padding: 5px 8px;
+  width: 100%;
+}
+
+.statusHasFile {
+  color: var(--successColor);
+}
+
+.statusMissing {
+  color: var(--dangerColor);
+}
+
+.statusUnmonitored {
+  color: var(--disabledColor);
+}
+
+.emptyMessage {
+  padding: 10px;
+}
+
+.slotList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.editionCard {
+  border: 1px solid var(--borderColor);
+  border-radius: 6px;
+  background: var(--inputBackgroundColor);
+}
+
+.cardSummary {
+  display: grid;
+  grid-template-columns: 36px minmax(320px, 1fr) minmax(120px, auto) auto;
+  gap: 12px;
+
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid var(--borderColor);
+}
+
+.cardMonitor {
+  display: flex;
+  justify-content: center;
+}
+
+.cardTitleGroup {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(220px, 1fr);
+  gap: 10px;
+
+  min-width: 0;
+}
+
+.statusBlock {
+  white-space: nowrap;
+}
+
+.cardActions {
+  display: flex;
+  gap: 4px;
+
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.cardDetails {
+  display: grid;
+  grid-template-columns: minmax(240px, 2fr) repeat(3, minmax(110px, 1fr)) minmax(160px, 1fr) minmax(150px, 1fr) minmax(110px, 0.8fr);
+  gap: 12px;
+
+  padding: 12px;
+}
+
+.detailItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  min-width: 0;
+}
+
+.detailLabel {
+  overflow: hidden;
+  color: var(--dimColor);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.detailValue,
+.fileValue {
+  min-height: 32px;
+  color: var(--defaultColor);
+}
+
+.fileValue {
+  overflow-wrap: anywhere;
 }
 
 .profileCell,
@@ -163,7 +216,11 @@
 
 @media only screen and (max-width: $breakpointSmall) {
   .header,
-  .addForm {
+  .addForm,
+  .cardSummary,
+  .cardTitleGroup,
+  .cardDetails {
+    display: flex;
     align-items: stretch;
     flex-direction: column;
   }
@@ -172,55 +229,22 @@
     gap: 6px;
   }
 
-  .table,
-  .table thead,
-  .table tbody,
-  .table tr,
-  .table th,
-  .table td {
-    display: block;
+  .cardSummary,
+  .cardDetails {
+    gap: 10px;
   }
 
-  .table thead {
-    display: none;
+  .cardMonitor,
+  .cardActions {
+    justify-content: flex-start;
   }
 
-  .table tr {
-    margin-bottom: 12px;
-    padding: 10px;
-    border: 1px solid var(--borderColor);
-    border-radius: 4px;
-    background: var(--inputBackgroundColor);
-  }
-
-  .table td {
-    padding: 6px 0;
-    border: 0;
-  }
-
-  .monitorCell,
-  .actionsCell {
-    width: auto;
-  }
-
-  .actionsCell {
-    display: flex;
-    gap: 8px;
-
-    justify-content: flex-end;
+  .statusBlock {
     white-space: normal;
   }
 
   .editInput,
   .smallEditInput {
     min-height: 34px;
-  }
-
-  .smallEditInput {
-    width: 100%;
-  }
-
-  .fileCell {
-    max-width: none;
   }
 }

@@ -2,30 +2,38 @@
 // Please do not change this file!
 interface CssExports {
   'actionButton': string;
-  'actionsCell': string;
   'addField': string;
   'addForm': string;
   'addInput': string;
   'assignSelect': string;
+  'cardActions': string;
+  'cardDetails': string;
+  'cardMonitor': string;
+  'cardSummary': string;
+  'cardTitleGroup': string;
   'container': string;
-  'customFormatScoreCell': string;
   'deleteOptions': string;
   'deleteOptionsLabel': string;
+  'detailItem': string;
+  'detailLabel': string;
+  'detailValue': string;
   'editInput': string;
+  'editionCard': string;
   'emptyMessage': string;
-  'fileCell': string;
+  'fileValue': string;
   'header': string;
   'inheritedValue': string;
+  'inlineField': string;
   'modalForm': string;
-  'monitorCell': string;
   'profileCell': string;
   'scoreCell': string;
+  'slotList': string;
   'smallEditInput': string;
+  'statusBlock': string;
   'statusHasFile': string;
   'statusMissing': string;
   'statusUnmonitored': string;
   'summary': string;
-  'table': string;
 }
 export const cssExports: CssExports;
 export default cssExports;

@@ -14,8 +14,6 @@ import LoadingIndicator from 'Components/Loading/LoadingIndicator';
 import ConfirmModal from 'Components/Modal/ConfirmModal';
 import MonitorToggleButton from 'Components/MonitorToggleButton';
 import RelativeDateCell from 'Components/Table/Cells/RelativeDateCell';
-import TableRowCell from 'Components/Table/Cells/TableRowCell';
-import TableRow from 'Components/Table/TableRow';
 import { icons, kinds } from 'Helpers/Props';
 import MovieFormats from 'Movie/MovieFormats';
 import MovieQuality from 'Movie/MovieQuality';
@@ -320,167 +318,208 @@ function MovieEditionSlotRow(props: MovieEditionSlotRowProps) {
   }
 
   return (
-    <TableRow>
-      <TableRowCell className={styles.monitorCell}>
-        <MonitorToggleButton
-          monitored={slot.monitored}
-          isSaving={slot.isSaving}
-          onPress={handleMonitorTogglePress}
-        />
-      </TableRowCell>
-
-      <TableRowCell>
-        <input
-          className={styles.editInput}
-          type="text"
-          value={editionName}
-          onChange={handleEditionNameChange}
-        />
-      </TableRowCell>
-
-      <TableRowCell>
-        <input
-          className={styles.editInput}
-          type="text"
-          value={searchTerm}
-          placeholder="-"
-          onChange={handleSearchTermChange}
-        />
-      </TableRowCell>
-
-      <TableRowCell>{status}</TableRowCell>
-
-      <TableRowCell className={styles.fileCell}>
-        {movieFile ? (
-          <span title={movieFile.relativePath}>{movieFile.relativePath}</span>
-        ) : (
-          '-'
-        )}
-      </TableRowCell>
-
-      <TableRowCell>
-        {movieFileQuality ? (
-          <MovieQuality quality={movieFileQuality} isCutoffNotMet={false} />
-        ) : (
-          '-'
-        )}
-      </TableRowCell>
-
-      <TableRowCell>
-        {movieFileCustomFormats?.length ? (
-          <MovieFormats formats={movieFileCustomFormats} />
-        ) : (
-          '-'
-        )}
-      </TableRowCell>
-
-      <TableRowCell className={styles.customFormatScoreCell}>
-        {movieFileCustomFormatScore == null
-          ? '-'
-          : formatCustomFormatScore(
-              movieFileCustomFormatScore,
-              movieFileCustomFormats?.length ?? 0
-            )}
-      </TableRowCell>
-
-      <TableRowCell>
-        <div className={styles.profileCell}>
-          <SlotQualityProfileSelect
-            value={qualityProfileId}
-            onChange={handleQualityProfileIdChange}
+    <div className={styles.editionCard}>
+      <div className={styles.cardSummary}>
+        <div className={styles.cardMonitor}>
+          <MonitorToggleButton
+            monitored={slot.monitored}
+            isSaving={slot.isSaving}
+            onPress={handleMonitorTogglePress}
           />
-          {slot.qualityProfileInherited ? (
-            <div className={styles.inheritedValue}>
-              {slot.effectiveQualityProfileName}
-            </div>
-          ) : null}
         </div>
-      </TableRowCell>
 
-      <TableRowCell>
-        <div className={styles.scoreCell}>
-          <input
-            className={styles.smallEditInput}
-            type="number"
-            value={minimumCustomFormatScore}
-            placeholder={translate('Default')}
-            onChange={handleMinimumCustomFormatScoreChange}
-          />
-          {slot.minimumCustomFormatScoreInherited ? (
-            <div className={styles.inheritedValue}>
-              {slot.effectiveMinimumCustomFormatScore}
-            </div>
-          ) : null}
-        </div>
-      </TableRowCell>
-
-      <RelativeDateCell
-        date={slot.lastSearchTime ?? undefined}
-        includeTime={true}
-      />
-
-      <TableRowCell className={styles.actionsCell}>
-        <SpinnerIconButton
-          className={styles.actionButton}
-          name={icons.SAVE}
-          title={translate('Save')}
-          isSpinning={!!slot.isSaving}
-          onPress={handleSavePress}
-        />
-
-        <SpinnerIconButton
-          className={styles.actionButton}
-          name={icons.SEARCH}
-          title={translate('SearchEdition')}
-          isSpinning={isSearching}
-          onPress={handleSearchPress}
-        />
-
-        <SpinnerIconButton
-          className={styles.actionButton}
-          name={icons.INTERACTIVE}
-          title={translate('InteractiveSearch')}
-          isSpinning={false}
-          onPress={handleInteractiveSearchPress}
-        />
-
-        {movieFile ? (
-          <>
-            <SpinnerIconButton
-              className={styles.actionButton}
-              name={icons.UNMONITORED}
-              title={translate('UnassignEditionFile')}
-              isSpinning={!!slot.isAssigning}
-              onPress={handleUnassignPress}
+        <div className={styles.cardTitleGroup}>
+          <label className={styles.inlineField}>
+            <span>{translate('Edition')}</span>
+            <input
+              className={styles.editInput}
+              type="text"
+              value={editionName}
+              onChange={handleEditionNameChange}
             />
+          </label>
 
+          <label className={styles.inlineField}>
+            <span>{translate('SearchTerm')}</span>
+            <input
+              className={styles.editInput}
+              type="text"
+              value={searchTerm}
+              placeholder="-"
+              onChange={handleSearchTermChange}
+            />
+          </label>
+        </div>
+
+        <div className={styles.statusBlock}>{status}</div>
+
+        <div className={styles.cardActions}>
+          <SpinnerIconButton
+            className={styles.actionButton}
+            name={icons.SAVE}
+            title={translate('Save')}
+            isSpinning={!!slot.isSaving}
+            onPress={handleSavePress}
+          />
+
+          <SpinnerIconButton
+            className={styles.actionButton}
+            name={icons.SEARCH}
+            title={translate('SearchEdition')}
+            isSpinning={isSearching}
+            onPress={handleSearchPress}
+          />
+
+          <SpinnerIconButton
+            className={styles.actionButton}
+            name={icons.INTERACTIVE}
+            title={translate('InteractiveSearch')}
+            isSpinning={false}
+            onPress={handleInteractiveSearchPress}
+          />
+
+          {movieFile ? (
+            <>
+              <SpinnerIconButton
+                className={styles.actionButton}
+                name={icons.UNMONITORED}
+                title={translate('UnassignEditionFile')}
+                isSpinning={!!slot.isAssigning}
+                onPress={handleUnassignPress}
+              />
+
+              <SpinnerIconButton
+                className={styles.actionButton}
+                name={icons.MOVIE_FILE}
+                title={translate('ConvertEditionFileToMain')}
+                isSpinning={!!slot.isConverting}
+                onPress={handleConvertToMainPress}
+              />
+            </>
+          ) : (
             <SpinnerIconButton
               className={styles.actionButton}
               name={icons.MOVIE_FILE}
-              title={translate('ConvertEditionFileToMain')}
-              isSpinning={!!slot.isConverting}
-              onPress={handleConvertToMainPress}
+              title={translate('AssignEditionFile')}
+              isSpinning={!!slot.isAssigning}
+              onPress={handleAssignPress}
             />
-          </>
-        ) : (
+          )}
+
           <SpinnerIconButton
             className={styles.actionButton}
-            name={icons.MOVIE_FILE}
-            title={translate('AssignEditionFile')}
-            isSpinning={!!slot.isAssigning}
-            onPress={handleAssignPress}
+            name={icons.DELETE}
+            title={translate('Delete')}
+            isSpinning={!!slot.isDeleting}
+            onPress={handleDeletePress}
           />
-        )}
+        </div>
+      </div>
 
-        <SpinnerIconButton
-          className={styles.actionButton}
-          name={icons.DELETE}
-          title={translate('Delete')}
-          isSpinning={!!slot.isDeleting}
-          onPress={handleDeletePress}
-        />
-      </TableRowCell>
-    </TableRow>
+      <div className={styles.cardDetails}>
+        <div className={styles.detailItem}>
+          <span className={styles.detailLabel}>{translate('File')}</span>
+          <div className={styles.fileValue}>
+            {movieFile ? (
+              <span title={movieFile.relativePath}>
+                {movieFile.relativePath}
+              </span>
+            ) : (
+              '-'
+            )}
+          </div>
+        </div>
+
+        <div className={styles.detailItem}>
+          <span className={styles.detailLabel}>{translate('Quality')}</span>
+          <div className={styles.detailValue}>
+            {movieFileQuality ? (
+              <MovieQuality quality={movieFileQuality} isCutoffNotMet={false} />
+            ) : (
+              '-'
+            )}
+          </div>
+        </div>
+
+        <div className={styles.detailItem}>
+          <span className={styles.detailLabel}>
+            {translate('CustomFormats')}
+          </span>
+          <div className={styles.detailValue}>
+            {movieFileCustomFormats?.length ? (
+              <MovieFormats formats={movieFileCustomFormats} />
+            ) : (
+              '-'
+            )}
+          </div>
+        </div>
+
+        <div className={styles.detailItem}>
+          <span className={styles.detailLabel}>
+            {translate('CustomFormatScore')}
+          </span>
+          <div className={styles.detailValue}>
+            {movieFileCustomFormatScore == null
+              ? '-'
+              : formatCustomFormatScore(
+                  movieFileCustomFormatScore,
+                  movieFileCustomFormats?.length ?? 0
+                )}
+          </div>
+        </div>
+
+        <div className={styles.detailItem}>
+          <span className={styles.detailLabel}>
+            {translate('QualityProfile')}
+          </span>
+          <div className={styles.profileCell}>
+            <SlotQualityProfileSelect
+              value={qualityProfileId}
+              onChange={handleQualityProfileIdChange}
+            />
+            {slot.qualityProfileInherited ? (
+              <div className={styles.inheritedValue}>
+                {slot.effectiveQualityProfileName}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className={styles.detailItem}>
+          <span className={styles.detailLabel}>
+            {translate('MinimumCustomFormatScore')}
+          </span>
+          <div className={styles.scoreCell}>
+            <input
+              className={styles.smallEditInput}
+              type="number"
+              value={minimumCustomFormatScore}
+              placeholder={translate('Default')}
+              onChange={handleMinimumCustomFormatScoreChange}
+            />
+            {slot.minimumCustomFormatScoreInherited ? (
+              <div className={styles.inheritedValue}>
+                {slot.effectiveMinimumCustomFormatScore}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className={styles.detailItem}>
+          <span className={styles.detailLabel}>{translate('LastSearch')}</span>
+          {slot.lastSearchTime ? (
+            <RelativeDateCell
+              component="span"
+              className={styles.detailValue}
+              date={slot.lastSearchTime}
+              includeTime={true}
+            />
+          ) : (
+            <span className={styles.detailValue}>-</span>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1016,41 +1055,23 @@ function MovieEditionSlotsTable({ movieId }: MovieEditionSlotsTableProps) {
             ) : null}
 
             {!!slots.length && (
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th className={styles.monitorCell} />
-                    <th>{translate('Edition')}</th>
-                    <th>{translate('SearchTerm')}</th>
-                    <th>{translate('Status')}</th>
-                    <th>{translate('File')}</th>
-                    <th>{translate('Quality')}</th>
-                    <th>{translate('CustomFormats')}</th>
-                    <th>{translate('CustomFormatScore')}</th>
-                    <th>{translate('QualityProfile')}</th>
-                    <th>{translate('MinimumCustomFormatScore')}</th>
-                    <th>{translate('LastSearch')}</th>
-                    <th className={styles.actionsCell} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {slots.map((slot) => (
-                    <MovieEditionSlotRow
-                      key={slot.id}
-                      slot={slot}
-                      isSearching={isRowSearching(slot.id)}
-                      onMonitorToggle={handleMonitorToggle}
-                      onSearchPress={handleRowSearchPress}
-                      onInteractiveSearchPress={handleInteractiveSearchPress}
-                      onAssignPress={handleAssignSlotPress}
-                      onUnassignPress={handleUnassignSlotPress}
-                      onConvertToMainPress={handleConvertToMainSlotPress}
-                      onSave={handleSaveSlot}
-                      onDeletePress={handleDeleteSlotPress}
-                    />
-                  ))}
-                </tbody>
-              </table>
+              <div className={styles.slotList}>
+                {slots.map((slot) => (
+                  <MovieEditionSlotRow
+                    key={slot.id}
+                    slot={slot}
+                    isSearching={isRowSearching(slot.id)}
+                    onMonitorToggle={handleMonitorToggle}
+                    onSearchPress={handleRowSearchPress}
+                    onInteractiveSearchPress={handleInteractiveSearchPress}
+                    onAssignPress={handleAssignSlotPress}
+                    onUnassignPress={handleUnassignSlotPress}
+                    onConvertToMainPress={handleConvertToMainSlotPress}
+                    onSave={handleSaveSlot}
+                    onDeletePress={handleDeleteSlotPress}
+                  />
+                ))}
+              </div>
             )}
           </>
         )}
