@@ -68,10 +68,32 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         public string Edition { get; init; }
     }
 
+    public sealed class RecoverableMovieFileRowSnapshot
+    {
+        public int Id { get; init; }
+        public int MovieId { get; init; }
+        public int? MovieEditionSlotId { get; init; }
+        public string RelativePath { get; init; }
+        public long Size { get; init; }
+        public QualityModel Quality { get; init; }
+        public List<Language> Languages { get; init; }
+        public DateTime DateAdded { get; init; }
+        public string SceneName { get; init; }
+        public string ReleaseGroup { get; init; }
+        public MediaInfoModel MediaInfo { get; init; }
+        public string OriginalFilePath { get; init; }
+        public IndexerFlags IndexerFlags { get; init; }
+        public string Edition { get; init; }
+    }
+
     public sealed class RecoverableOperationPlan : IEmbeddedDocument
     {
         public RecoverableOperationSnapshot Expected { get; init; }
         public RecoverableOperationSnapshot Desired { get; init; }
+        public MovieFileImportTarget ImportTarget { get; init; }
+        public int ExpectedMovieFileId { get; init; }
+        public RecoverableMovieFileRowSnapshot ExpectedOutgoingMovieFile { get; init; }
+        public RecoverableMovieFileRowSnapshot DesiredIncomingMovieFile { get; init; }
         public string SourcePath { get; init; }
         public string StagingPath { get; init; }
         public string DestinationPath { get; init; }
@@ -106,6 +128,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         public DateTime? DatabaseCommittedAt { get; set; }
         public DateTime? CompletedAt { get; set; }
         public long EventDispatchMask { get; set; }
+        public int? ResultMovieFileId { get; set; }
     }
 
     public sealed class RecoverableOperationResource : ModelBase
