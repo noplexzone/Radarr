@@ -100,6 +100,9 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         public string FinalizePath { get; init; }
         public long? ExpectedSize { get; init; }
         public RecoverableTransferMode TransferMode { get; init; }
+        public RecoverableTransferMode? ActualTransferMode { get; set; }
+        public string IncomingSha256 { get; init; }
+        public string OutgoingSha256 { get; init; }
         public Dictionary<string, string> EventFacts { get; init; } = new();
         public RecoverableMovieFileEventSnapshot MovieFileEvent { get; init; }
         public RecoverableMovieEventSnapshot MovieEvent { get; init; }
