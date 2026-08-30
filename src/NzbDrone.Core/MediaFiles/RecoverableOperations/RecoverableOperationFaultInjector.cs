@@ -20,7 +20,11 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         AfterImportStaged = 16,
         AfterImportApplyingDatabase = 17,
         AfterImportDatabaseCommit = 18,
-        AfterImportRecycle = 19
+        AfterImportRecycle = 19,
+        AfterImportSourceTransfer = 20,
+        AfterImportDestinationTransfer = 21,
+        AfterImportRecycleAction = 22,
+        AfterImportRollbackBegin = 23
     }
 
     public interface IRecoverableOperationFaultInjector

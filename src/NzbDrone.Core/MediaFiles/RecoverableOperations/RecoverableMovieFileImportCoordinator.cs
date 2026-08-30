@@ -21,6 +21,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                                                  MovieFile outgoingMovieFile,
                                                  int expectedMainMovieFileId,
                                                  MovieFileImportTarget importTarget);
+        RecoverableOperation Recover(RecoverableOperation operation, string owner);
     }
 
     public sealed class RecoverableMovieFileImportResult
@@ -77,11 +78,12 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             var operation = _repository.CreatePending(request);
             var owner = LeasePrefix + Guid.NewGuid().ToString("N");
 
+            var destinationOwned = false;
             try
             {
                 _faultInjector.Check(RecoverableOperationFaultPoint.AfterPendingCommit);
                 operation = Acquire(operation, owner);
-                operation = Execute(operation, owner);
+                operation = Execute(operation, owner, () => destinationOwned = true);
                 return Result(operation, outgoingMovieFile, false);
             }
             catch (RecoverableOperationProcessDeathException)
@@ -107,60 +109,212 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                     return PostCommitResult(current, outgoingMovieFile, owner, "Import committed, but finalization is pending: " + exception.Message);
                 }
 
-                RollBackBeforeCommit(current, owner, exception);
+                RollBackBeforeCommit(current, owner, exception, destinationOwned);
                 throw;
             }
         }
 
-        private RecoverableOperation Execute(RecoverableOperation operation, string owner)
+        public RecoverableOperation Recover(RecoverableOperation operation, string owner)
+        {
+            if (operation == null || operation.OperationType != RecoverableOperationType.Import)
+            {
+                throw new RecoverableOperationValidationException("The movie-file import recovery handler only accepts Import operations.");
+            }
+
+            operation = _repository.GetById(operation.Id);
+            if (operation.State is RecoverableOperationState.Completed or RecoverableOperationState.RolledBack or RecoverableOperationState.RecoveryRequired)
+            {
+                return operation;
+            }
+
+            if (string.IsNullOrWhiteSpace(owner) || operation.LeaseOwner != owner || operation.LeaseExpiresAt <= DateTime.UtcNow)
+            {
+                throw new RecoverableOperationConcurrencyException(operation.Id);
+            }
+
+            try
+            {
+                ValidateRecoveryPlan(operation);
+                while (true)
+                {
+                    operation = _repository.GetById(operation.Id);
+                    switch (operation.State)
+                    {
+                        case RecoverableOperationState.Pending:
+                            return Execute(operation, owner);
+                        case RecoverableOperationState.Staging:
+                            operation = ResumeStaging(operation, owner);
+                            break;
+                        case RecoverableOperationState.Staged:
+                            operation = ApplyDatabase(operation, owner);
+                            break;
+                        case RecoverableOperationState.ApplyingDatabase:
+                            operation = _mutationStore.Apply(operation, owner);
+                            break;
+                        case RecoverableOperationState.DatabaseCommitted:
+                        case RecoverableOperationState.Finalizing:
+                            return Finalize(operation, owner);
+                        case RecoverableOperationState.RollingBack:
+                            RollBackBeforeCommit(operation, owner, new IOException("Restart resumed an interrupted rollback."));
+                            return _repository.GetById(operation.Id);
+                        case RecoverableOperationState.Completed:
+                        case RecoverableOperationState.RolledBack:
+                        case RecoverableOperationState.RecoveryRequired:
+                            return operation;
+                        default:
+                            throw new RecoverableOperationValidationException("The import operation has an unsupported recovery state.");
+                    }
+                }
+            }
+            catch (RecoverableOperationProcessDeathException)
+            {
+                throw;
+            }
+            catch (RecoverableOperationLeaseHeartbeatException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is IOException or RecoverableOperationValidationException or RecoverableOperationConcurrencyException)
+            {
+                return MarkRecoveryRequiredSafely(_repository.GetById(operation.Id), owner, "Import recovery found ambiguous or changed evidence and preserved it: " + exception.Message);
+            }
+        }
+
+        private RecoverableOperation Execute(RecoverableOperation operation, string owner, Action destinationOwned = null)
         {
             operation = _repository.Transition(operation.Id, operation.State, operation.Version, RecoverableOperationState.Staging, owner);
-            ValidatePersistedEvidence(operation, true);
-            operation = Run(operation, owner, () => _diskProvider.CreateFolder(operation.StagingRoot));
+            operation = ValidatePersistedEvidence(operation, owner, true);
+            return ResumeStaging(operation, owner, destinationOwned);
+        }
 
-            VerifyHash(operation.Plan.SourcePath, operation.Plan.ExpectedSize.Value, operation.Plan.IncomingSha256, "source");
-            RequireAbsent(operation.Plan.StagingPath, "incoming candidate");
-            var incomingMode = ToDiskTransferMode(operation.Plan.TransferMode);
-            var actualMode = TransferMode.None;
-            operation = Run(operation, owner, () => actualMode = _diskTransferService.TransferFile(operation.Plan.SourcePath, operation.Plan.StagingPath, incomingMode));
-            operation = _repository.UpdateActualTransferMode(operation.Id, operation.Version, owner, ToRecoverableTransferMode(actualMode));
-            VerifyHash(operation.Plan.StagingPath, operation.Plan.ExpectedSize.Value, operation.Plan.IncomingSha256, "incoming candidate");
-            VerifySourceSemantics(operation);
-            _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportSourceToCandidate);
-
-            if (operation.Plan.ExpectedOutgoingMovieFile != null)
+        private RecoverableOperation ResumeStaging(RecoverableOperation operation, string owner, Action destinationOwned = null)
+        {
+            ValidateRecoveryPlan(operation);
+            ValidateDatabaseEvidence(operation.MovieId, operation.Plan.EventFacts["moviePath"], operation.Plan.ExpectedMovieFileId, operation.Plan.ImportTarget, operation.Plan.DesiredIncomingMovieFile.MovieEditionSlotId, operation.Plan.ExpectedOutgoingMovieFile);
+            if (!_diskProvider.FolderExists(operation.StagingRoot))
             {
-                VerifyHash(operation.Plan.Expected.Path, operation.Plan.ExpectedOutgoingMovieFile.Size, operation.Plan.OutgoingSha256, "outgoing movie file");
-                RequireAbsent(operation.Plan.FinalizePath, "outgoing backup");
-                operation = Run(operation, owner, () =>
+                operation = Run(operation, owner, () => _diskProvider.CreateFolder(operation.StagingRoot));
+            }
+
+            var plan = operation.Plan;
+            operation = HeartbeatExactHash(operation, owner, plan.SourcePath, plan.ExpectedSize.Value, plan.IncomingSha256, out var source);
+            operation = HeartbeatExactHash(operation, owner, plan.StagingPath, plan.ExpectedSize.Value, plan.IncomingSha256, out var candidate);
+            operation = HeartbeatExactHash(operation, owner, plan.DestinationPath, plan.ExpectedSize.Value, plan.IncomingSha256, out var destination);
+            if (plan.ActualTransferMode == null)
+            {
+                if (candidate)
                 {
-                    RejectReparseAncestors(operation.Plan.Expected.Path, operation.Plan.FinalizePath);
-                    _diskTransferService.TransferFile(operation.Plan.Expected.Path, operation.Plan.FinalizePath, TransferMode.Move);
-                });
-                RequireAbsent(operation.Plan.Expected.Path, "outgoing movie file");
-                VerifyHash(operation.Plan.FinalizePath, operation.Plan.ExpectedOutgoingMovieFile.Size, operation.Plan.OutgoingSha256, "outgoing backup");
+                    var inferred = plan.TransferMode switch
+                    {
+                        RecoverableTransferMode.Move when !source => RecoverableTransferMode.Move,
+                        RecoverableTransferMode.Copy when source => RecoverableTransferMode.Copy,
+                        RecoverableTransferMode.HardLink when source => RecoverableTransferMode.Copy,
+                        _ => throw new IOException("The completed incoming transfer mode cannot be inferred unambiguously.")
+                    };
+                    operation = _repository.UpdateActualTransferMode(operation.Id, operation.Version, owner, inferred);
+                    plan = operation.Plan;
+                }
+                else if (!destination)
+                {
+                    if (!source || _diskProvider.FileExists(plan.StagingPath))
+                    {
+                        throw new IOException("The incoming transfer has no exact, uniquely owned source evidence.");
+                    }
+
+                    var actualMode = TransferMode.None;
+                    operation = Run(operation, owner, () =>
+                    {
+                        RejectReparseAncestors(plan.SourcePath, plan.StagingPath);
+                        actualMode = _diskTransferService.TransferFile(plan.SourcePath, plan.StagingPath, ToDiskTransferMode(plan.TransferMode));
+                    });
+                    _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportSourceTransfer);
+                    operation = _repository.UpdateActualTransferMode(operation.Id, operation.Version, owner, ToRecoverableTransferMode(actualMode));
+                    plan = operation.Plan;
+                    candidate = true;
+                    operation = HeartbeatExactHash(operation, owner, plan.SourcePath, plan.ExpectedSize.Value, plan.IncomingSha256, out source);
+                }
+            }
+
+            if ((plan.ActualTransferMode ?? plan.TransferMode) == RecoverableTransferMode.Move && source && (candidate || destination))
+            {
+                throw new IOException("Move recovery found an unexpected duplicate incoming file.");
+            }
+
+            operation = HeartbeatVerifySourceSemantics(operation, owner);
+            if (!candidate && !destination)
+            {
+                throw new IOException("No exact incoming candidate or destination evidence exists.");
+            }
+
+            _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportSourceToCandidate);
+            var outgoing = plan.ExpectedOutgoingMovieFile;
+            if (outgoing != null)
+            {
+                operation = HeartbeatExactHash(operation, owner, plan.Expected.Path, outgoing.Size, plan.OutgoingSha256, out var original);
+                operation = HeartbeatExactHash(operation, owner, plan.FinalizePath, outgoing.Size, plan.OutgoingSha256, out var backup);
+                if (original && backup)
+                {
+                    throw new IOException("Outgoing recovery found duplicate original and backup evidence.");
+                }
+
+                if (!backup)
+                {
+                    if (!original || _diskProvider.FileExists(plan.FinalizePath))
+                    {
+                        throw new IOException("Outgoing recovery cannot prove a safe backup transfer.");
+                    }
+
+                    operation = Run(operation, owner, () =>
+                    {
+                        RejectReparseAncestors(plan.Expected.Path, plan.FinalizePath);
+                        _diskTransferService.TransferFile(plan.Expected.Path, plan.FinalizePath, TransferMode.Move);
+                    });
+                }
+
+                if (!string.Equals(plan.Expected.Path, plan.DestinationPath, PathComparison) || !destination)
+                {
+                    RequireAbsent(plan.Expected.Path, "outgoing movie file");
+                }
+
+                operation = HeartbeatVerifyHash(operation, owner, plan.FinalizePath, outgoing.Size, plan.OutgoingSha256, "outgoing backup");
                 _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportOutgoingToBackup);
             }
 
-            RequireAbsent(operation.Plan.DestinationPath, "destination");
-            VerifyHash(operation.Plan.StagingPath, operation.Plan.ExpectedSize.Value, operation.Plan.IncomingSha256, "incoming candidate");
-            operation = Run(operation, owner, () =>
+            operation = HeartbeatExactHash(operation, owner, plan.StagingPath, plan.ExpectedSize.Value, plan.IncomingSha256, out candidate);
+            operation = HeartbeatExactHash(operation, owner, plan.DestinationPath, plan.ExpectedSize.Value, plan.IncomingSha256, out destination);
+            if (candidate && destination)
             {
-                RejectReparseAncestors(operation.Plan.StagingPath, operation.Plan.DestinationPath);
-                _diskTransferService.TransferFile(operation.Plan.StagingPath, operation.Plan.DestinationPath, TransferMode.Move);
-            });
-            RequireAbsent(operation.Plan.StagingPath, "incoming candidate");
-            VerifyHash(operation.Plan.DestinationPath, operation.Plan.ExpectedSize.Value, operation.Plan.IncomingSha256, "destination");
-            VerifySourceSemantics(operation);
-            if (operation.Plan.ExpectedOutgoingMovieFile != null)
-            {
-                VerifyHash(operation.Plan.FinalizePath, operation.Plan.ExpectedOutgoingMovieFile.Size, operation.Plan.OutgoingSha256, "outgoing backup");
+                throw new IOException("Incoming recovery found duplicate candidate and destination evidence.");
             }
 
+            if (!destination)
+            {
+                if (!candidate || _diskProvider.FileExists(plan.DestinationPath))
+                {
+                    throw new IOException("Destination recovery cannot prove a safe candidate transfer.");
+                }
+
+                operation = Run(operation, owner, () =>
+                {
+                    RejectReparseAncestors(plan.StagingPath, plan.DestinationPath);
+                    _diskTransferService.TransferFile(plan.StagingPath, plan.DestinationPath, TransferMode.Move);
+                });
+                destinationOwned?.Invoke();
+                _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportDestinationTransfer);
+            }
+
+            RequireAbsent(plan.StagingPath, "incoming candidate");
+            operation = HeartbeatVerifyHash(operation, owner, plan.DestinationPath, plan.ExpectedSize.Value, plan.IncomingSha256, "destination");
+            operation = HeartbeatVerifySourceSemantics(operation, owner);
             operation = _repository.Transition(operation.Id, operation.State, operation.Version, RecoverableOperationState.Staged, owner);
             _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportCandidateToDestination);
             _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportStaged);
-            ValidatePersistedEvidence(operation, false);
+            return ApplyDatabase(operation, owner);
+        }
+
+        private RecoverableOperation ApplyDatabase(RecoverableOperation operation, string owner)
+        {
+            operation = ValidatePersistedEvidence(operation, owner, false);
             operation = _repository.Transition(operation.Id, operation.State, operation.Version, RecoverableOperationState.ApplyingDatabase, owner);
             _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportApplyingDatabase);
             operation = _mutationStore.Apply(operation, owner);
@@ -170,18 +324,51 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
 
         private RecoverableOperation Finalize(RecoverableOperation operation, string owner)
         {
-            operation = _repository.Transition(operation.Id, operation.State, operation.Version, RecoverableOperationState.Finalizing, owner);
+            if (operation.ResultMovieFileId == null)
+            {
+                throw new RecoverableOperationValidationException("A committed import result id is required for finalization.");
+            }
+
+            if (operation.State == RecoverableOperationState.DatabaseCommitted)
+            {
+                operation = _repository.Transition(operation.Id, operation.State, operation.Version, RecoverableOperationState.Finalizing, owner);
+            }
+            else if (operation.State != RecoverableOperationState.Finalizing)
+            {
+                throw new RecoverableOperationValidationException("Only committed imports can be finalized.");
+            }
+
             var outgoing = operation.Plan.ExpectedOutgoingMovieFile;
-            if (outgoing != null && _diskProvider.FileExists(operation.Plan.FinalizePath))
+            if (outgoing != null)
             {
                 var recycleClaim = Path.Combine(operation.StagingRoot, "recycle-" + Path.GetFileName(operation.Plan.FinalizePath));
-                RequireAbsent(recycleClaim, "recycle claim");
-                RejectReparseAncestors(operation.Plan.FinalizePath, recycleClaim);
-                operation = Run(operation, owner, () => _diskTransferService.TransferFile(operation.Plan.FinalizePath, recycleClaim, TransferMode.Move));
-                VerifyHash(recycleClaim, outgoing.Size, operation.Plan.OutgoingSha256, "claimed outgoing backup");
-                var recycleSubfolder = Path.GetFileName(NormalizeDirectory(operation.Plan.EventFacts["moviePath"]).TrimEnd(Path.DirectorySeparatorChar));
-                operation = Run(operation, owner, () => _recycleBinProvider.DeleteFile(recycleClaim, recycleSubfolder));
-                RequireAbsent(recycleClaim, "recycle claim");
+                operation = HeartbeatExactHash(operation, owner, operation.Plan.FinalizePath, outgoing.Size, operation.Plan.OutgoingSha256, out var backup);
+                operation = HeartbeatExactHash(operation, owner, recycleClaim, outgoing.Size, operation.Plan.OutgoingSha256, out var claim);
+                if (backup && claim)
+                {
+                    throw new IOException("Finalization found duplicate backup and recycle-claim evidence.");
+                }
+
+                if (!backup && _diskProvider.FileExists(operation.Plan.FinalizePath) || !claim && _diskProvider.FileExists(recycleClaim))
+                {
+                    throw new IOException("Finalization found unexpected outgoing evidence and preserved it.");
+                }
+
+                if (backup)
+                {
+                    RejectReparseAncestors(operation.Plan.FinalizePath, recycleClaim);
+                    operation = Run(operation, owner, () => _diskTransferService.TransferFile(operation.Plan.FinalizePath, recycleClaim, TransferMode.Move));
+                    claim = true;
+                }
+
+                if (claim)
+                {
+                    operation = HeartbeatVerifyHash(operation, owner, recycleClaim, outgoing.Size, operation.Plan.OutgoingSha256, "claimed outgoing backup");
+                    var recycleSubfolder = Path.GetFileName(NormalizeDirectory(operation.Plan.EventFacts["moviePath"]).TrimEnd(Path.DirectorySeparatorChar));
+                    operation = Run(operation, owner, () => _recycleBinProvider.DeleteFile(recycleClaim, recycleSubfolder));
+                    _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportRecycleAction);
+                    RequireAbsent(recycleClaim, "recycle claim");
+                }
             }
 
             _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportRecycle);
@@ -325,18 +512,42 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             };
         }
 
-        private void ValidatePersistedEvidence(RecoverableOperation operation, bool beforeFilesystemMutation)
+        private void ValidateRecoveryPlan(RecoverableOperation operation)
+        {
+            var plan = operation.Plan;
+            if (plan?.Expected == null || plan.Desired == null || plan.DesiredIncomingMovieFile == null || plan.ExpectedSize < 0 ||
+                string.IsNullOrWhiteSpace(plan.IncomingSha256) || plan.IncomingSha256.Length != 64 ||
+                plan.TransferMode is not RecoverableTransferMode.Move and not RecoverableTransferMode.Copy and not RecoverableTransferMode.HardLink ||
+                plan.ActualTransferMode is RecoverableTransferMode.None or RecoverableTransferMode.Reflink ||
+                plan.EventFacts == null || !plan.EventFacts.TryGetValue("moviePath", out var moviePath))
+            {
+                throw new RecoverableOperationValidationException("The durable import recovery plan is incomplete or unsupported.");
+            }
+
+            var expectedRoot = RecoverableOperationStagingPolicy.GetPaths(moviePath, operation.OperationKey).Root;
+            if (!string.Equals(CanonicalDirectory(operation.StagingRoot, "staging root"), CanonicalDirectory(expectedRoot, "expected staging root"), PathComparison) ||
+                !Contained(CanonicalPath(plan.StagingPath, "candidate path"), CanonicalDirectory(expectedRoot, "expected staging root")) ||
+                !Contained(CanonicalPath(plan.FinalizePath, "finalize path"), CanonicalDirectory(expectedRoot, "expected staging root")) ||
+                !Contained(CanonicalPath(plan.DestinationPath, "destination path"), CanonicalDirectory(moviePath, "movie path")))
+            {
+                throw new RecoverableOperationValidationException("The durable import paths violate the operation-private recovery trust boundary.");
+            }
+
+            RejectReparseAncestors(moviePath, plan.SourcePath, plan.DestinationPath, plan.Expected.Path, operation.StagingRoot, plan.StagingPath, plan.FinalizePath);
+        }
+
+        private RecoverableOperation ValidatePersistedEvidence(RecoverableOperation operation, string owner, bool beforeFilesystemMutation)
         {
             var plan = operation.Plan;
             RejectReparseAncestors(plan.EventFacts["moviePath"], plan.SourcePath, plan.DestinationPath, plan.Expected.Path, operation.StagingRoot, plan.StagingPath, plan.FinalizePath);
             ValidateDatabaseEvidence(operation.MovieId, plan.EventFacts["moviePath"], plan.ExpectedMovieFileId, plan.ImportTarget, plan.DesiredIncomingMovieFile.MovieEditionSlotId, plan.ExpectedOutgoingMovieFile);
             if (beforeFilesystemMutation)
             {
-                VerifyHash(plan.SourcePath, plan.ExpectedSize.Value, plan.IncomingSha256, "source");
+                operation = HeartbeatVerifyHash(operation, owner, plan.SourcePath, plan.ExpectedSize.Value, plan.IncomingSha256, "source");
             }
             else
             {
-                VerifySourceSemantics(operation);
+                operation = HeartbeatVerifySourceSemantics(operation, owner);
             }
 
             if (beforeFilesystemMutation)
@@ -349,7 +560,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             }
             else
             {
-                VerifyHash(plan.DestinationPath, plan.ExpectedSize.Value, plan.IncomingSha256, "destination");
+                operation = HeartbeatVerifyHash(operation, owner, plan.DestinationPath, plan.ExpectedSize.Value, plan.IncomingSha256, "destination");
                 RequireAbsent(plan.StagingPath, "incoming candidate");
                 if (plan.ExpectedOutgoingMovieFile != null)
                 {
@@ -358,9 +569,11 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                         RequireAbsent(plan.Expected.Path, "outgoing movie file");
                     }
 
-                    VerifyHash(plan.FinalizePath, plan.ExpectedOutgoingMovieFile.Size, plan.OutgoingSha256, "outgoing backup");
+                    operation = HeartbeatVerifyHash(operation, owner, plan.FinalizePath, plan.ExpectedOutgoingMovieFile.Size, plan.OutgoingSha256, "outgoing backup");
                 }
             }
+
+            return operation;
         }
 
         private void ValidateDatabaseEvidence(int movieId, string moviePath, int expectedPointer, MovieFileImportTarget target, int? slotId, RecoverableMovieFileRowSnapshot outgoing)
@@ -414,7 +627,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             }
         }
 
-        private void RollBackBeforeCommit(RecoverableOperation operation, string owner, Exception cause)
+        private void RollBackBeforeCommit(RecoverableOperation operation, string owner, Exception cause, bool destinationOwnedHint = false)
         {
             try
             {
@@ -423,17 +636,25 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                     return;
                 }
 
-                var destinationOwned = operation.State is RecoverableOperationState.Staged or RecoverableOperationState.ApplyingDatabase;
                 if (operation.State != RecoverableOperationState.RollingBack)
                 {
-                    operation = _repository.Transition(operation.Id, operation.State, operation.Version, RecoverableOperationState.RollingBack, owner);
+                    var destinationOwned = destinationOwnedHint || operation.State is RecoverableOperationState.Staged or RecoverableOperationState.ApplyingDatabase;
+                    operation = _repository.BeginImportRollback(operation.Id, operation.State, operation.Version, owner, destinationOwned);
+                    _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportRollbackBegin);
+                }
+
+                if (operation.Plan.RollbackDestinationOwned == null)
+                {
+                    throw new IOException("Rollback destination ownership evidence is missing from the durable import plan.");
                 }
 
                 var plan = operation.Plan;
-                var sourceExists = ExactHash(plan.SourcePath, plan.ExpectedSize.Value, plan.IncomingSha256);
-                var candidateExists = ExactHash(plan.StagingPath, plan.ExpectedSize.Value, plan.IncomingSha256);
+                var destinationOwnedByOperation = plan.RollbackDestinationOwned.Value;
+                operation = HeartbeatExactHash(operation, owner, plan.SourcePath, plan.ExpectedSize.Value, plan.IncomingSha256, out var sourceExists);
+                operation = HeartbeatExactHash(operation, owner, plan.StagingPath, plan.ExpectedSize.Value, plan.IncomingSha256, out var candidateExists);
                 var destinationExists = _diskProvider.FileExists(plan.DestinationPath);
-                var destinationIncoming = destinationOwned && ExactHash(plan.DestinationPath, plan.ExpectedSize.Value, plan.IncomingSha256) &&
+                operation = HeartbeatExactHash(operation, owner, plan.DestinationPath, plan.ExpectedSize.Value, plan.IncomingSha256, out var exactIncomingDestination);
+                var destinationIncoming = destinationOwnedByOperation && exactIncomingDestination &&
                                           (plan.ExpectedOutgoingMovieFile == null || _diskProvider.FileExists(plan.FinalizePath) || !string.Equals(plan.DestinationPath, plan.Expected.Path, PathComparison));
                 var unexpectedDestination = destinationExists && !destinationIncoming &&
                                             (plan.ExpectedOutgoingMovieFile == null || !string.Equals(plan.DestinationPath, plan.Expected.Path, PathComparison));
@@ -448,7 +669,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
 
                         var incomingPath = candidateExists ? plan.StagingPath : plan.DestinationPath;
                         operation = Run(operation, owner, () => _diskTransferService.TransferFile(incomingPath, plan.SourcePath, TransferMode.Move));
-                        VerifyHash(plan.SourcePath, plan.ExpectedSize.Value, plan.IncomingSha256, "restored source");
+                        operation = HeartbeatVerifyHash(operation, owner, plan.SourcePath, plan.ExpectedSize.Value, plan.IncomingSha256, "restored source");
                         RequireAbsent(incomingPath, "restored incoming location");
                     }
                 }
@@ -473,8 +694,8 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                 var outgoing = plan.ExpectedOutgoingMovieFile;
                 if (outgoing != null)
                 {
-                    var originalExists = ExactHash(plan.Expected.Path, outgoing.Size, plan.OutgoingSha256);
-                    var backupExists = ExactHash(plan.FinalizePath, outgoing.Size, plan.OutgoingSha256);
+                    operation = HeartbeatExactHash(operation, owner, plan.Expected.Path, outgoing.Size, plan.OutgoingSha256, out var originalExists);
+                    operation = HeartbeatExactHash(operation, owner, plan.FinalizePath, outgoing.Size, plan.OutgoingSha256, out var backupExists);
                     if (originalExists && backupExists || !originalExists && !backupExists)
                     {
                         throw new IOException("Rollback could not prove exactly one outgoing movie-file copy.");
@@ -485,7 +706,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                         operation = Run(operation, owner, () => _diskTransferService.TransferFile(plan.FinalizePath, plan.Expected.Path, TransferMode.Move));
                     }
 
-                    VerifyHash(plan.Expected.Path, outgoing.Size, plan.OutgoingSha256, "restored outgoing movie file");
+                    operation = HeartbeatVerifyHash(operation, owner, plan.Expected.Path, outgoing.Size, plan.OutgoingSha256, "restored outgoing movie file");
                     RequireAbsent(plan.FinalizePath, "outgoing backup");
                 }
                 else
@@ -493,7 +714,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                     RequireAbsent(plan.DestinationPath, "destination");
                 }
 
-                VerifyHash(plan.SourcePath, plan.ExpectedSize.Value, plan.IncomingSha256, "restored source");
+                operation = HeartbeatVerifyHash(operation, owner, plan.SourcePath, plan.ExpectedSize.Value, plan.IncomingSha256, "restored source");
                 if (unexpectedDestination)
                 {
                     throw new IOException("Rollback found an unexpected destination file and preserved it.");
@@ -504,7 +725,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                 operation = _repository.GetById(operation.Id);
                 _repository.Transition(operation.Id, operation.State, operation.Version, RecoverableOperationState.RolledBack, owner);
             }
-            catch (Exception rollbackException) when (rollbackException is not RecoverableOperationConcurrencyException)
+            catch (Exception rollbackException) when (rollbackException is not RecoverableOperationConcurrencyException and not RecoverableOperationProcessDeathException and not RecoverableOperationLeaseHeartbeatException)
             {
                 MarkRecoveryRequired(operation.Id, owner, "Import rollback was ambiguous after '" + cause.Message + "'; evidence was preserved: " + rollbackException.Message);
             }
@@ -518,7 +739,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             operation = Run(operation, owner, () => _diskTransferService.TransferFile(path, claim, TransferMode.Move));
             try
             {
-                VerifyHash(claim, size, sha256, "claimed coordinator-created copy");
+                operation = HeartbeatVerifyHash(operation, owner, claim, size, sha256, "claimed coordinator-created copy");
             }
             catch
             {
@@ -591,6 +812,24 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             {
                 return _repository.GetById(current.Id);
             }
+        }
+
+        private RecoverableOperation HeartbeatVerifySourceSemantics(RecoverableOperation operation, string owner)
+        {
+            return Run(operation, owner, () => VerifySourceSemantics(operation));
+        }
+
+        private RecoverableOperation HeartbeatVerifyHash(RecoverableOperation operation, string owner, string path, long size, string expectedSha256, string label)
+        {
+            return Run(operation, owner, () => VerifyHash(path, size, expectedSha256, label));
+        }
+
+        private RecoverableOperation HeartbeatExactHash(RecoverableOperation operation, string owner, string path, long size, string expectedSha256, out bool exact)
+        {
+            var result = false;
+            operation = Run(operation, owner, () => result = ExactHash(path, size, expectedSha256));
+            exact = result;
+            return operation;
         }
 
         private void VerifySourceSemantics(RecoverableOperation operation)

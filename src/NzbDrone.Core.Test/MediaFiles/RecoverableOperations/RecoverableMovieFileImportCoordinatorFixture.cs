@@ -209,6 +209,7 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
 
         [TestCase(RecoverableOperationFaultPoint.AfterImportSourceToCandidate)]
         [TestCase(RecoverableOperationFaultPoint.AfterImportOutgoingToBackup)]
+        [TestCase(RecoverableOperationFaultPoint.AfterImportDestinationTransfer)]
         [TestCase(RecoverableOperationFaultPoint.AfterImportCandidateToDestination)]
         [TestCase(RecoverableOperationFaultPoint.AfterImportStaged)]
         [TestCase(RecoverableOperationFaultPoint.AfterImportApplyingDatabase)]
@@ -520,11 +521,19 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
         {
             var realHeartbeat = new RecoverableOperationLeaseHeartbeat(_repository, new RecoverableOperationLeasePolicy());
             var heartbeat = new Mock<IRecoverableOperationLeaseHeartbeat>();
-            var runs = 0;
+            var recycled = false;
+            Mocker.GetMock<IRecycleBinProvider>()
+                .Setup(x => x.DeleteFile(It.IsAny<string>(), It.IsAny<string>()))
+                .Returns((string path, string _) =>
+                {
+                    File.Delete(path);
+                    recycled = true;
+                    return null;
+                });
             heartbeat.Setup(x => x.Run(It.IsAny<RecoverableOperation>(), It.IsAny<string>(), It.IsAny<Action>())).Returns((RecoverableOperation operation, string owner, Action action) =>
             {
                 var result = realHeartbeat.Run(operation, owner, action);
-                if (++runs == 5)
+                if (recycled)
                 {
                     throw new RecoverableOperationLeaseHeartbeatException("heartbeat failed after action", new IOException("renewal failed"));
                 }
@@ -558,6 +567,207 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
             property.GetValue(StoredModel.Plan).Should().Be(RecoverableTransferMode.Copy);
             File.ReadAllBytes(StoredModel.Plan.StagingPath).Should().Equal(IncomingBytes);
             File.ReadAllBytes(_source).Should().Equal(IncomingBytes);
+        }
+
+        [TestCase(RecoverableOperationFaultPoint.AfterPendingCommit)]
+        [TestCase(RecoverableOperationFaultPoint.AfterImportSourceTransfer)]
+        [TestCase(RecoverableOperationFaultPoint.AfterImportSourceToCandidate)]
+        [TestCase(RecoverableOperationFaultPoint.AfterImportOutgoingToBackup)]
+        [TestCase(RecoverableOperationFaultPoint.AfterImportDestinationTransfer)]
+        [TestCase(RecoverableOperationFaultPoint.AfterImportStaged)]
+        [TestCase(RecoverableOperationFaultPoint.AfterImportApplyingDatabase)]
+        [TestCase(RecoverableOperationFaultPoint.AfterImportDatabaseCommit)]
+        [TestCase(RecoverableOperationFaultPoint.AfterImportRecycleAction)]
+        [TestCase(RecoverableOperationFaultPoint.AfterImportRecycle)]
+        public void recovery_should_resume_each_process_death_boundary_idempotently(RecoverableOperationFaultPoint point)
+        {
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Setup(x => x.Check(point)).Throws(new RecoverableOperationProcessDeathException());
+            Action act = () => Import(TransferMode.Move);
+            act.Should().Throw<RecoverableOperationProcessDeathException>();
+            var interrupted = StoredModel;
+            ExpireLease(interrupted);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+
+            const string owner = "restart-owner";
+            var leased = Acquire(interrupted, owner);
+            Subject.Recover(leased, owner);
+            Subject.Recover(StoredModel, owner).State.Should().Be(RecoverableOperationState.Completed, "recovery failed: {0}", StoredModel.LastError);
+
+            StoredModel.State.Should().Be(RecoverableOperationState.Completed);
+            StoredModel.ResultMovieFileId.Should().NotBeNull();
+            StoredModel.ActiveResourceKey.Should().BeNull();
+            File.ReadAllBytes(_destination).Should().Equal(IncomingBytes);
+            File.Exists(_source).Should().BeFalse();
+            Db.All<MovieFile>().Should().ContainSingle(x => x.Id == StoredModel.ResultMovieFileId);
+            Db.All<MovieFile>().Should().NotContain(x => x.Id == _outgoing.Id);
+            Db.All<Movie>().Single(x => x.Id == _movie.Id).MovieFileId.Should().Be(StoredModel.ResultMovieFileId.Value);
+        }
+
+        [Test]
+        public void ambiguous_move_duplicate_during_recovery_should_quarantine_without_mutation()
+        {
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Setup(x => x.Check(RecoverableOperationFaultPoint.AfterImportSourceToCandidate)).Throws(new RecoverableOperationProcessDeathException());
+            Action act = () => Import(TransferMode.Move);
+            act.Should().Throw<RecoverableOperationProcessDeathException>();
+            File.Copy(StoredModel.Plan.StagingPath, _source);
+            ExpireLease(StoredModel);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+            var leased = Acquire(StoredModel, "restart-owner");
+
+            Subject.Recover(leased, "restart-owner");
+
+            StoredModel.State.Should().Be(RecoverableOperationState.RecoveryRequired);
+            File.ReadAllBytes(_source).Should().Equal(IncomingBytes);
+            File.ReadAllBytes(StoredModel.Plan.StagingPath).Should().Equal(IncomingBytes);
+            Db.All<MovieFile>().Should().ContainSingle(x => x.Id == _outgoing.Id);
+        }
+
+        [Test]
+        public void persisted_rollback_should_restore_owned_destination_and_backup_idempotently_after_restart()
+        {
+            Mocker.GetMock<IRecoverableOperationFaultInjector>()
+                .Setup(x => x.Check(RecoverableOperationFaultPoint.AfterImportStaged))
+                .Throws(new IOException("begin rollback"));
+            Mocker.GetMock<IRecoverableOperationFaultInjector>()
+                .Setup(x => x.Check(RecoverableOperationFaultPoint.AfterImportRollbackBegin))
+                .Throws(new RecoverableOperationProcessDeathException());
+
+            Action act = () => Import(TransferMode.Move);
+
+            act.Should().Throw<RecoverableOperationProcessDeathException>();
+            StoredModel.State.Should().Be(RecoverableOperationState.RollingBack);
+            StoredModel.Plan.RollbackDestinationOwned.Should().BeTrue();
+            File.Exists(_source).Should().BeFalse();
+            File.Exists(StoredModel.Plan.StagingPath).Should().BeFalse();
+            File.ReadAllBytes(_destination).Should().Equal(IncomingBytes);
+            File.ReadAllBytes(StoredModel.Plan.FinalizePath).Should().Equal(OutgoingBytes);
+            ExpireLease(StoredModel);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+            var leased = Acquire(StoredModel, "restart-owner");
+
+            Subject.Recover(leased, "restart-owner");
+            var second = Subject.Recover(StoredModel, "restart-owner");
+
+            second.State.Should().Be(RecoverableOperationState.RolledBack);
+            AssertExactPreImportTopology();
+        }
+
+        [Test]
+        public void persisted_rollback_without_durable_destination_ownership_should_fail_closed()
+        {
+            Mocker.GetMock<IRecoverableOperationFaultInjector>()
+                .Setup(x => x.Check(RecoverableOperationFaultPoint.AfterImportStaged))
+                .Throws(new RecoverableOperationProcessDeathException());
+            Action act = () => Import(TransferMode.Move);
+            act.Should().Throw<RecoverableOperationProcessDeathException>();
+            ExpireLease(StoredModel);
+            var leased = Acquire(StoredModel, "restart-owner");
+            var historical = _repository.Transition(leased.Id, leased.State, leased.Version, RecoverableOperationState.RollingBack, "restart-owner");
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+
+            Subject.Recover(historical, "restart-owner");
+
+            StoredModel.State.Should().Be(RecoverableOperationState.RecoveryRequired);
+            File.Exists(_source).Should().BeFalse();
+            File.ReadAllBytes(_destination).Should().Equal(IncomingBytes);
+            File.ReadAllBytes(StoredModel.Plan.FinalizePath).Should().Equal(OutgoingBytes);
+        }
+
+        [Test]
+        public void recovery_hashes_should_run_under_heartbeat_and_keep_versions_current()
+        {
+            var realHeartbeat = new RecoverableOperationLeaseHeartbeat(_repository, new RecoverableOperationLeasePolicy());
+            var heartbeat = new Mock<IRecoverableOperationLeaseHeartbeat>();
+            var insideHeartbeat = false;
+            var requireHeartbeat = false;
+            var unwrappedRecoveryHash = false;
+            heartbeat.Setup(x => x.Run(It.IsAny<RecoverableOperation>(), It.IsAny<string>(), It.IsAny<Action>())).Returns((RecoverableOperation operation, string owner, Action action) =>
+            {
+                return realHeartbeat.Run(operation, owner, () =>
+                {
+                    insideHeartbeat = true;
+                    try
+                    {
+                        action();
+                    }
+                    finally
+                    {
+                        insideHeartbeat = false;
+                    }
+                });
+            });
+            Mocker.SetConstant<IRecoverableOperationLeaseHeartbeat>(heartbeat.Object);
+            Mocker.GetMock<IDiskProvider>().Setup(x => x.OpenReadStream(It.IsAny<string>())).Returns((string path) =>
+            {
+                if (requireHeartbeat && !insideHeartbeat)
+                {
+                    unwrappedRecoveryHash = true;
+                }
+
+                return File.OpenRead(path);
+            });
+            Mocker.GetMock<IRecoverableOperationFaultInjector>()
+                .Setup(x => x.Check(RecoverableOperationFaultPoint.AfterImportStaged))
+                .Throws(new RecoverableOperationProcessDeathException());
+            Action act = () => Import(TransferMode.Move);
+            act.Should().Throw<RecoverableOperationProcessDeathException>();
+            ExpireLease(StoredModel);
+            var leased = Acquire(StoredModel, "restart-owner");
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+            requireHeartbeat = true;
+
+            Subject.Recover(leased, "restart-owner");
+
+            unwrappedRecoveryHash.Should().BeFalse();
+            StoredModel.State.Should().Be(RecoverableOperationState.Completed);
+            heartbeat.Verify(x => x.Run(It.IsAny<RecoverableOperation>(), "restart-owner", It.IsAny<Action>()), Times.AtLeast(3));
+        }
+
+        [Test]
+        public void recovery_heartbeat_failure_during_hash_should_prevent_later_mutation()
+        {
+            var realHeartbeat = new RecoverableOperationLeaseHeartbeat(_repository, new RecoverableOperationLeasePolicy());
+            var heartbeat = new Mock<IRecoverableOperationLeaseHeartbeat>();
+            var failRecoveryHeartbeat = false;
+            heartbeat.Setup(x => x.Run(It.IsAny<RecoverableOperation>(), It.IsAny<string>(), It.IsAny<Action>())).Returns((RecoverableOperation operation, string owner, Action action) =>
+            {
+                if (failRecoveryHeartbeat)
+                {
+                    throw new RecoverableOperationLeaseHeartbeatException("lost recovery lease", new RecoverableOperationConcurrencyException(operation.Id));
+                }
+
+                return realHeartbeat.Run(operation, owner, action);
+            });
+            Mocker.SetConstant<IRecoverableOperationLeaseHeartbeat>(heartbeat.Object);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>()
+                .Setup(x => x.Check(RecoverableOperationFaultPoint.AfterImportSourceToCandidate))
+                .Throws(new RecoverableOperationProcessDeathException());
+            Action act = () => Import(TransferMode.Move);
+            act.Should().Throw<RecoverableOperationProcessDeathException>();
+            ExpireLease(StoredModel);
+            var leased = Acquire(StoredModel, "restart-owner");
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+            failRecoveryHeartbeat = true;
+
+            Action recover = () => Subject.Recover(leased, "restart-owner");
+
+            recover.Should().Throw<RecoverableOperationLeaseHeartbeatException>();
+            StoredModel.State.Should().Be(RecoverableOperationState.Staging);
+            File.ReadAllBytes(StoredModel.Plan.StagingPath).Should().Equal(IncomingBytes);
+            File.ReadAllBytes(_destination).Should().Equal(OutgoingBytes);
+            Db.All<MovieFile>().Should().ContainSingle(x => x.Id == _outgoing.Id);
+        }
+
+        private RecoverableOperation Acquire(RecoverableOperation operation, string owner)
+        {
+            var now = DateTime.UtcNow;
+            return _repository.AcquireLease(operation.Id, operation.Version, owner, now, now.AddMinutes(5));
+        }
+
+        private void ExpireLease(RecoverableOperation operation)
+        {
+            operation.LeaseExpiresAt = DateTime.UtcNow.AddMinutes(-1);
+            Storage.Update(operation);
         }
 
         private RecoverableMovieFileImportResult Import(TransferMode mode) => Subject.Import(_desired, _localMovie, mode, _outgoing, _movie.MovieFileId, _localMovie.ImportTarget);

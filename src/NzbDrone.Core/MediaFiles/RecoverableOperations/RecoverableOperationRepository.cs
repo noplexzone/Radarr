@@ -9,7 +9,7 @@ using Npgsql;
 using NzbDrone.Core.Datastore;
 namespace NzbDrone.Core.MediaFiles.RecoverableOperations
 {
-    public interface IRecoverableOperationRepository { RecoverableOperation CreatePending(RecoverableOperationCreateRequest request); RecoverableOperation GetById(int id); RecoverableOperation GetByKey(string operationKey); IReadOnlyList<RecoverableOperation> ListRecoverableAfter(int afterId, int limit, DateTime? now = null); RecoverableOperation AcquireLease(int id, int expectedVersion, string owner, DateTime now, DateTime expiresAt); RecoverableOperation RenewLease(int id, int expectedVersion, string owner, DateTime now, DateTime expiresAt); RecoverableOperation UpdateActualTransferMode(int id, int expectedVersion, string owner, RecoverableTransferMode actualTransferMode); RecoverableOperation Transition(int id, RecoverableOperationState expectedState, int expectedVersion, RecoverableOperationState nextState, string leaseOwner = null); RecoverableOperation Transition(IDbConnection connection, IDbTransaction transaction, int id, RecoverableOperationState expectedState, int expectedVersion, RecoverableOperationState nextState, DateTime now, string leaseOwner = null); RecoverableOperation RecordErrorAttempt(int id, int expectedVersion, string error, DateTime now, string leaseOwner = null); RecoverableOperation BeginEventDispatch(int id, int expectedVersion, RecoverableOperationEventDispatchMask eventMask, string leaseOwner); RecoverableOperation CompleteEventDispatch(int id, int expectedVersion, RecoverableOperationEventDispatchMask eventMask, string leaseOwner); RecoverableOperation MarkRecoveryRequired(int id, RecoverableOperationState expectedState, int expectedVersion, string error, string leaseOwner = null, DateTime? now = null); }
+    public interface IRecoverableOperationRepository { RecoverableOperation CreatePending(RecoverableOperationCreateRequest request); RecoverableOperation GetById(int id); RecoverableOperation GetByKey(string operationKey); IReadOnlyList<RecoverableOperation> ListRecoverableAfter(int afterId, int limit, DateTime? now = null); RecoverableOperation AcquireLease(int id, int expectedVersion, string owner, DateTime now, DateTime expiresAt); RecoverableOperation RenewLease(int id, int expectedVersion, string owner, DateTime now, DateTime expiresAt); RecoverableOperation UpdateActualTransferMode(int id, int expectedVersion, string owner, RecoverableTransferMode actualTransferMode); RecoverableOperation BeginImportRollback(int id, RecoverableOperationState expectedState, int expectedVersion, string owner, bool destinationOwned); RecoverableOperation Transition(int id, RecoverableOperationState expectedState, int expectedVersion, RecoverableOperationState nextState, string leaseOwner = null); RecoverableOperation Transition(IDbConnection connection, IDbTransaction transaction, int id, RecoverableOperationState expectedState, int expectedVersion, RecoverableOperationState nextState, DateTime now, string leaseOwner = null); RecoverableOperation RecordErrorAttempt(int id, int expectedVersion, string error, DateTime now, string leaseOwner = null); RecoverableOperation BeginEventDispatch(int id, int expectedVersion, RecoverableOperationEventDispatchMask eventMask, string leaseOwner); RecoverableOperation CompleteEventDispatch(int id, int expectedVersion, RecoverableOperationEventDispatchMask eventMask, string leaseOwner); RecoverableOperation MarkRecoveryRequired(int id, RecoverableOperationState expectedState, int expectedVersion, string error, string leaseOwner = null, DateTime? now = null); }
     public sealed class RecoverableOperationRepository : IRecoverableOperationRepository
     {
         const string Columns = @"""Id"",""OperationKey"",""ResourceKey"",""ActiveResourceKey"",""OperationType"",""State"",""MovieId"",""MovieFileId"",""MovieEditionSlotId"",""Plan"",""StagingRoot"",""Version"",""AttemptCount"",""LastAttemptAt"",""LastError"",""LeaseOwner"",""LeaseExpiresAt"",""CreatedAt"",""UpdatedAt"",""DatabaseCommittedAt"",""CompletedAt"",""EventDispatchMask"",""ResultMovieFileId"""; readonly IMainDatabase _database; public RecoverableOperationRepository(IMainDatabase database) { _database = database; }
@@ -70,6 +70,29 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             var n = c.Execute(@"UPDATE ""MovieEditionFileOperations"" SET ""Plan""=@plan,""Version""=""Version""+1,""UpdatedAt""=@now WHERE ""Id""=@id AND ""Version""=@version AND ""State""=@state AND ""LeaseOwner""=@owner AND ""LeaseExpiresAt"">@now", new { id, version, owner, now, state = RecoverableOperationState.Staging, plan = current.Plan });
             return OneOrThrow(c, id, n);
         }
+        public RecoverableOperation BeginImportRollback(int id, RecoverableOperationState state, int version, string owner, bool destinationOwned)
+        {
+            if (state is not RecoverableOperationState.Pending and not RecoverableOperationState.Staging and not RecoverableOperationState.Staged and not RecoverableOperationState.ApplyingDatabase)
+            {
+                throw new RecoverableOperationTransitionException(state, RecoverableOperationState.RollingBack);
+            }
+
+            var now = DateTime.UtcNow;
+            using var c = _database.OpenConnection();
+            using var tx = c.BeginTransaction(IsolationLevel.ReadCommitted);
+            var current = c.QuerySingleOrDefault<RecoverableOperation>($@"SELECT {Columns} FROM ""MovieEditionFileOperations"" WHERE ""Id""=@id", new { id }, tx);
+            if (current == null || current.OperationType != RecoverableOperationType.Import || current.State != state || current.Version != version || current.LeaseOwner != owner || current.LeaseExpiresAt <= now)
+            {
+                throw new RecoverableOperationConcurrencyException(id);
+            }
+
+            current.Plan.RollbackDestinationOwned = destinationOwned;
+            var n = c.Execute(@"UPDATE ""MovieEditionFileOperations"" SET ""Plan""=@plan,""State""=@next,""Version""=""Version""+1,""UpdatedAt""=@now WHERE ""Id""=@id AND ""OperationType""=@operationType AND ""State""=@state AND ""Version""=@version AND ""LeaseOwner""=@owner AND ""LeaseExpiresAt"">@now", new { id, operationType = RecoverableOperationType.Import, state, version, owner, now, plan = current.Plan, next = RecoverableOperationState.RollingBack }, tx);
+            var result = OneOrThrow(c, id, n, tx);
+            tx.Commit();
+            return result;
+        }
+
         public RecoverableOperation Transition(int id, RecoverableOperationState state, int version, RecoverableOperationState next, string leaseOwner = null) { using var c = _database.OpenConnection(); using var tx = c.BeginTransaction(IsolationLevel.ReadCommitted); var result = Transition(c, tx, id, state, version, next, DateTime.UtcNow, leaseOwner); tx.Commit(); return result; }
         public RecoverableOperation Transition(IDbConnection c, IDbTransaction tx, int id, RecoverableOperationState state, int version, RecoverableOperationState next, DateTime now, string leaseOwner = null)
         {

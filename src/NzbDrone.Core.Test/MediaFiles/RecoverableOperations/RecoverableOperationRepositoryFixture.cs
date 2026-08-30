@@ -19,6 +19,25 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
         [Test] public void recovery_required_should_be_quarantined_and_reject_reclassification_or_leasing() { var o = Subject.CreatePending(Request("quarantine", "movie:quarantine")); o = Subject.MarkRecoveryRequired(o.Id, o.State, o.Version, "manual recovery"); var version = o.Version; var attempts = o.AttemptCount; Action again = () => Subject.MarkRecoveryRequired(o.Id, o.State, o.Version, "overwrite"); again.Should().Throw<RecoverableOperationTransitionException>(); Action lease = () => Subject.AcquireLease(o.Id, o.Version, "worker", DateTime.UtcNow, DateTime.UtcNow.AddMinutes(1)); lease.Should().Throw<RecoverableOperationConcurrencyException>(); Action undefined = () => Subject.MarkRecoveryRequired(o.Id, (RecoverableOperationState)999, o.Version, "invalid"); undefined.Should().Throw<RecoverableOperationTransitionException>(); var persisted = Subject.GetById(o.Id); persisted.Version.Should().Be(version); persisted.AttemptCount.Should().Be(attempts); persisted.LastError.Should().Be("manual recovery"); persisted.LeaseOwner.Should().BeNull(); }
         [Test] public void create_should_reject_incomplete_inconsistent_or_unstageable_plans() { var requests = new[] { Request("é", "resource:unicode"), Request("bad-operation", "resource:operation", operationType: (RecoverableOperationType)999), Request("bad-transfer", "resource:transfer", transferMode: (RecoverableTransferMode)999), Request("missing-source", "resource:source", missingSource: true), Request("wrong-movie", "resource:movie", snapshotMovieId: 2), Request("relative-root", "resource:relative", stagingRoot: "relative/root"), Request("outside-root", "resource:outside", stagingRoot: "/outside/.radarr-recovery/outside-root/") }; foreach (var request in requests) { Action create = () => Subject.CreatePending(request); create.Should().Throw<RecoverableOperationValidationException>(); } Db.All<RecoverableOperation>().Should().BeEmpty(); }
         [Test] public void should_record_bounded_error_attempt_with_cas() { var o = Subject.CreatePending(Request("attempt", "movie:attempt")); o = Subject.RecordErrorAttempt(o.Id, o.Version, "failed safely", DateTime.UtcNow); o.AttemptCount.Should().Be(1); o.LastError.Should().Be("failed safely"); o.LastAttemptAt.Should().NotBeNull(); Action stale = () => Subject.RecordErrorAttempt(o.Id, 1, "stale", DateTime.UtcNow); stale.Should().Throw<RecoverableOperationConcurrencyException>(); }
+
+        [Test]
+        public void begin_import_rollback_should_atomically_persist_destination_ownership_and_state()
+        {
+            var operation = Subject.CreatePending(Request("begin-import-rollback", "movie:begin-import-rollback", operationType: RecoverableOperationType.Import));
+            var now = DateTime.UtcNow;
+            operation = Subject.AcquireLease(operation.Id, operation.Version, "rollback-owner", now, now.AddMinutes(5));
+            operation = Subject.Transition(operation.Id, operation.State, operation.Version, RecoverableOperationState.Staging, "rollback-owner");
+            operation = Subject.Transition(operation.Id, operation.State, operation.Version, RecoverableOperationState.Staged, "rollback-owner");
+
+            var begun = Subject.BeginImportRollback(operation.Id, operation.State, operation.Version, "rollback-owner", true);
+
+            begun.State.Should().Be(RecoverableOperationState.RollingBack);
+            begun.Plan.RollbackDestinationOwned.Should().BeTrue();
+            begun.Version.Should().Be(operation.Version + 1);
+            Action stale = () => Subject.BeginImportRollback(operation.Id, operation.State, operation.Version, "rollback-owner", true);
+            stale.Should().Throw<RecoverableOperationConcurrencyException>();
+        }
+
         RecoverableOperation Reach(RecoverableOperationState state) { var key = Guid.NewGuid().ToString("N"); var o = Subject.CreatePending(Request(key, "resource:" + key)); if (state == RecoverableOperationState.Pending) return o; if (state == RecoverableOperationState.RollingBack) return Subject.Transition(o.Id, o.State, o.Version, state); foreach (var next in new[] { RecoverableOperationState.Staging, RecoverableOperationState.Staged, RecoverableOperationState.ApplyingDatabase, RecoverableOperationState.DatabaseCommitted, RecoverableOperationState.Finalizing }) { o = Subject.Transition(o.Id, o.State, o.Version, next); if (o.State == state) return o; } throw new InvalidOperationException(); }
         [Test] public void interface_should_remain_narrow() { typeof(IRecoverableOperationRepository).GetMethods().Select(x => x.Name).Should().NotContain(new[] { "Insert", "Update", "Delete", "Upsert", "SetFields", "Purge" }); }
 

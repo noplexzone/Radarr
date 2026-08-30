@@ -101,6 +101,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         public long? ExpectedSize { get; init; }
         public RecoverableTransferMode TransferMode { get; init; }
         public RecoverableTransferMode? ActualTransferMode { get; set; }
+        public bool? RollbackDestinationOwned { get; set; }
         public string IncomingSha256 { get; init; }
         public string OutgoingSha256 { get; init; }
         public Dictionary<string, string> EventFacts { get; init; } = new();
