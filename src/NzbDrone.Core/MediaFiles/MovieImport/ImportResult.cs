@@ -8,6 +8,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
     {
         public ImportDecision ImportDecision { get; private set; }
         public List<string> Errors { get; private set; }
+        public bool FinalizationPending { get; private set; }
 
         public ImportResultType Result
         {
@@ -28,10 +29,16 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
         }
 
         public ImportResult(ImportDecision importDecision, params string[] errors)
+            : this(importDecision, false, errors)
+        {
+        }
+
+        public ImportResult(ImportDecision importDecision, bool finalizationPending, params string[] errors)
         {
             Ensure.That(importDecision, () => importDecision).IsNotNull();
 
             ImportDecision = importDecision;
+            FinalizationPending = finalizationPending;
             Errors = errors.ToList();
         }
     }

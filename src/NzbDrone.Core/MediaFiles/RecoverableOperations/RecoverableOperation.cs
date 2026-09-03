@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using NzbDrone.Core.Datastore;
+using NzbDrone.Core.Indexers;
 using NzbDrone.Core.Languages;
 using NzbDrone.Core.MediaFiles.MediaInfo;
+using NzbDrone.Core.Movies;
 using NzbDrone.Core.Qualities;
 using NzbDrone.Core.Parser.Model;
 
@@ -19,7 +21,19 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         MovieFileDeleted = 1,
         DeleteCompleted = 2,
         MovieFileDeletedInProgress = 4,
-        DeleteCompletedInProgress = 8
+        DeleteCompletedInProgress = 8,
+        ImportMovieFileDeleted = 16,
+        ImportMovieFileAdded = 32,
+        MovieFileImported = 64,
+        ImportMovieFileDeletedInProgress = 128,
+        ImportMovieFileAddedInProgress = 256,
+        MovieFileImportedInProgress = 512,
+        ImportFolderCreated = 1024,
+        ImportFolderCreatedInProgress = 2048,
+        ImportFileAttributes = 4096,
+        ImportFileAttributesInProgress = 8192,
+        ImportExtras = 16384,
+        ImportExtrasInProgress = 32768
     }
 
     public sealed class RecoverableOperationSnapshot
@@ -36,7 +50,15 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
     {
         public int Id { get; init; }
         public int MovieMetadataId { get; init; }
+        public bool Monitored { get; init; }
+        public MovieStatusType MinimumAvailability { get; init; }
+        public int QualityProfileId { get; init; }
         public string Path { get; init; }
+        public string RootFolderPath { get; init; }
+        public DateTime Added { get; init; }
+        public AddMovieOptions AddOptions { get; init; }
+        public DateTime? LastSearchTime { get; init; }
+        public int MovieFileId { get; init; }
         public string Title { get; init; }
         public int Year { get; init; }
         public int TmdbId { get; init; }
@@ -86,6 +108,65 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         public string Edition { get; init; }
     }
 
+    public sealed class RecoverableCustomFormatSnapshot : IEmbeddedDocument
+    {
+        public int Id { get; init; }
+        public string Name { get; init; }
+        public bool IncludeCustomFormatWhenRenaming { get; init; }
+    }
+
+    public sealed class RecoverableGrabbedReleaseSnapshot : IEmbeddedDocument
+    {
+        public string Title { get; init; }
+        public string Indexer { get; init; }
+        public long Size { get; init; }
+        public IndexerFlags IndexerFlags { get; init; }
+        public List<int> MovieIds { get; init; } = new();
+        public MovieAcquisitionTarget AcquisitionTarget { get; init; }
+    }
+
+    public sealed class RecoverableDownloadClientItemSnapshot : IEmbeddedDocument
+    {
+        public string DownloadId { get; init; }
+        public DownloadProtocol Protocol { get; init; }
+        public string Type { get; init; }
+        public int Id { get; init; }
+        public string Name { get; init; }
+        public bool RemoveCompletedDownloads { get; init; }
+        public bool HasPostImportCategory { get; init; }
+    }
+
+    public sealed class RecoverableMovieFileImportEventSnapshot : IEmbeddedDocument
+    {
+        public string SourcePath { get; init; }
+        public long Size { get; init; }
+        public ParsedMovieInfo FileMovieInfo { get; init; }
+        public ParsedMovieInfo FolderMovieInfo { get; init; }
+        public QualityModel Quality { get; init; }
+        public List<Language> Languages { get; init; } = new();
+        public MediaInfoModel MediaInfo { get; init; }
+        public IndexerFlags IndexerFlags { get; init; }
+        public bool ExistingFile { get; init; }
+        public bool SceneSource { get; init; }
+        public string ReleaseGroup { get; init; }
+        public string Edition { get; init; }
+        public string SceneName { get; init; }
+        public bool OtherVideoFiles { get; init; }
+        public List<RecoverableCustomFormatSnapshot> CustomFormats { get; init; } = new();
+        public int CustomFormatScore { get; init; }
+        public MovieFileImportTarget ImportTarget { get; init; }
+        public MovieAcquisitionTarget AcquisitionTarget { get; init; }
+        public bool HasExactTargetContext { get; init; }
+        public RecoverableGrabbedReleaseSnapshot Release { get; init; }
+        public bool ScriptImported { get; init; }
+        public bool ShouldImportExtras { get; init; }
+        public List<string> PossibleExtraFiles { get; init; } = new();
+        public RecoverableDownloadClientItemSnapshot DownloadClientItem { get; init; }
+        public bool CopyOnly { get; init; }
+        public bool MovieFolderCreated { get; init; }
+        public string MovieFileFolderCreated { get; init; }
+    }
+
     public sealed class RecoverableOperationPlan : IEmbeddedDocument
     {
         public RecoverableOperationSnapshot Expected { get; init; }
@@ -102,11 +183,15 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         public RecoverableTransferMode TransferMode { get; init; }
         public RecoverableTransferMode? ActualTransferMode { get; set; }
         public bool? RollbackDestinationOwned { get; set; }
+        public bool ImportRecycleStarted { get; set; }
+        public bool ImportRecycleCompleted { get; set; }
+        public string ImportRecycleBinPath { get; set; }
         public string IncomingSha256 { get; init; }
         public string OutgoingSha256 { get; init; }
         public Dictionary<string, string> EventFacts { get; init; } = new();
         public RecoverableMovieFileEventSnapshot MovieFileEvent { get; init; }
         public RecoverableMovieEventSnapshot MovieEvent { get; init; }
+        public RecoverableMovieFileImportEventSnapshot ImportEvent { get; init; }
     }
 
     public sealed class RecoverableOperation : ModelBase

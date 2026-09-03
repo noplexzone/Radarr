@@ -6,11 +6,13 @@ using NLog;
 using NzbDrone.Common;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
+using NzbDrone.Core.Configuration;
 using NzbDrone.Core.Download;
 using NzbDrone.Core.Extras;
 using NzbDrone.Core.History;
 using NzbDrone.Core.MediaFiles.Commands;
 using NzbDrone.Core.MediaFiles.Events;
+using NzbDrone.Core.MediaFiles.RecoverableOperations;
 using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies.MovieEditionSlots;
@@ -37,6 +39,9 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
         private readonly IManageCommandQueue _commandQueueManager;
         private readonly IMovieEditionSlotService _movieEditionSlotService;
         private readonly IQualityProfileService _qualityProfileService;
+        private readonly IMoveMovieFiles _movieFileMover;
+        private readonly IRecoverableMovieFileImportCoordinator _recoverableImportCoordinator;
+        private readonly IConfigService _configService;
         private readonly Logger _logger;
 
         public ImportApprovedMovie(IUpgradeMediaFiles movieFileUpgrader,
@@ -49,6 +54,9 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                                    IManageCommandQueue commandQueueManager,
                                    IMovieEditionSlotService movieEditionSlotService,
                                    IQualityProfileService qualityProfileService,
+                                   IMoveMovieFiles movieFileMover,
+                                   IRecoverableMovieFileImportCoordinator recoverableImportCoordinator,
+                                   IConfigService configService,
                                    Logger logger)
         {
             _movieFileUpgrader = movieFileUpgrader;
@@ -61,6 +69,9 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
             _commandQueueManager = commandQueueManager;
             _movieEditionSlotService = movieEditionSlotService;
             _qualityProfileService = qualityProfileService;
+            _movieFileMover = movieFileMover;
+            _recoverableImportCoordinator = recoverableImportCoordinator;
+            _configService = configService;
             _logger = logger;
         }
 
@@ -217,6 +228,39 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                         movieFile.SceneName = localMovie.SceneName;
                         movieFile.OriginalFilePath = GetOriginalFilePath(downloadClientItem, localMovie);
 
+                        if (!_configService.UseScriptImport)
+                        {
+                            var expectedMainMovieFileId = localMovie.Movie.MovieFileId;
+                            var outgoingMovieFile = ResolveOutgoingMovieFile(localMovie);
+                            var replacedFilePath = outgoingMovieFile == null ? null : Path.Combine(localMovie.Movie.Path, outgoingMovieFile.RelativePath);
+                            var destination = _movieFileMover.PreflightMovieFile(movieFile, localMovie, replacedFilePath);
+                            movieFile.Path = destination;
+                            movieFile.RelativePath = localMovie.Movie.Path.GetRelativePath(destination);
+                            var transferMode = copyOnly
+                                ? _configService.CopyUsingHardlinks ? TransferMode.HardLinkOrCopy : TransferMode.Copy
+                                : TransferMode.Move;
+                            var durableResult = _recoverableImportCoordinator.Import(movieFile,
+                                                                                     localMovie,
+                                                                                     transferMode,
+                                                                                     outgoingMovieFile,
+                                                                                     expectedMainMovieFileId,
+                                                                                     localMovie.ImportTarget,
+                                                                                     downloadClientItem);
+                            if (!durableResult.IsImported || durableResult.ImportedMovieFile == null)
+                            {
+                                throw new InvalidOperationException("The recoverable import coordinator did not return a persisted imported movie file.");
+                            }
+
+                            movieFile = durableResult.ImportedMovieFile;
+                            importResults.Add(new ImportResult(importDecision, durableResult.FinalizationPending));
+                            if (localMovie.ImportTarget == MovieFileImportTarget.Main)
+                            {
+                                localMovie.Movie.MovieFile = movieFile;
+                            }
+
+                            continue;
+                        }
+
                         oldFiles = _movieFileUpgrader.UpgradeMovieFile(movieFile, localMovie, copyOnly).OldFiles;
                     }
                     else
@@ -293,6 +337,46 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                                             .Select(d => new ImportResult(d, d.Rejections.Select(r => r.Message).ToArray())));
 
             return importResults;
+        }
+
+        private MovieFile ResolveOutgoingMovieFile(LocalMovie localMovie)
+        {
+            switch (localMovie.ImportTarget)
+            {
+                case MovieFileImportTarget.Main:
+                    if (localMovie.Movie.MovieFileId <= 0)
+                    {
+                        return null;
+                    }
+
+                    var main = _mediaFileService.GetMovie(localMovie.Movie.MovieFileId);
+                    if (main == null || main.MovieId != localMovie.Movie.Id || main.MovieEditionSlotId.HasValue)
+                    {
+                        throw new InvalidOperationException($"Movie file {localMovie.Movie.MovieFileId} is not a valid main file for movie {localMovie.Movie.Id}.");
+                    }
+
+                    return main;
+
+                case MovieFileImportTarget.EditionSlot:
+                    if (!localMovie.MovieEditionSlotId.HasValue)
+                    {
+                        throw new InvalidOperationException("An explicit edition slot import requires a slot id.");
+                    }
+
+                    var slotFile = _mediaFileService.FindByEditionSlotId(localMovie.MovieEditionSlotId.Value);
+                    if (slotFile != null && (slotFile.MovieId != localMovie.Movie.Id || slotFile.MovieEditionSlotId != localMovie.MovieEditionSlotId))
+                    {
+                        throw new InvalidOperationException($"Edition slot {localMovie.MovieEditionSlotId} is attached to an invalid movie file.");
+                    }
+
+                    return slotFile;
+
+                case MovieFileImportTarget.Unassigned:
+                    return null;
+
+                default:
+                    throw new InvalidOperationException($"Unsupported movie file import target: {localMovie.ImportTarget}.");
+            }
         }
 
         private static int? GetTargetSlotId(LocalMovie localMovie)

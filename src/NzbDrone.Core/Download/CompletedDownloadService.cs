@@ -238,6 +238,11 @@ namespace NzbDrone.Core.Download
 
             trackedDownload.State = TrackedDownloadState.ImportPending;
 
+            if (importResults.Any(result => result.FinalizationPending))
+            {
+                return;
+            }
+
             if (importResults.Empty())
             {
                 trackedDownload.Warn("No files found are eligible for import in {0}", outputPath);
@@ -281,8 +286,15 @@ namespace NzbDrone.Core.Download
 
         private bool VerifyImport(TrackedDownload trackedDownload, List<ImportResult> importResults, bool requireExactTarget)
         {
+            if (importResults.Any(result => result.FinalizationPending))
+            {
+                _logger.Debug("One or more movie imports are waiting for durable finalization for {0}", trackedDownload.DownloadItem.Title);
+                return false;
+            }
+
             var allMoviesImported = importResults.Any(result =>
                 result.Result == ImportResultType.Imported &&
+                !result.FinalizationPending &&
                 (!requireExactTarget ||
                  (result.ImportDecision.LocalMovie?.Movie?.Id == trackedDownload.Key.MovieId &&
                   result.ImportDecision.LocalMovie.AcquisitionTarget.Equals(trackedDownload.Key.AcquisitionTarget))));
@@ -298,7 +310,7 @@ namespace NzbDrone.Core.Download
             // Double check if all movies were imported by checking the history if at least one
             // file was imported. This will allow the decision engine to reject already imported
             // episode files and still mark the download complete when all files are imported.
-            var atLeastOneMovieImported = importResults.Any(c => c.Result == ImportResultType.Imported);
+            var atLeastOneMovieImported = importResults.Any(c => c.Result == ImportResultType.Imported && !c.FinalizationPending);
 
             bool allMoviesImportedInHistory;
             if (requireExactTarget)

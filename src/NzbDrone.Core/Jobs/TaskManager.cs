@@ -13,6 +13,7 @@ using NzbDrone.Core.ImportLists;
 using NzbDrone.Core.Indexers;
 using NzbDrone.Core.Lifecycle;
 using NzbDrone.Core.MediaFiles.Commands;
+using NzbDrone.Core.MediaFiles.RecoverableOperations;
 using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies.Commands;
@@ -69,6 +70,13 @@ namespace NzbDrone.Core.Jobs
                     {
                         Interval = 5,
                         TypeName = typeof(MessagingCleanupCommand).FullName
+                    },
+
+                    new ScheduledTask
+                    {
+                        Interval = 1,
+                        TypeName = typeof(RecoverRecoverableOperationsCommand).FullName,
+                        Priority = CommandPriority.High
                     },
 
                     new ScheduledTask

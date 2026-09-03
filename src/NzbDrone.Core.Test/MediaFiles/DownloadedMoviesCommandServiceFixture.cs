@@ -115,6 +115,25 @@ namespace NzbDrone.Core.Test.MediaFiles
         }
 
         [Test]
+        public void should_report_unsuccessful_when_any_durable_import_is_pending()
+        {
+            GivenExistingFolder(_downloadFolder);
+            var localMovie = new LocalMovie { Movie = new Movie() };
+            Mocker.GetMock<IDownloadedMovieImportService>()
+                .Setup(v => v.ProcessPath(It.IsAny<string>(), It.IsAny<ImportMode>(), It.IsAny<Movie>(), It.IsAny<DownloadClientItem>()))
+                .Returns(new List<ImportResult>
+                {
+                    new(new ImportDecision(localMovie)),
+                    new(new ImportDecision(localMovie), true)
+                });
+
+            Subject.Execute(new DownloadedMoviesScanCommand { Path = _downloadFolder });
+
+            Mocker.GetMock<NzbDrone.Core.Messaging.Commands.ICommandResultReporter>()
+                .Verify(v => v.Report(NzbDrone.Core.Messaging.Commands.CommandResult.Unsuccessful), Times.Once());
+        }
+
+        [Test]
         public void should_warn_if_neither_folder_or_file_exists()
         {
             Subject.Execute(new DownloadedMoviesScanCommand() { Path = _downloadFolder });

@@ -79,7 +79,9 @@ namespace NzbDrone.Core.MediaFiles
                 throw new ArgumentException("A path must be provided", "path");
             }
 
-            if (importResults == null || importResults.All(v => v.Result != ImportResultType.Imported))
+            if (importResults == null ||
+                importResults.Any(v => v.FinalizationPending) ||
+                importResults.All(v => v.Result != ImportResultType.Imported))
             {
                 // Allow the command to complete successfully, but report as unsuccessful
 

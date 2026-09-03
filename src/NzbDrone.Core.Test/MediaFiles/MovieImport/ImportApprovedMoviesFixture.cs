@@ -7,12 +7,15 @@ using Moq;
 using NUnit.Framework;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
+using NzbDrone.Core.Configuration;
 using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.Download;
+using NzbDrone.Core.Extras;
 using NzbDrone.Core.History;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.MediaFiles.MovieImport;
+using NzbDrone.Core.MediaFiles.RecoverableOperations;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.MovieEditionSlots;
@@ -44,6 +47,7 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
             var outputPath = @"C:\Test\Unsorted\TV\30.Rock.S01E01".AsOsAgnostic();
 
             var movie = Builder<Movie>.CreateNew()
+                .With(e => e.Id = 1)
                 .With(e => e.QualityProfile = new QualityProfile { Items = Qualities.QualityFixture.GetDefaultQualities() })
                 .With(s => s.Path = @"C:\Test\TV\30 Rock".AsOsAgnostic())
                 .Build();
@@ -76,6 +80,8 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
             Mocker.GetMock<IMediaFileService>()
                 .Setup(s => s.Add(It.IsAny<MovieFile>()))
                 .Returns<MovieFile>(file => file);
+
+            Mocker.GetMock<IConfigService>().SetupGet(s => s.UseScriptImport).Returns(true);
         }
 
         private void GivenNewDownload()
@@ -88,6 +94,34 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
             Mocker.GetMock<IMediaFileService>()
                   .Setup(s => s.GetFilesWithRelativePath(It.IsAny<int>(), It.IsAny<string>()))
                   .Returns(new List<MovieFile>());
+        }
+
+        private void GivenDurableDownload(string destination = null, int persistedId = 900, bool noOutgoingMain = true)
+        {
+            var localMovie = _approvedDecisions.First().LocalMovie;
+            if (noOutgoingMain)
+            {
+                localMovie.Movie.MovieFileId = 0;
+            }
+
+            destination ??= Path.Combine(localMovie.Movie.Path, "renamed.mkv");
+            Mocker.GetMock<IConfigService>().SetupGet(s => s.UseScriptImport).Returns(false);
+            Mocker.GetMock<IMoveMovieFiles>()
+                .Setup(s => s.PreflightMovieFile(It.IsAny<MovieFile>(), It.IsAny<LocalMovie>(), It.IsAny<string>()))
+                .Returns(destination);
+            Mocker.GetMock<IRecoverableMovieFileImportCoordinator>()
+                .Setup(s => s.Import(It.IsAny<MovieFile>(), It.IsAny<LocalMovie>(), It.IsAny<TransferMode>(), It.IsAny<MovieFile>(), It.IsAny<int>(), It.IsAny<MovieFileImportTarget>(), It.IsAny<DownloadClientItem>()))
+                .Returns((MovieFile desired, LocalMovie _, TransferMode __, MovieFile ___, int ____, MovieFileImportTarget target, DownloadClientItem _____) =>
+                {
+                    desired.Id = persistedId;
+                    desired.ImportTarget = target;
+                    return new RecoverableMovieFileImportResult
+                    {
+                        ImportedMovieFile = desired,
+                        IsImported = true,
+                        Operation = new RecoverableOperation { State = RecoverableOperationState.Completed }
+                    };
+                });
         }
 
         [Test]
@@ -625,6 +659,105 @@ namespace NzbDrone.Core.Test.MediaFiles.MovieImport
                 It.Is<MovieFile>(file => file.MovieEditionSlotId == null && file.ImportTarget == MovieFileImportTarget.Unassigned),
                 localMovie,
                 false), Times.Once);
+        }
+
+        [TestCase(MovieFileImportTarget.Main)]
+        [TestCase(MovieFileImportTarget.EditionSlot)]
+        [TestCase(MovieFileImportTarget.Unassigned)]
+        public void durable_new_download_should_coordinate_exact_target_without_legacy_mutations(MovieFileImportTarget target)
+        {
+            var localMovie = _approvedDecisions.First().LocalMovie;
+            localMovie.ImportTarget = target;
+            localMovie.Movie.MovieFileId = 101;
+            var main = new MovieFile { Id = 101, MovieId = localMovie.Movie.Id, RelativePath = "main-old.mkv" };
+            var slot = new MovieFile { Id = 202, MovieId = localMovie.Movie.Id, MovieEditionSlotId = 10, RelativePath = "slot-old.mkv" };
+            Mocker.GetMock<IMediaFileService>().Setup(s => s.GetMovie(101)).Returns(main);
+            if (target == MovieFileImportTarget.EditionSlot)
+            {
+                localMovie.MovieEditionSlotId = 10;
+                Mocker.GetMock<IMovieEditionSlotService>().Setup(s => s.GetById(10)).Returns(new MovieEditionSlot { Id = 10, MovieId = localMovie.Movie.Id });
+                Mocker.GetMock<IMediaFileService>().Setup(s => s.FindByEditionSlotId(10)).Returns(slot);
+            }
+
+            GivenDurableDownload(noOutgoingMain: false);
+            var result = Subject.Import(_approvedDecisions, true, _downloadClientItem, ImportMode.Move);
+
+            result.Should().ContainSingle(r => r.Result == ImportResultType.Imported);
+            var expectedOutgoing = target == MovieFileImportTarget.Main ? main : target == MovieFileImportTarget.EditionSlot ? slot : null;
+            Mocker.GetMock<IRecoverableMovieFileImportCoordinator>().Verify(s => s.Import(
+                It.Is<MovieFile>(f => f.Path.EndsWith("renamed.mkv") && f.RelativePath == "renamed.mkv" && f.MovieEditionSlotId == (target == MovieFileImportTarget.EditionSlot ? 10 : null)),
+                localMovie,
+                TransferMode.Move,
+                expectedOutgoing,
+                101,
+                target,
+                _downloadClientItem), Times.Once);
+            Mocker.GetMock<IUpgradeMediaFiles>().Verify(s => s.UpgradeMovieFile(It.IsAny<MovieFile>(), It.IsAny<LocalMovie>(), It.IsAny<bool>()), Times.Never);
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.Add(It.IsAny<MovieFile>()), Times.Never);
+            Mocker.GetMock<IEventAggregator>().Verify(s => s.PublishEvent(It.IsAny<MovieFileImportedEvent>()), Times.Never);
+            if (target == MovieFileImportTarget.Main)
+            {
+                localMovie.Movie.MovieFile.Id.Should().Be(900);
+            }
+        }
+
+        [TestCase(ImportMode.Move, true, TransferMode.Move)]
+        [TestCase(ImportMode.Copy, false, TransferMode.Copy)]
+        [TestCase(ImportMode.Copy, true, TransferMode.HardLinkOrCopy)]
+        [TestCase(ImportMode.Auto, true, TransferMode.HardLinkOrCopy)]
+        public void durable_new_download_should_map_transfer_mode(ImportMode importMode, bool hardlinks, TransferMode expected)
+        {
+            GivenDurableDownload();
+            Mocker.GetMock<IConfigService>().SetupGet(s => s.CopyUsingHardlinks).Returns(hardlinks);
+            _downloadClientItem.CanMoveFiles = importMode != ImportMode.Auto;
+
+            Subject.Import(_approvedDecisions, true, _downloadClientItem, importMode);
+
+            Mocker.GetMock<IRecoverableMovieFileImportCoordinator>().Verify(s => s.Import(It.IsAny<MovieFile>(), It.IsAny<LocalMovie>(), expected, It.IsAny<MovieFile>(), It.IsAny<int>(), It.IsAny<MovieFileImportTarget>(), It.IsAny<DownloadClientItem>()), Times.Once);
+        }
+
+        [Test]
+        public void durable_failure_should_not_add_publish_or_run_extras()
+        {
+            GivenDurableDownload();
+            Mocker.GetMock<IRecoverableMovieFileImportCoordinator>()
+                .Setup(s => s.Import(It.IsAny<MovieFile>(), It.IsAny<LocalMovie>(), It.IsAny<TransferMode>(), It.IsAny<MovieFile>(), It.IsAny<int>(), It.IsAny<MovieFileImportTarget>(), It.IsAny<DownloadClientItem>()))
+                .Throws(new IOException("precommit failure"));
+
+            Subject.Import(_approvedDecisions, true, _downloadClientItem).Should().ContainSingle(r => r.Result == ImportResultType.Skipped);
+
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.Add(It.IsAny<MovieFile>()), Times.Never);
+            Mocker.GetMock<IEventAggregator>().Verify(s => s.PublishEvent(It.IsAny<MovieFileImportedEvent>()), Times.Never);
+            Mocker.GetMock<IExtraService>().Verify(s => s.ImportMovie(It.IsAny<LocalMovie>(), It.IsAny<MovieFile>(), It.IsAny<bool>()), Times.Never);
+        }
+
+        [Test]
+        public void durable_committed_pending_result_should_be_reported_imported_without_duplicate_completion()
+        {
+            GivenDurableDownload();
+            Mocker.GetMock<IRecoverableMovieFileImportCoordinator>()
+                .Setup(s => s.Import(It.IsAny<MovieFile>(), It.IsAny<LocalMovie>(), It.IsAny<TransferMode>(), It.IsAny<MovieFile>(), It.IsAny<int>(), It.IsAny<MovieFileImportTarget>(), It.IsAny<DownloadClientItem>()))
+                .Returns(new RecoverableMovieFileImportResult
+                {
+                    ImportedMovieFile = new MovieFile { Id = 901, MovieId = 1, ImportTarget = MovieFileImportTarget.Main, RelativePath = "renamed.mkv" },
+                    IsImported = true,
+                    FinalizationPending = true,
+                    Operation = new RecoverableOperation { State = RecoverableOperationState.Finalizing }
+                });
+
+            Subject.Import(_approvedDecisions, true, _downloadClientItem).Should().ContainSingle(r => r.Result == ImportResultType.Imported && r.FinalizationPending);
+            Mocker.GetMock<IEventAggregator>().Verify(s => s.PublishEvent(It.IsAny<MovieFileImportedEvent>()), Times.Never);
+            Mocker.GetMock<IExtraService>().Verify(s => s.ImportMovie(It.IsAny<LocalMovie>(), It.IsAny<MovieFile>(), It.IsAny<bool>()), Times.Never);
+        }
+
+        [Test]
+        public void script_import_configuration_should_retain_complete_legacy_path()
+        {
+            Subject.Import(_approvedDecisions, true, _downloadClientItem);
+
+            Mocker.GetMock<IUpgradeMediaFiles>().Verify(s => s.UpgradeMovieFile(It.IsAny<MovieFile>(), It.IsAny<LocalMovie>(), It.IsAny<bool>()), Times.Once);
+            Mocker.GetMock<IMediaFileService>().Verify(s => s.Add(It.IsAny<MovieFile>()), Times.Once);
+            Mocker.GetMock<IRecoverableMovieFileImportCoordinator>().Verify(s => s.Import(It.IsAny<MovieFile>(), It.IsAny<LocalMovie>(), It.IsAny<TransferMode>(), It.IsAny<MovieFile>(), It.IsAny<int>(), It.IsAny<MovieFileImportTarget>(), It.IsAny<DownloadClientItem>()), Times.Never);
         }
 
         [TestCase(MovieFileImportTarget.EditionSlot)]

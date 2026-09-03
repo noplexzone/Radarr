@@ -21,6 +21,25 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
         [Test] public void should_record_bounded_error_attempt_with_cas() { var o = Subject.CreatePending(Request("attempt", "movie:attempt")); o = Subject.RecordErrorAttempt(o.Id, o.Version, "failed safely", DateTime.UtcNow); o.AttemptCount.Should().Be(1); o.LastError.Should().Be("failed safely"); o.LastAttemptAt.Should().NotBeNull(); Action stale = () => Subject.RecordErrorAttempt(o.Id, 1, "stale", DateTime.UtcNow); stale.Should().Throw<RecoverableOperationConcurrencyException>(); }
 
         [Test]
+        public void unattempted_rows_should_not_be_starved_by_a_full_page_of_persistent_failures()
+        {
+            var now = DateTime.UtcNow;
+            var attempted = new List<RecoverableOperation>();
+            for (var index = 0; index < 100; index++)
+            {
+                var operation = Subject.CreatePending(Request($"persistent-{index}", $"movie:persistent-{index}"));
+                attempted.Add(Subject.RecordErrorAttempt(operation.Id, operation.Version, "persistent failure", now));
+            }
+
+            var later = Subject.CreatePending(Request("later-unattempted", "movie:later-unattempted"));
+            var page = Subject.ListRecoverable(100, now.AddMinutes(1));
+
+            page.Should().HaveCount(100);
+            page.First().Id.Should().Be(later.Id);
+            page.Select(operation => operation.Id).Should().Contain(later.Id);
+        }
+
+        [Test]
         public void begin_import_rollback_should_atomically_persist_destination_ownership_and_state()
         {
             var operation = Subject.CreatePending(Request("begin-import-rollback", "movie:begin-import-rollback", operationType: RecoverableOperationType.Import));
@@ -36,6 +55,36 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
             begun.Version.Should().Be(operation.Version + 1);
             Action stale = () => Subject.BeginImportRollback(operation.Id, operation.State, operation.Version, "rollback-owner", true);
             stale.Should().Throw<RecoverableOperationConcurrencyException>();
+        }
+
+        [Test]
+        public void event_dispatch_should_allow_each_exact_pair_and_reject_cross_pair_completion()
+        {
+            var masks = new[]
+            {
+                RecoverableOperationEventDispatchMask.MovieFileDeleted,
+                RecoverableOperationEventDispatchMask.DeleteCompleted,
+                RecoverableOperationEventDispatchMask.ImportMovieFileDeleted,
+                RecoverableOperationEventDispatchMask.ImportMovieFileAdded,
+                RecoverableOperationEventDispatchMask.MovieFileImported,
+                RecoverableOperationEventDispatchMask.ImportFolderCreated,
+                RecoverableOperationEventDispatchMask.ImportFileAttributes,
+                RecoverableOperationEventDispatchMask.ImportExtras
+            };
+
+            foreach (var mask in masks)
+            {
+                var operation = Reach(RecoverableOperationState.Finalizing);
+                var now = DateTime.UtcNow;
+                operation = Subject.AcquireLease(operation.Id, operation.Version, "event-owner", now, now.AddMinutes(5));
+                operation = Subject.BeginEventDispatch(operation.Id, operation.Version, mask, "event-owner");
+                var wrong = masks.First(candidate => candidate != mask);
+                Action crossPair = () => Subject.CompleteEventDispatch(operation.Id, operation.Version, wrong, "event-owner");
+                crossPair.Should().Throw<RecoverableOperationConcurrencyException>();
+
+                operation = Subject.CompleteEventDispatch(operation.Id, operation.Version, mask, "event-owner");
+                (((RecoverableOperationEventDispatchMask)operation.EventDispatchMask) & mask).Should().Be(mask);
+            }
         }
 
         RecoverableOperation Reach(RecoverableOperationState state) { var key = Guid.NewGuid().ToString("N"); var o = Subject.CreatePending(Request(key, "resource:" + key)); if (state == RecoverableOperationState.Pending) return o; if (state == RecoverableOperationState.RollingBack) return Subject.Transition(o.Id, o.State, o.Version, state); foreach (var next in new[] { RecoverableOperationState.Staging, RecoverableOperationState.Staged, RecoverableOperationState.ApplyingDatabase, RecoverableOperationState.DatabaseCommitted, RecoverableOperationState.Finalizing }) { o = Subject.Transition(o.Id, o.State, o.Version, next); if (o.State == state) return o; } throw new InvalidOperationException(); }

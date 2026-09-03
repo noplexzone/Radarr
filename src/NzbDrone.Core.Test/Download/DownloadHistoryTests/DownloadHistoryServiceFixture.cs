@@ -5,6 +5,8 @@ using NUnit.Framework;
 using NzbDrone.Core.Download;
 using NzbDrone.Core.Download.History;
 using NzbDrone.Core.History;
+using NzbDrone.Core.MediaFiles;
+using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Qualities;
@@ -152,6 +154,18 @@ namespace NzbDrone.Core.Test.Download.DownloadHistoryTests
             };
             MovieAcquisitionTargetSerializer.Write(history.Data, target);
             return history;
+        }
+
+        [Test]
+        public void should_skip_file_import_history_when_download_client_info_is_missing()
+        {
+            Mocker.GetMock<IHistoryService>().Setup(service => service.FindDownloadId(It.IsAny<MovieFileImportedEvent>())).Returns("recovered-id");
+            var imported = new MovieFile { Id = 1, MovieId = 1 };
+            var localMovie = new LocalMovie { Path = "Movie.mkv", Movie = new Movie { Id = 1 } };
+
+            Subject.Handle(new MovieFileImportedEvent(localMovie, imported, new List<DeletedMovieFile>(), true, null));
+
+            Mocker.GetMock<IDownloadHistoryRepository>().Verify(repository => repository.Insert(It.IsAny<DownloadHistory>()), Times.Never);
         }
 
         [Test]

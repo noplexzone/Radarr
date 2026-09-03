@@ -9,7 +9,7 @@ using Npgsql;
 using NzbDrone.Core.Datastore;
 namespace NzbDrone.Core.MediaFiles.RecoverableOperations
 {
-    public interface IRecoverableOperationRepository { RecoverableOperation CreatePending(RecoverableOperationCreateRequest request); RecoverableOperation GetById(int id); RecoverableOperation GetByKey(string operationKey); IReadOnlyList<RecoverableOperation> ListRecoverableAfter(int afterId, int limit, DateTime? now = null); RecoverableOperation AcquireLease(int id, int expectedVersion, string owner, DateTime now, DateTime expiresAt); RecoverableOperation RenewLease(int id, int expectedVersion, string owner, DateTime now, DateTime expiresAt); RecoverableOperation UpdateActualTransferMode(int id, int expectedVersion, string owner, RecoverableTransferMode actualTransferMode); RecoverableOperation BeginImportRollback(int id, RecoverableOperationState expectedState, int expectedVersion, string owner, bool destinationOwned); RecoverableOperation Transition(int id, RecoverableOperationState expectedState, int expectedVersion, RecoverableOperationState nextState, string leaseOwner = null); RecoverableOperation Transition(IDbConnection connection, IDbTransaction transaction, int id, RecoverableOperationState expectedState, int expectedVersion, RecoverableOperationState nextState, DateTime now, string leaseOwner = null); RecoverableOperation RecordErrorAttempt(int id, int expectedVersion, string error, DateTime now, string leaseOwner = null); RecoverableOperation BeginEventDispatch(int id, int expectedVersion, RecoverableOperationEventDispatchMask eventMask, string leaseOwner); RecoverableOperation CompleteEventDispatch(int id, int expectedVersion, RecoverableOperationEventDispatchMask eventMask, string leaseOwner); RecoverableOperation MarkRecoveryRequired(int id, RecoverableOperationState expectedState, int expectedVersion, string error, string leaseOwner = null, DateTime? now = null); }
+    public interface IRecoverableOperationRepository { RecoverableOperation CreatePending(RecoverableOperationCreateRequest request); RecoverableOperation GetById(int id); RecoverableOperation GetByKey(string operationKey); IReadOnlyList<RecoverableOperation> ListRecoverable(int limit, DateTime? now = null); IReadOnlyList<RecoverableOperation> ListRecoverableAfter(int afterId, int limit, DateTime? now = null); RecoverableOperation AcquireLease(int id, int expectedVersion, string owner, DateTime now, DateTime expiresAt); RecoverableOperation RenewLease(int id, int expectedVersion, string owner, DateTime now, DateTime expiresAt); RecoverableOperation UpdateActualTransferMode(int id, int expectedVersion, string owner, RecoverableTransferMode actualTransferMode); RecoverableOperation UpdateImportRecycleEvidence(int id, int expectedVersion, string owner, bool completed, string recycleBinPath); RecoverableOperation BeginImportRollback(int id, RecoverableOperationState expectedState, int expectedVersion, string owner, bool destinationOwned); RecoverableOperation Transition(int id, RecoverableOperationState expectedState, int expectedVersion, RecoverableOperationState nextState, string leaseOwner = null); RecoverableOperation Transition(IDbConnection connection, IDbTransaction transaction, int id, RecoverableOperationState expectedState, int expectedVersion, RecoverableOperationState nextState, DateTime now, string leaseOwner = null); RecoverableOperation RecordErrorAttempt(int id, int expectedVersion, string error, DateTime now, string leaseOwner = null); RecoverableOperation BeginEventDispatch(int id, int expectedVersion, RecoverableOperationEventDispatchMask eventMask, string leaseOwner); RecoverableOperation CompleteEventDispatch(int id, int expectedVersion, RecoverableOperationEventDispatchMask eventMask, string leaseOwner); RecoverableOperation MarkRecoveryRequired(int id, RecoverableOperationState expectedState, int expectedVersion, string error, string leaseOwner = null, DateTime? now = null); }
     public sealed class RecoverableOperationRepository : IRecoverableOperationRepository
     {
         const string Columns = @"""Id"",""OperationKey"",""ResourceKey"",""ActiveResourceKey"",""OperationType"",""State"",""MovieId"",""MovieFileId"",""MovieEditionSlotId"",""Plan"",""StagingRoot"",""Version"",""AttemptCount"",""LastAttemptAt"",""LastError"",""LeaseOwner"",""LeaseExpiresAt"",""CreatedAt"",""UpdatedAt"",""DatabaseCommittedAt"",""CompletedAt"",""EventDispatchMask"",""ResultMovieFileId"""; readonly IMainDatabase _database; public RecoverableOperationRepository(IMainDatabase database) { _database = database; }
@@ -48,6 +48,18 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         }
         public RecoverableOperation GetById(int id) { using var c = _database.OpenConnection(); return c.QuerySingleOrDefault<RecoverableOperation>($@"SELECT {Columns} FROM ""MovieEditionFileOperations"" WHERE ""Id""=@id", new { id }) ?? throw new RecoverableOperationConcurrencyException(id); }
         public RecoverableOperation GetByKey(string key) { using var c = _database.OpenConnection(); return c.QuerySingleOrDefault<RecoverableOperation>($@"SELECT {Columns} FROM ""MovieEditionFileOperations"" WHERE ""OperationKey""=@key", new { key }); }
+        public IReadOnlyList<RecoverableOperation> ListRecoverable(int limit, DateTime? now = null)
+        {
+            if (limit < 1 || limit > 1000)
+            {
+                throw new ArgumentOutOfRangeException(nameof(limit));
+            }
+
+            var availableAt = now ?? DateTime.UtcNow;
+            using var c = _database.OpenConnection();
+            return c.Query<RecoverableOperation>($@"SELECT {Columns} FROM ""MovieEditionFileOperations"" WHERE ""State"" IN (@pending,@staging,@staged,@applying,@committed,@finalizing,@rollingBack) AND (""LeaseOwner"" IS NULL OR ""LeaseExpiresAt""<=@availableAt) ORDER BY CASE WHEN ""LastAttemptAt"" IS NULL THEN 0 ELSE 1 END, ""LastAttemptAt"", ""Id"" LIMIT @limit", new { limit, availableAt, pending = RecoverableOperationState.Pending, staging = RecoverableOperationState.Staging, staged = RecoverableOperationState.Staged, applying = RecoverableOperationState.ApplyingDatabase, committed = RecoverableOperationState.DatabaseCommitted, finalizing = RecoverableOperationState.Finalizing, rollingBack = RecoverableOperationState.RollingBack }).ToList();
+        }
+
         public IReadOnlyList<RecoverableOperation> ListRecoverableAfter(int afterId, int limit, DateTime? now = null) { if (limit < 1 || limit > 1000) throw new ArgumentOutOfRangeException(nameof(limit)); var availableAt = now ?? DateTime.UtcNow; using var c = _database.OpenConnection(); return c.Query<RecoverableOperation>($@"SELECT {Columns} FROM ""MovieEditionFileOperations"" WHERE ""Id"">@afterId AND ""State"" IN (@pending,@staging,@staged,@applying,@committed,@finalizing,@rollingBack) AND (""LeaseOwner"" IS NULL OR ""LeaseExpiresAt""<=@availableAt) ORDER BY ""Id"" LIMIT @limit", new { afterId, limit, availableAt, pending = RecoverableOperationState.Pending, staging = RecoverableOperationState.Staging, staged = RecoverableOperationState.Staged, applying = RecoverableOperationState.ApplyingDatabase, committed = RecoverableOperationState.DatabaseCommitted, finalizing = RecoverableOperationState.Finalizing, rollingBack = RecoverableOperationState.RollingBack }).ToList(); }
         public RecoverableOperation AcquireLease(int id, int version, string owner, DateTime now, DateTime expires) { ValidateLease(owner, now, expires); using var c = _database.OpenConnection(); var n = c.Execute(@"UPDATE ""MovieEditionFileOperations"" SET ""LeaseOwner""=@owner,""LeaseExpiresAt""=@expires,""Version""=""Version""+1,""UpdatedAt""=@now WHERE ""Id""=@id AND ""Version""=@version AND (""LeaseOwner"" IS NULL OR ""LeaseExpiresAt""<=@now OR ""LeaseOwner""=@owner) AND ""State"" IN (@pending,@staging,@staged,@applying,@committed,@finalizing,@rollingBack)", new { id, version, owner, now, expires, pending = RecoverableOperationState.Pending, staging = RecoverableOperationState.Staging, staged = RecoverableOperationState.Staged, applying = RecoverableOperationState.ApplyingDatabase, committed = RecoverableOperationState.DatabaseCommitted, finalizing = RecoverableOperationState.Finalizing, rollingBack = RecoverableOperationState.RollingBack }); return OneOrThrow(c, id, n); }
         public RecoverableOperation RenewLease(int id, int version, string owner, DateTime now, DateTime expires) { ValidateLease(owner, now, expires); using var c = _database.OpenConnection(); var n = c.Execute(@"UPDATE ""MovieEditionFileOperations"" SET ""LeaseExpiresAt""=@expires,""Version""=""Version""+1,""UpdatedAt""=@now WHERE ""Id""=@id AND ""Version""=@version AND ""LeaseOwner""=@owner AND ""LeaseExpiresAt"">@now AND ""State"" IN (@pending,@staging,@staged,@applying,@committed,@finalizing,@rollingBack)", new { id, version, owner, now, expires, pending = RecoverableOperationState.Pending, staging = RecoverableOperationState.Staging, staged = RecoverableOperationState.Staged, applying = RecoverableOperationState.ApplyingDatabase, committed = RecoverableOperationState.DatabaseCommitted, finalizing = RecoverableOperationState.Finalizing, rollingBack = RecoverableOperationState.RollingBack }); return OneOrThrow(c, id, n); }
@@ -70,6 +82,24 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             var n = c.Execute(@"UPDATE ""MovieEditionFileOperations"" SET ""Plan""=@plan,""Version""=""Version""+1,""UpdatedAt""=@now WHERE ""Id""=@id AND ""Version""=@version AND ""State""=@state AND ""LeaseOwner""=@owner AND ""LeaseExpiresAt"">@now", new { id, version, owner, now, state = RecoverableOperationState.Staging, plan = current.Plan });
             return OneOrThrow(c, id, n);
         }
+        public RecoverableOperation UpdateImportRecycleEvidence(int id, int version, string owner, bool completed, string recycleBinPath)
+        {
+            var current = GetById(id);
+            var now = DateTime.UtcNow;
+            if (current.Version != version || current.State != RecoverableOperationState.Finalizing || current.LeaseOwner != owner || current.LeaseExpiresAt <= now ||
+                (completed && !current.Plan.ImportRecycleStarted) || (!completed && current.Plan.ImportRecycleStarted))
+            {
+                throw new RecoverableOperationConcurrencyException(id);
+            }
+
+            current.Plan.ImportRecycleStarted = true;
+            current.Plan.ImportRecycleCompleted = completed;
+            current.Plan.ImportRecycleBinPath = completed ? recycleBinPath : null;
+            using var c = _database.OpenConnection();
+            var n = c.Execute(@"UPDATE ""MovieEditionFileOperations"" SET ""Plan""=@plan,""Version""=""Version""+1,""UpdatedAt""=@now WHERE ""Id""=@id AND ""Version""=@version AND ""State""=@state AND ""LeaseOwner""=@owner AND ""LeaseExpiresAt"">@now", new { id, version, owner, now, state = RecoverableOperationState.Finalizing, plan = current.Plan });
+            return OneOrThrow(c, id, n);
+        }
+
         public RecoverableOperation BeginImportRollback(int id, RecoverableOperationState state, int version, string owner, bool destinationOwned)
         {
             if (state is not RecoverableOperationState.Pending and not RecoverableOperationState.Staging and not RecoverableOperationState.Staged and not RecoverableOperationState.ApplyingDatabase)
@@ -132,7 +162,14 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         public RecoverableOperation MarkRecoveryRequired(int id, RecoverableOperationState state, int version, string error, string leaseOwner = null, DateTime? now = null) { if (!Enum.IsDefined(typeof(RecoverableOperationState), state) || !Legal(state, RecoverableOperationState.RecoveryRequired)) throw new RecoverableOperationTransitionException(state, RecoverableOperationState.RecoveryRequired); using var c = _database.OpenConnection(); var changedAt = now ?? DateTime.UtcNow; var n = c.Execute(@"UPDATE ""MovieEditionFileOperations"" SET ""State""=@next,""LastError""=@error,""LastAttemptAt""=@changedAt,""AttemptCount""=""AttemptCount""+1,""UpdatedAt""=@changedAt,""Version""=""Version""+1,""LeaseOwner""=NULL,""LeaseExpiresAt""=NULL WHERE ""Id""=@id AND ""State""=@state AND ""Version""=@version AND (""LeaseOwner"" IS NULL OR ""LeaseExpiresAt""<=@changedAt OR ""LeaseOwner""=@leaseOwner)", new { id, state, version, error, changedAt, leaseOwner, next = RecoverableOperationState.RecoveryRequired }); return OneOrThrow(c, id, n); }
         static void ValidateFinalEventMask(RecoverableOperationEventDispatchMask eventMask)
         {
-            if (eventMask is not RecoverableOperationEventDispatchMask.MovieFileDeleted and not RecoverableOperationEventDispatchMask.DeleteCompleted)
+            if (eventMask is not RecoverableOperationEventDispatchMask.MovieFileDeleted and
+                not RecoverableOperationEventDispatchMask.DeleteCompleted and
+                not RecoverableOperationEventDispatchMask.ImportMovieFileDeleted and
+                not RecoverableOperationEventDispatchMask.ImportMovieFileAdded and
+                not RecoverableOperationEventDispatchMask.MovieFileImported and
+                not RecoverableOperationEventDispatchMask.ImportFolderCreated and
+                not RecoverableOperationEventDispatchMask.ImportFileAttributes and
+                not RecoverableOperationEventDispatchMask.ImportExtras)
             {
                 throw new RecoverableOperationValidationException("A known final event dispatch bit is required.");
             }
@@ -140,7 +177,18 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
 
         static RecoverableOperationEventDispatchMask InProgressMask(RecoverableOperationEventDispatchMask eventMask)
         {
-            return eventMask == RecoverableOperationEventDispatchMask.MovieFileDeleted ? RecoverableOperationEventDispatchMask.MovieFileDeletedInProgress : RecoverableOperationEventDispatchMask.DeleteCompletedInProgress;
+            return eventMask switch
+            {
+                RecoverableOperationEventDispatchMask.MovieFileDeleted => RecoverableOperationEventDispatchMask.MovieFileDeletedInProgress,
+                RecoverableOperationEventDispatchMask.DeleteCompleted => RecoverableOperationEventDispatchMask.DeleteCompletedInProgress,
+                RecoverableOperationEventDispatchMask.ImportMovieFileDeleted => RecoverableOperationEventDispatchMask.ImportMovieFileDeletedInProgress,
+                RecoverableOperationEventDispatchMask.ImportMovieFileAdded => RecoverableOperationEventDispatchMask.ImportMovieFileAddedInProgress,
+                RecoverableOperationEventDispatchMask.MovieFileImported => RecoverableOperationEventDispatchMask.MovieFileImportedInProgress,
+                RecoverableOperationEventDispatchMask.ImportFolderCreated => RecoverableOperationEventDispatchMask.ImportFolderCreatedInProgress,
+                RecoverableOperationEventDispatchMask.ImportFileAttributes => RecoverableOperationEventDispatchMask.ImportFileAttributesInProgress,
+                RecoverableOperationEventDispatchMask.ImportExtras => RecoverableOperationEventDispatchMask.ImportExtrasInProgress,
+                _ => throw new RecoverableOperationValidationException("A known final event dispatch bit is required.")
+            };
         }
 
         static RecoverableOperation OneOrThrow(IDbConnection c, int id, int n, IDbTransaction tx = null) { if (n != 1) throw new RecoverableOperationConcurrencyException(id); return c.QuerySingle<RecoverableOperation>($@"SELECT {Columns} FROM ""MovieEditionFileOperations"" WHERE ""Id""=@id", new { id }, tx); }

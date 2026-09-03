@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using NzbDrone.Core.Lifecycle;
+using NzbDrone.Core.Messaging.Commands;
+using NzbDrone.Core.Messaging.Events;
 
 namespace NzbDrone.Core.MediaFiles.RecoverableOperations
 {
@@ -9,8 +12,11 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         IReadOnlyList<int> Classify(int maximumOperations);
     }
 
-    public sealed class RecoverableOperationRecoveryService : IRecoverableOperationRecoveryService
+    public sealed class RecoverableOperationRecoveryService : IRecoverableOperationRecoveryService,
+                                                              IHandle<ApplicationStartedEvent>,
+                                                              IExecute<RecoverRecoverableOperationsCommand>
     {
+        private const int StartupRecoveryLimit = 100;
         private const string ImportLeasePrefix = "recover-import-";
         private readonly IRecoverableOperationRepository _repository;
         private readonly IRecoverableMovieFileDeletionRecoveryHandler _deleteRecoveryHandler;
@@ -40,9 +46,19 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             _leasePolicy = leasePolicy;
         }
 
+        public void Handle(ApplicationStartedEvent message)
+        {
+            Classify(StartupRecoveryLimit);
+        }
+
+        public void Execute(RecoverRecoverableOperationsCommand message)
+        {
+            Classify(StartupRecoveryLimit);
+        }
+
         public IReadOnlyList<int> Classify(int maximumOperations)
         {
-            var rows = _repository.ListRecoverableAfter(0, maximumOperations, DateTime.UtcNow);
+            var rows = _repository.ListRecoverable(maximumOperations, DateTime.UtcNow);
             foreach (var row in rows)
             {
                 try

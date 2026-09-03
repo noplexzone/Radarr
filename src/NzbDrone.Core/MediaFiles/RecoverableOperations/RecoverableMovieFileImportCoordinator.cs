@@ -8,6 +8,7 @@ using Newtonsoft.Json;
 using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Datastore;
+using NzbDrone.Core.Download;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Movies;
 
@@ -20,7 +21,8 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                                                  TransferMode transferMode,
                                                  MovieFile outgoingMovieFile,
                                                  int expectedMainMovieFileId,
-                                                 MovieFileImportTarget importTarget);
+                                                 MovieFileImportTarget importTarget,
+                                                 DownloadClientItem downloadClientItem = null);
         RecoverableOperation Recover(RecoverableOperation operation, string owner);
     }
 
@@ -45,6 +47,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         private readonly IRecoverableOperationFaultInjector _faultInjector;
         private readonly IRecoverableOperationLeaseHeartbeat _leaseHeartbeat;
         private readonly IRecoverableOperationLeasePolicy _leasePolicy;
+        private readonly IRecoverableMovieFileImportCompletionService _completionService;
 
         public RecoverableMovieFileImportCoordinator(IRecoverableOperationRepository repository,
                                                       IRecoverableMovieFileImportMutationStore mutationStore,
@@ -54,7 +57,8 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                                                       IRecycleBinProvider recycleBinProvider,
                                                       IRecoverableOperationFaultInjector faultInjector,
                                                       IRecoverableOperationLeaseHeartbeat leaseHeartbeat,
-                                                      IRecoverableOperationLeasePolicy leasePolicy)
+                                                      IRecoverableOperationLeasePolicy leasePolicy,
+                                                      IRecoverableMovieFileImportCompletionService completionService)
         {
             _repository = repository;
             _mutationStore = mutationStore;
@@ -65,6 +69,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             _faultInjector = faultInjector;
             _leaseHeartbeat = leaseHeartbeat;
             _leasePolicy = leasePolicy;
+            _completionService = completionService;
         }
 
         public RecoverableMovieFileImportResult Import(MovieFile desiredMovieFile,
@@ -72,9 +77,10 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                                                         TransferMode transferMode,
                                                         MovieFile outgoingMovieFile,
                                                         int expectedMainMovieFileId,
-                                                        MovieFileImportTarget importTarget)
+                                                        MovieFileImportTarget importTarget,
+                                                        DownloadClientItem downloadClientItem = null)
         {
-            var request = BuildRequest(desiredMovieFile, localMovie, transferMode, outgoingMovieFile, expectedMainMovieFileId, importTarget);
+            var request = BuildRequest(desiredMovieFile, localMovie, transferMode, outgoingMovieFile, expectedMainMovieFileId, importTarget, downloadClientItem ?? localMovie?.DownloadItem);
             var operation = _repository.CreatePending(request);
             var owner = LeasePrefix + Guid.NewGuid().ToString("N");
 
@@ -176,7 +182,13 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             }
             catch (Exception exception) when (exception is IOException or RecoverableOperationValidationException or RecoverableOperationConcurrencyException)
             {
-                return MarkRecoveryRequiredSafely(_repository.GetById(operation.Id), owner, "Import recovery found ambiguous or changed evidence and preserved it: " + exception.Message);
+                var current = _repository.GetById(operation.Id);
+                if (IsDatabaseCommitted(current))
+                {
+                    return RecordPostCommitFailure(current, owner, "Import recovery finalization is pending: " + exception.Message);
+                }
+
+                return MarkRecoveryRequiredSafely(current, owner, "Import recovery found ambiguous or changed evidence and preserved it: " + exception.Message);
             }
         }
 
@@ -191,6 +203,12 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         {
             ValidateRecoveryPlan(operation);
             ValidateDatabaseEvidence(operation.MovieId, operation.Plan.EventFacts["moviePath"], operation.Plan.ExpectedMovieFileId, operation.Plan.ImportTarget, operation.Plan.DesiredIncomingMovieFile.MovieEditionSlotId, operation.Plan.ExpectedOutgoingMovieFile);
+            var destinationFolder = Path.GetDirectoryName(operation.Plan.DestinationPath);
+            if (!_diskProvider.FolderExists(destinationFolder))
+            {
+                operation = Run(operation, owner, () => _diskProvider.CreateFolder(destinationFolder));
+            }
+
             if (!_diskProvider.FolderExists(operation.StagingRoot))
             {
                 operation = Run(operation, owner, () => _diskProvider.CreateFolder(operation.StagingRoot));
@@ -361,13 +379,27 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                     claim = true;
                 }
 
-                if (claim)
+                if (operation.Plan.ImportRecycleStarted && !operation.Plan.ImportRecycleCompleted)
+                {
+                    throw new RecoverableOperationValidationException("The outgoing recycle action may have begun without durable completion evidence.");
+                }
+
+                if (claim && !operation.Plan.ImportRecycleCompleted)
                 {
                     operation = HeartbeatVerifyHash(operation, owner, recycleClaim, outgoing.Size, operation.Plan.OutgoingSha256, "claimed outgoing backup");
+                    operation = _repository.UpdateImportRecycleEvidence(operation.Id, operation.Version, owner, false, null);
                     var recycleSubfolder = Path.GetFileName(NormalizeDirectory(operation.Plan.EventFacts["moviePath"]).TrimEnd(Path.DirectorySeparatorChar));
-                    operation = Run(operation, owner, () => _recycleBinProvider.DeleteFile(recycleClaim, recycleSubfolder));
-                    _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportRecycleAction);
+                    string recycleBinPath = null;
+                    operation = Run(operation, owner, () => recycleBinPath = _recycleBinProvider.DeleteFile(recycleClaim, recycleSubfolder));
                     RequireAbsent(recycleClaim, "recycle claim");
+                    operation = _repository.UpdateImportRecycleEvidence(operation.Id, operation.Version, owner, true, recycleBinPath);
+                    claim = false;
+                    _faultInjector.Check(RecoverableOperationFaultPoint.AfterImportRecycleAction);
+                }
+
+                if (operation.Plan.ImportRecycleCompleted && claim)
+                {
+                    throw new IOException("Finalization found a recycle claim after durable recycle completion.");
                 }
             }
 
@@ -378,7 +410,7 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                 operation = Run(operation, owner, () => _diskProvider.DeleteFolder(operation.StagingRoot, false));
             }
 
-            return _repository.Transition(operation.Id, operation.State, operation.Version, RecoverableOperationState.Completed, owner);
+            return _completionService.Complete(operation, owner);
         }
 
         private RecoverableOperationCreateRequest BuildRequest(MovieFile desired,
@@ -386,7 +418,8 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                                                                 TransferMode transferMode,
                                                                 MovieFile outgoing,
                                                                 int expectedMainMovieFileId,
-                                                                MovieFileImportTarget target)
+                                                                MovieFileImportTarget target,
+                                                                DownloadClientItem downloadClientItem)
         {
             if (desired == null || localMovie?.Movie == null || localMovie.Movie.Id <= 0 || desired.MovieId != localMovie.Movie.Id || expectedMainMovieFileId < 0)
             {
@@ -507,7 +540,17 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                     TransferMode = plannedMode,
                     IncomingSha256 = incomingSha256,
                     OutgoingSha256 = outgoingSha256,
-                    EventFacts = new Dictionary<string, string> { ["moviePath"] = moviePath }
+                    EventFacts = new Dictionary<string, string> { ["moviePath"] = moviePath },
+                    MovieEvent = SnapshotMovie(localMovie.Movie),
+                    ImportEvent = SnapshotImportEvent(localMovie,
+                                                      desired,
+                                                      target,
+                                                      downloadClientItem,
+                                                      plannedMode != RecoverableTransferMode.Move,
+                                                      !_diskProvider.FolderExists(moviePath),
+                                                      !Path.GetDirectoryName(destinationPath).PathEquals(moviePath) && !_diskProvider.FolderExists(Path.GetDirectoryName(destinationPath))
+                                                          ? Path.GetDirectoryName(destinationPath)
+                                                          : null)
                 }
             };
         }
@@ -766,19 +809,69 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
 
         private RecoverableMovieFileImportResult PostCommitResult(RecoverableOperation operation, MovieFile outgoing, string owner, string error)
         {
-            if (operation.State != RecoverableOperationState.Completed)
+            if (operation.State == RecoverableOperationState.Completed)
             {
-                operation = MarkRecoveryRequiredSafely(operation, owner, error);
+                return Result(operation, outgoing, false);
             }
 
-            return Result(operation, outgoing, operation.State != RecoverableOperationState.Completed);
+            operation = RecordPostCommitFailure(operation, owner, error);
+            return Result(operation, outgoing, true);
+        }
+
+        private RecoverableOperation RecordPostCommitFailure(RecoverableOperation operation, string owner, string error)
+        {
+            const RecoverableOperationEventDispatchMask importInProgress =
+                RecoverableOperationEventDispatchMask.ImportMovieFileDeletedInProgress |
+                RecoverableOperationEventDispatchMask.ImportMovieFileAddedInProgress |
+                RecoverableOperationEventDispatchMask.MovieFileImportedInProgress;
+            if ((((RecoverableOperationEventDispatchMask)operation.EventDispatchMask) & importInProgress) != 0 ||
+                operation.Plan?.ImportRecycleStarted == true && operation.Plan.ImportRecycleCompleted == false)
+            {
+                return MarkRecoveryRequiredSafely(operation, owner, error);
+            }
+
+            try
+            {
+                return _repository.RecordErrorAttempt(operation.Id, operation.Version, error, DateTime.UtcNow, owner);
+            }
+            catch (RecoverableOperationException)
+            {
+                return _repository.GetById(operation.Id);
+            }
         }
 
         private RecoverableMovieFileImportResult Result(RecoverableOperation operation, MovieFile outgoing, bool finalizationPending)
         {
             using var connection = _database.OpenConnection();
             var imported = connection.QuerySingle<MovieFile>(@"SELECT * FROM ""MovieFiles"" WHERE ""Id""=@id", new { id = operation.ResultMovieFileId });
+            imported.Path = operation.Plan.DestinationPath;
+            imported.ImportTarget = operation.Plan.ImportTarget;
+            imported.Movie = RehydrateResultMovie(operation.Plan.MovieEvent, operation.ResultMovieFileId.Value, operation.Plan.ImportTarget);
             return new RecoverableMovieFileImportResult { ImportedMovieFile = imported, OutgoingMovieFile = outgoing, Operation = operation, IsImported = true, FinalizationPending = finalizationPending };
+        }
+
+        private static Movie RehydrateResultMovie(RecoverableMovieEventSnapshot snapshot, int resultMovieFileId, MovieFileImportTarget target)
+        {
+            var movie = new Movie
+            {
+                Id = snapshot.Id,
+                MovieMetadataId = snapshot.MovieMetadataId,
+                Monitored = snapshot.Monitored,
+                MinimumAvailability = snapshot.MinimumAvailability,
+                QualityProfileId = snapshot.QualityProfileId,
+                Path = snapshot.Path,
+                RootFolderPath = snapshot.RootFolderPath,
+                Added = snapshot.Added,
+                AddOptions = snapshot.AddOptions,
+                LastSearchTime = snapshot.LastSearchTime,
+                MovieFileId = target == MovieFileImportTarget.Main ? resultMovieFileId : snapshot.MovieFileId,
+                Tags = new HashSet<int>(snapshot.Tags ?? new HashSet<int>())
+            };
+            movie.MovieMetadata.Value.Title = snapshot.Title;
+            movie.MovieMetadata.Value.Year = snapshot.Year;
+            movie.MovieMetadata.Value.TmdbId = snapshot.TmdbId;
+            movie.MovieMetadata.Value.ImdbId = snapshot.ImdbId;
+            return movie;
         }
 
         private RecoverableOperation Run(RecoverableOperation operation, string owner, Action action)
@@ -901,6 +994,122 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
             {
                 throw new RecoverableOperationValidationException("The target, expected pointer, outgoing row, and desired row are inconsistent.");
             }
+        }
+
+        private static RecoverableMovieEventSnapshot SnapshotMovie(Movie movie)
+        {
+            return new RecoverableMovieEventSnapshot
+            {
+                Id = movie.Id,
+                MovieMetadataId = movie.MovieMetadataId,
+                Monitored = movie.Monitored,
+                MinimumAvailability = movie.MinimumAvailability,
+                QualityProfileId = movie.QualityProfileId,
+                Path = Path.GetFullPath(movie.Path),
+                RootFolderPath = movie.RootFolderPath,
+                Added = movie.Added,
+                AddOptions = movie.AddOptions,
+                LastSearchTime = movie.LastSearchTime,
+                MovieFileId = movie.MovieFileId,
+                Title = movie.Title,
+                Year = movie.Year,
+                TmdbId = movie.TmdbId,
+                ImdbId = movie.ImdbId,
+                InCinemas = movie.MovieMetadata.Value.InCinemas,
+                PhysicalRelease = movie.MovieMetadata.Value.PhysicalRelease,
+                DigitalRelease = movie.MovieMetadata.Value.DigitalRelease,
+                Overview = movie.MovieMetadata.Value.Overview,
+                Genres = new List<string>(movie.MovieMetadata.Value.Genres),
+                Images = new List<NzbDrone.Core.MediaCover.MediaCover>(movie.MovieMetadata.Value.Images),
+                OriginalLanguage = movie.MovieMetadata.Value.OriginalLanguage,
+                Tags = new HashSet<int>(movie.Tags)
+            };
+        }
+
+        private static RecoverableMovieFileImportEventSnapshot SnapshotImportEvent(LocalMovie localMovie,
+                                                                                    MovieFile desired,
+                                                                                    MovieFileImportTarget target,
+                                                                                    DownloadClientItem downloadClientItem,
+                                                                                    bool copyOnly,
+                                                                                    bool movieFolderCreated,
+                                                                                    string movieFileFolderCreated)
+        {
+            var acquisitionTarget = target switch
+            {
+                MovieFileImportTarget.Main => MovieAcquisitionTarget.Main,
+                MovieFileImportTarget.EditionSlot => MovieAcquisitionTarget.ForEditionSlot(desired.MovieEditionSlotId.Value),
+                _ => MovieAcquisitionTarget.Unknown
+            };
+            var customFormats = new List<RecoverableCustomFormatSnapshot>();
+            foreach (var format in localMovie.CustomFormats ?? new List<NzbDrone.Core.CustomFormats.CustomFormat>())
+            {
+                customFormats.Add(new RecoverableCustomFormatSnapshot
+                {
+                    Id = format.Id,
+                    Name = format.Name,
+                    IncludeCustomFormatWhenRenaming = format.IncludeCustomFormatWhenRenaming
+                });
+            }
+
+            RecoverableGrabbedReleaseSnapshot release = null;
+            if (localMovie.Release != null)
+            {
+                release = new RecoverableGrabbedReleaseSnapshot
+                {
+                    Title = localMovie.Release.Title,
+                    Indexer = localMovie.Release.Indexer,
+                    Size = localMovie.Release.Size,
+                    IndexerFlags = localMovie.Release.IndexerFlags,
+                    MovieIds = new List<int>(localMovie.Release.MovieIds ?? new List<int>()),
+                    AcquisitionTarget = localMovie.Release.AcquisitionTarget
+                };
+            }
+
+            RecoverableDownloadClientItemSnapshot download = null;
+            if (downloadClientItem != null)
+            {
+                download = new RecoverableDownloadClientItemSnapshot
+                {
+                    DownloadId = downloadClientItem.DownloadId,
+                    Protocol = downloadClientItem.DownloadClientInfo?.Protocol ?? default,
+                    Type = downloadClientItem.DownloadClientInfo?.Type,
+                    Id = downloadClientItem.DownloadClientInfo?.Id ?? 0,
+                    Name = downloadClientItem.DownloadClientInfo?.Name,
+                    RemoveCompletedDownloads = downloadClientItem.DownloadClientInfo?.RemoveCompletedDownloads ?? false,
+                    HasPostImportCategory = downloadClientItem.DownloadClientInfo?.HasPostImportCategory ?? false
+                };
+            }
+
+            return new RecoverableMovieFileImportEventSnapshot
+            {
+                SourcePath = Path.GetFullPath(localMovie.Path),
+                Size = localMovie.Size,
+                FileMovieInfo = localMovie.FileMovieInfo,
+                FolderMovieInfo = localMovie.FolderMovieInfo,
+                Quality = localMovie.Quality ?? desired.Quality,
+                Languages = new List<NzbDrone.Core.Languages.Language>(localMovie.Languages ?? desired.Languages),
+                MediaInfo = localMovie.MediaInfo ?? desired.MediaInfo,
+                IndexerFlags = localMovie.IndexerFlags != default ? localMovie.IndexerFlags : desired.IndexerFlags,
+                ExistingFile = localMovie.ExistingFile,
+                SceneSource = localMovie.SceneSource,
+                ReleaseGroup = localMovie.ReleaseGroup ?? desired.ReleaseGroup,
+                Edition = localMovie.Edition ?? desired.Edition,
+                SceneName = localMovie.SceneName ?? desired.SceneName,
+                OtherVideoFiles = localMovie.OtherVideoFiles,
+                CustomFormats = customFormats,
+                CustomFormatScore = localMovie.CustomFormatScore,
+                ImportTarget = target,
+                AcquisitionTarget = acquisitionTarget,
+                HasExactTargetContext = localMovie.HasExactTargetContext,
+                Release = release,
+                ScriptImported = localMovie.ScriptImported,
+                ShouldImportExtras = localMovie.ShouldImportExtras,
+                PossibleExtraFiles = new List<string>(localMovie.PossibleExtraFiles ?? new List<string>()),
+                DownloadClientItem = download,
+                CopyOnly = copyOnly,
+                MovieFolderCreated = movieFolderCreated,
+                MovieFileFolderCreated = movieFileFolderCreated
+            };
         }
 
         private static RecoverableMovieFileRowSnapshot Snapshot(MovieFile file)

@@ -7,10 +7,15 @@ using FluentAssertions;
 using Moq;
 using NUnit.Framework;
 using NzbDrone.Common.Disk;
+using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.Datastore;
+using NzbDrone.Core.Download;
+using NzbDrone.Core.Indexers;
 using NzbDrone.Core.Languages;
 using NzbDrone.Core.MediaFiles;
+using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.MediaFiles.MediaInfo;
+using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.MediaFiles.RecoverableOperations;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.MovieEditionSlots;
@@ -54,6 +59,20 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
             Mocker.SetConstant<IRecoverableOperationLeaseHeartbeat>(new RecoverableOperationLeaseHeartbeat(_repository, policy));
             _mutationStore = new RecoverableMovieFileImportMutationStore(Mocker.Resolve<IMainDatabase>(), Mocker.Resolve<IRecoverableMovieFileImportMutationFaultInjector>());
             Mocker.SetConstant<IRecoverableMovieFileImportMutationStore>(_mutationStore);
+            Mocker.GetMock<IMovieService>().Setup(x => x.GetMovie(_movie.Id)).Returns(() =>
+            {
+                _movie.MovieFileId = Db.All<Movie>().Single(x => x.Id == _movie.Id).MovieFileId;
+                return _movie;
+            });
+            Mocker.SetConstant<IRecoverableMovieFileImportCompletionService>(new RecoverableMovieFileImportCompletionService(_repository,
+                                                                                                                           Mocker.Resolve<IMainDatabase>(),
+                                                                                                                           Mocker.Resolve<IEventAggregator>(),
+                                                                                                                           Mocker.Resolve<IRecoverableOperationFaultInjector>(),
+                                                                                                                           Mocker.Resolve<IMovieService>(),
+                                                                                                                           Mocker.Resolve<NzbDrone.Core.Extras.IExtraService>(),
+                                                                                                                           Mocker.Resolve<IUpdateMovieFileService>(),
+                                                                                                                           Mocker.Resolve<IMediaFileAttributeService>(),
+                                                                                                                           TestLogger));
             Mocker.GetMock<IDiskProvider>().Setup(x => x.FileExists(It.IsAny<string>())).Returns((string path) => File.Exists(path));
             Mocker.GetMock<IDiskProvider>().Setup(x => x.FolderExists(It.IsAny<string>())).Returns((string path) => Directory.Exists(path));
             Mocker.GetMock<IDiskProvider>().Setup(x => x.GetFileSize(It.IsAny<string>())).Returns((string path) => new FileInfo(path).Length);
@@ -82,7 +101,7 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
             var oldPointer = _movie.MovieFileId;
             var result = Import(TransferMode.Copy);
             result.IsImported.Should().BeTrue();
-            result.FinalizationPending.Should().BeFalse();
+            result.FinalizationPending.Should().BeFalse("finalization failed: {0}", result.Operation.LastError);
             File.ReadAllBytes(_destination).Should().Equal(IncomingBytes);
             File.ReadAllBytes(_source).Should().Equal(IncomingBytes);
             Db.All<Movie>().Single(x => x.Id == _movie.Id).MovieFileId.Should().Be(target == MovieFileImportTarget.Main ? result.ImportedMovieFile.Id : oldPointer);
@@ -90,6 +109,26 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
             if (replace) Db.All<MovieFile>().Should().NotContain(x => x.Id == _outgoing.Id);
             if (target == MovieFileImportTarget.EditionSlot) Db.All<MovieFile>().Where(x => x.MovieEditionSlotId == _slot.Id).Should().ContainSingle();
             StoredModel.State.Should().Be(RecoverableOperationState.Completed);
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void should_publish_import_compatibility_events_in_strict_order(bool replace)
+        {
+            ConfigureTarget(MovieFileImportTarget.Main, replace);
+            var published = new List<string>();
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileDeletedEvent>())).Callback(() => published.Add("deleted"));
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileAddedEvent>())).Callback(() => published.Add("added"));
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileImportedEvent>())).Callback(() => published.Add("imported"));
+
+            var result = Import(TransferMode.Copy);
+            var secondCompletion = Mocker.Resolve<IRecoverableMovieFileImportCompletionService>().Complete(result.Operation, "terminal-no-op");
+
+            published.Should().Equal(replace ? new[] { "deleted", "added", "imported" } : new[] { "added", "imported" });
+            result.Operation.State.Should().Be(RecoverableOperationState.Completed);
+            secondCompletion.State.Should().Be(RecoverableOperationState.Completed);
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.Is<MovieFileDeletedEvent>(e => e.Reason == DeleteMediaFileReason.Upgrade)), replace ? Times.Once() : Times.Never());
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.Is<MovieFileImportedEvent>(e => e.NewDownload)), Times.Once());
         }
 
         [TestCase(TransferMode.Move, false, TransferMode.Move)]
@@ -417,7 +456,7 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
 
             result.IsImported.Should().BeTrue();
             result.FinalizationPending.Should().BeTrue();
-            StoredModel.State.Should().Be(RecoverableOperationState.RecoveryRequired);
+            StoredModel.State.Should().Be(RecoverableOperationState.Finalizing);
             File.ReadAllBytes(StoredModel.Plan.FinalizePath).Should().Equal(replacement);
         }
 
@@ -756,6 +795,374 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
             File.ReadAllBytes(StoredModel.Plan.StagingPath).Should().Equal(IncomingBytes);
             File.ReadAllBytes(_destination).Should().Equal(OutgoingBytes);
             Db.All<MovieFile>().Should().ContainSingle(x => x.Id == _outgoing.Id);
+        }
+
+        [TestCase(RecoverableOperationFaultPoint.BeforeImportMovieFileDeletedDispatch)]
+        [TestCase(RecoverableOperationFaultPoint.BeforeImportMovieFileAddedDispatch)]
+        [TestCase(RecoverableOperationFaultPoint.BeforeMovieFileImportedDispatch)]
+        public void predispatch_failure_should_remain_retryable_and_restart_each_event_once(RecoverableOperationFaultPoint point)
+        {
+            var published = new List<string>();
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileDeletedEvent>())).Callback(() => published.Add("deleted"));
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileAddedEvent>())).Callback(() => published.Add("added"));
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileImportedEvent>())).Callback(() => published.Add("imported"));
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Setup(x => x.Check(point)).Throws(new IOException("predispatch"));
+
+            var result = Import(TransferMode.Copy);
+
+            result.FinalizationPending.Should().BeTrue();
+            StoredModel.State.Should().Be(RecoverableOperationState.Finalizing);
+            (((RecoverableOperationEventDispatchMask)StoredModel.EventDispatchMask) &
+             (RecoverableOperationEventDispatchMask.ImportMovieFileDeletedInProgress |
+              RecoverableOperationEventDispatchMask.ImportMovieFileAddedInProgress |
+              RecoverableOperationEventDispatchMask.MovieFileImportedInProgress)).Should().Be(RecoverableOperationEventDispatchMask.None);
+            StoredModel.AttemptCount.Should().Be(1);
+            StoredModel.ActiveResourceKey.Should().NotBeNull();
+            ExpireLease(StoredModel);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+            var leased = Acquire(StoredModel, "restart-owner");
+
+            Subject.Recover(leased, "restart-owner").State.Should().Be(RecoverableOperationState.Completed);
+            Subject.Recover(StoredModel, "restart-owner").State.Should().Be(RecoverableOperationState.Completed);
+
+            published.Should().Equal("deleted", "added", "imported");
+            StoredModel.ActiveResourceKey.Should().BeNull();
+        }
+
+        [TestCase(RecoverableOperationFaultPoint.BeforeImportMovieFileDeletedDispatch)]
+        [TestCase(RecoverableOperationFaultPoint.BeforeImportMovieFileAddedDispatch)]
+        [TestCase(RecoverableOperationFaultPoint.BeforeMovieFileImportedDispatch)]
+        public void process_death_before_dispatch_should_leave_no_inprogress_bit_and_resume_once(RecoverableOperationFaultPoint point)
+        {
+            var published = new List<string>();
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileDeletedEvent>())).Callback(() => published.Add("deleted"));
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileAddedEvent>())).Callback(() => published.Add("added"));
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileImportedEvent>())).Callback(() => published.Add("imported"));
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Setup(x => x.Check(point)).Throws(new RecoverableOperationProcessDeathException());
+
+            Action import = () => Import(TransferMode.Copy);
+            import.Should().Throw<RecoverableOperationProcessDeathException>();
+            (((RecoverableOperationEventDispatchMask)StoredModel.EventDispatchMask) &
+             (RecoverableOperationEventDispatchMask.ImportMovieFileDeletedInProgress |
+              RecoverableOperationEventDispatchMask.ImportMovieFileAddedInProgress |
+              RecoverableOperationEventDispatchMask.MovieFileImportedInProgress)).Should().Be(RecoverableOperationEventDispatchMask.None);
+            ExpireLease(StoredModel);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+
+            Subject.Recover(Acquire(StoredModel, "restart-owner"), "restart-owner").State.Should().Be(RecoverableOperationState.Completed);
+            published.Should().Equal("deleted", "added", "imported");
+        }
+
+        [TestCase(RecoverableOperationFaultPoint.AfterImportMovieFileDeletedPublish)]
+        [TestCase(RecoverableOperationFaultPoint.AfterImportMovieFileAddedPublish)]
+        [TestCase(RecoverableOperationFaultPoint.AfterMovieFileImportedPublish)]
+        public void process_death_after_strict_publish_should_quarantine_without_replay(RecoverableOperationFaultPoint point)
+        {
+            var published = 0;
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileDeletedEvent>())).Callback(() => published++);
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileAddedEvent>())).Callback(() => published++);
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileImportedEvent>())).Callback(() => published++);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Setup(x => x.Check(point)).Throws(new RecoverableOperationProcessDeathException());
+
+            Action import = () => Import(TransferMode.Copy);
+            import.Should().Throw<RecoverableOperationProcessDeathException>();
+            var beforeRestart = published;
+            var mask = (RecoverableOperationEventDispatchMask)StoredModel.EventDispatchMask;
+            (mask & (RecoverableOperationEventDispatchMask.ImportMovieFileDeletedInProgress |
+                     RecoverableOperationEventDispatchMask.ImportMovieFileAddedInProgress |
+                     RecoverableOperationEventDispatchMask.MovieFileImportedInProgress)).Should().NotBe(0);
+            ExpireLease(StoredModel);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+
+            Subject.Recover(Acquire(StoredModel, "restart-owner"), "restart-owner").State.Should().Be(RecoverableOperationState.RecoveryRequired);
+            published.Should().Be(beforeRestart);
+            Db.All<MovieFile>().Should().ContainSingle(x => x.Id == StoredModel.ResultMovieFileId);
+            StoredModel.ActiveResourceKey.Should().NotBeNull();
+        }
+
+        [Test]
+        public void transient_predispatch_failure_on_first_restart_should_remain_retryable()
+        {
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Setup(x => x.Check(RecoverableOperationFaultPoint.AfterImportRecycle)).Throws(new RecoverableOperationProcessDeathException());
+            Action import = () => Import(TransferMode.Copy);
+            import.Should().Throw<RecoverableOperationProcessDeathException>();
+            ExpireLease(StoredModel);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Setup(x => x.Check(RecoverableOperationFaultPoint.BeforeImportMovieFileDeletedDispatch)).Throws(new IOException("transient predispatch"));
+
+            var firstRestart = Subject.Recover(Acquire(StoredModel, "restart-owner"), "restart-owner");
+
+            firstRestart.State.Should().Be(RecoverableOperationState.Finalizing);
+            firstRestart.AttemptCount.Should().Be(1);
+            firstRestart.ActiveResourceKey.Should().NotBeNull();
+            (((RecoverableOperationEventDispatchMask)firstRestart.EventDispatchMask) & RecoverableOperationEventDispatchMask.ImportMovieFileDeletedInProgress).Should().Be(RecoverableOperationEventDispatchMask.None);
+            ExpireLease(firstRestart);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+
+            Subject.Recover(Acquire(StoredModel, "second-restart-owner"), "second-restart-owner").State.Should().Be(RecoverableOperationState.Completed);
+        }
+
+        [Test]
+        public void process_death_during_recycle_action_should_quarantine_without_events()
+        {
+            Mocker.GetMock<IRecycleBinProvider>().Setup(x => x.DeleteFile(It.IsAny<string>(), It.IsAny<string>())).Throws(new RecoverableOperationProcessDeathException());
+            Action import = () => Import(TransferMode.Copy);
+
+            import.Should().Throw<RecoverableOperationProcessDeathException>();
+            StoredModel.Plan.ImportRecycleStarted.Should().BeTrue();
+            StoredModel.Plan.ImportRecycleCompleted.Should().BeFalse();
+            ExpireLease(StoredModel);
+
+            Subject.Recover(Acquire(StoredModel, "restart-owner"), "restart-owner").State.Should().Be(RecoverableOperationState.RecoveryRequired);
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.IsAny<MovieFileDeletedEvent>()), Times.Never());
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.IsAny<MovieFileAddedEvent>()), Times.Never());
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.IsAny<MovieFileImportedEvent>()), Times.Never());
+            Db.All<MovieFile>().Should().ContainSingle(x => x.Id == StoredModel.ResultMovieFileId);
+        }
+
+        [TestCase("operation-type")]
+        [TestCase("state")]
+        [TestCase("result-id")]
+        [TestCase("snapshot")]
+        public void completion_validation_failure_should_publish_nothing(string invalid)
+        {
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Setup(x => x.Check(RecoverableOperationFaultPoint.BeforeImportMovieFileDeletedDispatch)).Throws(new RecoverableOperationProcessDeathException());
+            Action import = () => Import(TransferMode.Copy);
+            import.Should().Throw<RecoverableOperationProcessDeathException>();
+            var operation = StoredModel;
+            var importedId = operation.ResultMovieFileId.Value;
+            switch (invalid)
+            {
+                case "operation-type":
+                    operation.OperationType = RecoverableOperationType.Delete;
+                    break;
+                case "state":
+                    operation.State = RecoverableOperationState.Staged;
+                    break;
+                case "result-id":
+                    operation.ResultMovieFileId = null;
+                    break;
+                case "snapshot":
+                    operation.Plan = new RecoverableOperationPlan();
+                    break;
+            }
+
+            Storage.Update(operation);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+            var completion = Mocker.Resolve<IRecoverableMovieFileImportCompletionService>();
+            Action complete = () => completion.Complete(operation, operation.LeaseOwner);
+
+            complete.Should().Throw<RecoverableOperationException>();
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.IsAny<MovieFileDeletedEvent>()), Times.Never());
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.IsAny<MovieFileAddedEvent>()), Times.Never());
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.IsAny<MovieFileImportedEvent>()), Times.Never());
+            Db.All<MovieFile>().Should().ContainSingle(x => x.Id == importedId);
+        }
+
+        [Test]
+        public void completion_should_require_exact_live_version_and_owner()
+        {
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Setup(x => x.Check(RecoverableOperationFaultPoint.BeforeImportMovieFileDeletedDispatch)).Throws(new RecoverableOperationProcessDeathException());
+            Action import = () => Import(TransferMode.Copy);
+            import.Should().Throw<RecoverableOperationProcessDeathException>();
+            var stale = StoredModel;
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+            var completion = Mocker.Resolve<IRecoverableMovieFileImportCompletionService>();
+
+            Action wrongOwner = () => completion.Complete(stale, "wrong-owner");
+            wrongOwner.Should().Throw<RecoverableOperationConcurrencyException>();
+            _repository.RecordErrorAttempt(stale.Id, stale.Version, "advance version", DateTime.UtcNow, stale.LeaseOwner);
+            Action staleVersion = () => completion.Complete(stale, stale.LeaseOwner);
+            staleVersion.Should().Throw<RecoverableOperationConcurrencyException>();
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.IsAny<MovieFileDeletedEvent>()), Times.Never());
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.IsAny<MovieFileAddedEvent>()), Times.Never());
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.IsAny<MovieFileImportedEvent>()), Times.Never());
+        }
+
+        [TestCase(MovieFileImportTarget.Main, false)]
+        [TestCase(MovieFileImportTarget.Main, true)]
+        [TestCase(MovieFileImportTarget.EditionSlot, false)]
+        [TestCase(MovieFileImportTarget.EditionSlot, true)]
+        public void compatibility_payload_should_be_equivalent_immediately_and_after_restart(MovieFileImportTarget target, bool restart)
+        {
+            ConfigureTarget(target, true);
+            _movie.Monitored = true;
+            _movie.MinimumAvailability = MovieStatusType.Released;
+            _movie.QualityProfileId = 1;
+            _movie.Added = new DateTime(2023, 4, 5, 6, 7, 8, DateTimeKind.Utc);
+            _movie.LastSearchTime = new DateTime(2025, 6, 7, 8, 9, 10, DateTimeKind.Utc);
+            _movie.AddOptions = new AddMovieOptions { SearchForMovie = true, AddMethod = AddMovieMethod.Collection };
+            Db.Update(_movie);
+            _localMovie.Quality = new QualityModel(Quality.Bluray1080p);
+            _localMovie.Languages = new List<Language> { Language.French };
+            _localMovie.MediaInfo = new MediaInfoModel();
+            _localMovie.IndexerFlags = IndexerFlags.G_Freeleech;
+            _localMovie.ReleaseGroup = "GROUP";
+            _localMovie.Edition = "Director's Cut";
+            _localMovie.SceneName = "scene.release";
+            _localMovie.CustomFormats = new List<CustomFormat> { new() { Id = 42, Name = "HDR", IncludeCustomFormatWhenRenaming = true } };
+            _localMovie.CustomFormatScore = 150;
+            _localMovie.HasExactTargetContext = true;
+            _localMovie.AcquisitionTarget = target == MovieFileImportTarget.Main ? MovieAcquisitionTarget.Main : MovieAcquisitionTarget.ForEditionSlot(_slot.Id);
+            var recycleBinPath = Path.Combine(TempFolder, "recycle", _outgoing.RelativePath);
+            Mocker.GetMock<IRecycleBinProvider>().Setup(x => x.DeleteFile(It.IsAny<string>(), It.IsAny<string>())).Returns((string path, string _) =>
+            {
+                File.Delete(path);
+                return recycleBinPath;
+            });
+            var download = new DownloadClientItem
+            {
+                DownloadId = "download-123",
+                DownloadClientInfo = new DownloadClientItemClientInfo
+                {
+                    Protocol = DownloadProtocol.Usenet,
+                    Type = "Sabnzbd",
+                    Id = 7,
+                    Name = "SAB",
+                    RemoveCompletedDownloads = true,
+                    HasPostImportCategory = true
+                }
+            };
+            MovieFileDeletedEvent deleted = null;
+            MovieFileAddedEvent added = null;
+            MovieFileImportedEvent imported = null;
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileDeletedEvent>())).Callback<MovieFileDeletedEvent>(value => deleted = value);
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileAddedEvent>())).Callback<MovieFileAddedEvent>(value => added = value);
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileImportedEvent>())).Callback<MovieFileImportedEvent>(value => imported = value);
+            if (restart)
+            {
+                Mocker.GetMock<IRecoverableOperationFaultInjector>().Setup(x => x.Check(RecoverableOperationFaultPoint.BeforeImportMovieFileDeletedDispatch)).Throws(new RecoverableOperationProcessDeathException());
+                Action first = () => Subject.Import(_desired, _localMovie, TransferMode.Copy, _outgoing, _movie.MovieFileId, target, download);
+                first.Should().Throw<RecoverableOperationProcessDeathException>();
+                _movie.Monitored = false;
+                _movie.QualityProfileId = 2;
+                Db.Update(_movie);
+                ExpireLease(StoredModel);
+                Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+                Subject.Recover(Acquire(StoredModel, "restart-owner"), "restart-owner");
+            }
+            else
+            {
+                Subject.Import(_desired, _localMovie, TransferMode.Copy, _outgoing, _movie.MovieFileId, target, download);
+            }
+
+            deleted.Reason.Should().Be(DeleteMediaFileReason.Upgrade);
+            deleted.MovieFile.Id.Should().Be(_outgoing.Id);
+            deleted.MovieFile.MovieEditionSlotId.Should().Be(target == MovieFileImportTarget.EditionSlot ? _slot.Id : null);
+            deleted.MovieFile.Path.Should().Be(Path.Combine(_moviePath, _outgoing.RelativePath));
+            deleted.MovieFile.Movie.Id.Should().Be(_movie.Id);
+            added.MovieFile.Id.Should().Be(StoredModel.ResultMovieFileId);
+            added.MovieFile.MovieEditionSlotId.Should().Be(target == MovieFileImportTarget.EditionSlot ? _slot.Id : null);
+            added.MovieFile.Path.Should().Be(_destination);
+            added.MovieFile.Movie.Id.Should().Be(_movie.Id);
+            added.MovieFile.Movie.Monitored.Should().Be(!restart);
+            added.MovieFile.Movie.QualityProfileId.Should().Be(restart ? 2 : 1);
+            if (target == MovieFileImportTarget.Main)
+            {
+                added.MovieFile.Movie.MovieFileId.Should().Be(added.MovieFile.Id);
+            }
+
+            imported.ImportedMovie.Id.Should().Be(added.MovieFile.Id);
+            imported.MovieInfo.Path.Should().Be(_source);
+            imported.MovieInfo.ImportTarget.Should().Be(target);
+            imported.MovieInfo.AcquisitionTarget.Should().Be(_localMovie.AcquisitionTarget);
+            imported.MovieInfo.Quality.Should().BeEquivalentTo(_localMovie.Quality);
+            imported.MovieInfo.Languages.Should().Equal(Language.French);
+            imported.MovieInfo.IndexerFlags.Should().Be(IndexerFlags.G_Freeleech);
+            imported.MovieInfo.CustomFormats.Should().ContainSingle(x => x.Id == 42 && x.Name == "HDR" && x.IncludeCustomFormatWhenRenaming);
+            imported.MovieInfo.CustomFormatScore.Should().Be(150);
+            imported.OldFiles.Should().ContainSingle(x => x.MovieFile.Id == _outgoing.Id && x.RecycleBinPath == recycleBinPath);
+            imported.MovieInfo.OldFiles.Should().ContainSingle(x => x.MovieFile.Id == _outgoing.Id && x.RecycleBinPath == recycleBinPath);
+            imported.DownloadId.Should().Be("download-123");
+            imported.DownloadClientInfo.Should().BeEquivalentTo(download.DownloadClientInfo);
+            var persistedMovie = Db.All<Movie>().Single(x => x.Id == _movie.Id);
+            persistedMovie.Monitored.Should().Be(!restart);
+            persistedMovie.MinimumAvailability.Should().Be(MovieStatusType.Released);
+            persistedMovie.QualityProfileId.Should().Be(restart ? 2 : 1);
+            persistedMovie.Added.Should().Be(_movie.Added);
+            persistedMovie.LastSearchTime.Should().Be(_movie.LastSearchTime);
+            persistedMovie.AddOptions.SearchForMovie.Should().BeTrue();
+            persistedMovie.AddOptions.AddMethod.Should().Be(AddMovieMethod.Collection);
+            StoredModel.State.Should().Be(RecoverableOperationState.Completed);
+        }
+
+        [TestCase(TransferMode.Move, false)]
+        [TestCase(TransferMode.Copy, true)]
+        [TestCase(TransferMode.HardLinkOrCopy, true)]
+        public void should_run_extras_before_imported_event_with_persisted_enriched_file(TransferMode mode, bool copyOnly)
+        {
+            var order = new List<string>();
+            MovieFile extraFile = null;
+            LocalMovie extraLocalMovie = null;
+            _localMovie.FileMovieInfo = new ParsedMovieInfo { ReleaseTitle = "Movie.File.Parsed" };
+            _localMovie.FolderMovieInfo = new ParsedMovieInfo { ReleaseTitle = "Movie.Folder.Parsed" };
+            Mocker.GetMock<NzbDrone.Core.Extras.IExtraService>()
+                .Setup(x => x.ImportMovie(It.IsAny<LocalMovie>(), It.IsAny<MovieFile>(), It.IsAny<bool>()))
+                .Callback<LocalMovie, MovieFile, bool>((localMovie, file, readOnly) =>
+                {
+                    readOnly.Should().Be(copyOnly);
+                    extraLocalMovie = localMovie;
+                    extraFile = file;
+                    order.Add("extras");
+                });
+            Mocker.GetMock<IEventAggregator>()
+                .Setup(x => x.PublishEventStrict(It.IsAny<MovieFileImportedEvent>()))
+                .Callback(() => order.Add("imported"));
+
+            var result = Import(mode);
+
+            order.Should().ContainInOrder("extras", "imported");
+            extraLocalMovie.FileMovieInfo.ReleaseTitle.Should().Be("Movie.File.Parsed");
+            extraLocalMovie.FolderMovieInfo.ReleaseTitle.Should().Be("Movie.Folder.Parsed");
+            extraFile.Id.Should().Be(result.ImportedMovieFile.Id);
+            extraFile.Path.Should().Be(_destination);
+            extraFile.Movie.Id.Should().Be(_movie.Id);
+            extraFile.ImportTarget.Should().Be(MovieFileImportTarget.Main);
+        }
+
+        [Test]
+        public void extras_failure_after_begin_should_quarantine_without_db_or_file_rollback()
+        {
+            Mocker.GetMock<NzbDrone.Core.Extras.IExtraService>()
+                .Setup(x => x.ImportMovie(It.IsAny<LocalMovie>(), It.IsAny<MovieFile>(), It.IsAny<bool>()))
+                .Throws(new IOException("extras failed"));
+
+            var result = Import(TransferMode.Copy);
+
+            result.IsImported.Should().BeTrue();
+            result.FinalizationPending.Should().BeTrue();
+            StoredModel.State.Should().Be(RecoverableOperationState.RecoveryRequired);
+            (((RecoverableOperationEventDispatchMask)StoredModel.EventDispatchMask) & RecoverableOperationEventDispatchMask.ImportExtrasInProgress).Should().NotBe(0);
+            Db.All<MovieFile>().Should().ContainSingle(x => x.Id == result.ImportedMovieFile.Id);
+            File.ReadAllBytes(_destination).Should().Equal(IncomingBytes);
+            Mocker.GetMock<IEventAggregator>().Verify(x => x.PublishEventStrict(It.IsAny<MovieFileImportedEvent>()), Times.Never);
+        }
+
+        [Test]
+        public void result_should_be_enriched_for_callers()
+        {
+            var result = Import(TransferMode.Copy);
+
+            result.ImportedMovieFile.Path.Should().Be(_destination);
+            result.ImportedMovieFile.Movie.Id.Should().Be(_movie.Id);
+            result.ImportedMovieFile.Movie.MovieFileId.Should().Be(result.ImportedMovieFile.Id);
+            result.ImportedMovieFile.ImportTarget.Should().Be(MovieFileImportTarget.Main);
+        }
+
+        [Test]
+        public void handler_throw_after_begin_should_quarantine_without_rollback()
+        {
+            Mocker.GetMock<IEventAggregator>().Setup(x => x.PublishEventStrict(It.IsAny<MovieFileAddedEvent>())).Throws(new IOException("handler failed"));
+
+            var result = Import(TransferMode.Copy);
+
+            result.IsImported.Should().BeTrue();
+            result.FinalizationPending.Should().BeTrue();
+            StoredModel.State.Should().Be(RecoverableOperationState.RecoveryRequired);
+            Db.All<MovieFile>().Should().ContainSingle(x => x.Id == result.ImportedMovieFile.Id);
+            Db.All<MovieFile>().Should().NotContain(x => x.Id == _outgoing.Id);
+            File.ReadAllBytes(_destination).Should().Equal(IncomingBytes);
+            StoredModel.ActiveResourceKey.Should().NotBeNull();
         }
 
         private RecoverableOperation Acquire(RecoverableOperation operation, string owner)

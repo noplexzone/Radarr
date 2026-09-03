@@ -422,6 +422,7 @@ namespace NzbDrone.Core.MediaFiles
 
             if (importMode == ImportMode.Move &&
                 importResults.Any(i => i.Result == ImportResultType.Imported) &&
+                importResults.All(i => !i.FinalizationPending) &&
                 ShouldDeleteFolder(directoryInfo, movie))
             {
                 _logger.Debug("Deleting folder after importing valid files");

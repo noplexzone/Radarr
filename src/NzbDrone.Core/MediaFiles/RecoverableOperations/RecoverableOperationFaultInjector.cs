@@ -24,7 +24,13 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
         AfterImportSourceTransfer = 20,
         AfterImportDestinationTransfer = 21,
         AfterImportRecycleAction = 22,
-        AfterImportRollbackBegin = 23
+        AfterImportRollbackBegin = 23,
+        BeforeImportMovieFileDeletedDispatch = 24,
+        AfterImportMovieFileDeletedPublish = 25,
+        BeforeImportMovieFileAddedDispatch = 26,
+        AfterImportMovieFileAddedPublish = 27,
+        BeforeMovieFileImportedDispatch = 28,
+        AfterMovieFileImportedPublish = 29
     }
 
     public interface IRecoverableOperationFaultInjector

@@ -488,7 +488,9 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
                 var importMovie = groupedTrackedDownload.First().ImportResult.ImportDecision.LocalMovie.Movie;
                 var outputPath = trackedDownload.ImportItem.OutputPath.FullPath;
 
-                if (_diskProvider.FolderExists(outputPath))
+                var completedImports = groupedTrackedDownload.Select(c => c.ImportResult).Where(c => !c.FinalizationPending).ToList();
+                var finalizationPending = groupedTrackedDownload.Any(c => c.ImportResult.FinalizationPending);
+                if (!finalizationPending && completedImports.Any() && _diskProvider.FolderExists(outputPath))
                 {
                     if (_downloadedMovieImportService.ShouldDeleteFolder(
                             new DirectoryInfo(outputPath),
@@ -498,7 +500,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
                     }
                 }
 
-                if (groupedTrackedDownload.Select(c => c.ImportResult).Any(c => c.Result == ImportResultType.Imported))
+                if (!finalizationPending && completedImports.Any(c => c.Result == ImportResultType.Imported))
                 {
                     trackedDownload.State = TrackedDownloadState.Imported;
                     _eventAggregator.PublishEvent(new DownloadCompletedEvent(trackedDownload, importMovie.Id));

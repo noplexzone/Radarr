@@ -138,6 +138,21 @@ namespace NzbDrone.Core.Test.Download
         }
 
         [Test]
+        public void durable_finalization_pending_should_not_complete_the_download()
+        {
+            var localMovie = new LocalMovie { Path = @"C:\TestPath\Droned.1998.mkv", Movie = _trackedDownload.RemoteMovie.Movie };
+            Mocker.GetMock<IDownloadedMovieImportService>()
+                .Setup(v => v.ProcessPath(It.IsAny<string>(), It.IsAny<ImportMode>(), It.IsAny<Movie>(), It.IsAny<DownloadClientItem>()))
+                .Returns(new List<ImportResult> { new(new ImportDecision(localMovie), true) });
+
+            Subject.Import(_trackedDownload);
+
+            _trackedDownload.State.Should().Be(TrackedDownloadState.ImportPending);
+            Mocker.GetMock<IEventAggregator>()
+                .Verify(v => v.PublishEvent(It.IsAny<DownloadCompletedEvent>()), Times.Never);
+        }
+
+        [Test]
         public void should_not_mark_as_imported_if_no_movies_were_parsed()
         {
             Mocker.GetMock<IDownloadedMovieImportService>()
@@ -295,12 +310,18 @@ namespace NzbDrone.Core.Test.Download
             var slot = GroupedDownload(10, MovieAcquisitionTarget.ForEditionSlot(42));
             var wrongClient = new DownloadHistory
             {
-                EventType = DownloadHistoryEventType.FileImported, DownloadId = "shared", DownloadClientId = 2, MovieId = 10
+                EventType = DownloadHistoryEventType.FileImported,
+                DownloadId = "shared",
+                DownloadClientId = 2,
+                MovieId = 10
             };
             MovieAcquisitionTargetSerializer.Write(wrongClient.Data, slot.AcquisitionTarget);
             var exact = new DownloadHistory
             {
-                EventType = DownloadHistoryEventType.FileImported, DownloadId = "shared", DownloadClientId = 1, MovieId = 10
+                EventType = DownloadHistoryEventType.FileImported,
+                DownloadId = "shared",
+                DownloadClientId = 1,
+                MovieId = 10
             };
             MovieAcquisitionTargetSerializer.Write(exact.Data, slot.AcquisitionTarget);
             Mocker.GetMock<IDownloadedMovieImportService>()

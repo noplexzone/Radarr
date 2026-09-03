@@ -222,7 +222,7 @@ namespace NzbDrone.Core.Download.History
                 downloadId = _historyService.FindDownloadId(message);
             }
 
-            if (downloadId.IsNullOrWhiteSpace())
+            if (downloadId.IsNullOrWhiteSpace() || message.DownloadClientInfo == null)
             {
                 return;
             }
