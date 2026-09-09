@@ -272,6 +272,36 @@ namespace NzbDrone.Core.Test.MediaFiles.RecoverableOperations
             Mocker.GetMock<IRecycleBinProvider>().Verify(x => x.DeleteFile(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         }
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void recovery_should_preserve_outgoing_backup_when_committed_destination_is_damaged(bool truncate)
+        {
+            Mocker.GetMock<IRecoverableOperationFaultInjector>()
+                .Setup(x => x.Check(RecoverableOperationFaultPoint.AfterImportDatabaseCommit))
+                .Throws(new RecoverableOperationProcessDeathException());
+            Action act = () => Import(TransferMode.Move);
+            act.Should().Throw<RecoverableOperationProcessDeathException>();
+            var interrupted = StoredModel;
+            if (truncate)
+            {
+                File.WriteAllBytes(_destination, new byte[] { 1 });
+            }
+            else
+            {
+                File.Delete(_destination);
+            }
+
+            ExpireLease(interrupted);
+            Mocker.GetMock<IRecoverableOperationFaultInjector>().Reset();
+            const string owner = "damaged-destination-restart";
+            Subject.Recover(Acquire(interrupted, owner), owner);
+
+            Mocker.GetMock<IRecycleBinProvider>().Verify(
+                x => x.DeleteFile(It.IsAny<string>(), It.IsAny<string>()), Times.Never(),
+                "the outgoing backup is the last valid file after destination damage");
+            File.ReadAllBytes(interrupted.Plan.FinalizePath).Should().Equal(OutgoingBytes);
+        }
+
         [TestCase(RecoverableOperationFaultPoint.AfterImportSourceToCandidate, RecoverableOperationState.Staging)]
         [TestCase(RecoverableOperationFaultPoint.AfterImportStaged, RecoverableOperationState.Staged)]
         [TestCase(RecoverableOperationFaultPoint.AfterImportDatabaseCommit, RecoverableOperationState.DatabaseCommitted)]

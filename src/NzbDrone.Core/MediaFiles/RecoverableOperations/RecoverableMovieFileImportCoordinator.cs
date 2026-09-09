@@ -356,6 +356,9 @@ namespace NzbDrone.Core.MediaFiles.RecoverableOperations
                 throw new RecoverableOperationValidationException("Only committed imports can be finalized.");
             }
 
+            RejectReparseAncestors(operation.Plan.DestinationPath);
+            operation = HeartbeatVerifyHash(operation, owner, operation.Plan.DestinationPath, operation.Plan.ExpectedSize.Value, operation.Plan.IncomingSha256, "committed destination");
+
             var outgoing = operation.Plan.ExpectedOutgoingMovieFile;
             if (outgoing != null)
             {
