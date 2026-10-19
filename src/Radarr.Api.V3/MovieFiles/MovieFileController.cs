@@ -12,6 +12,7 @@ using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.SignalR;
@@ -32,13 +33,15 @@ namespace Radarr.Api.V3.MovieFiles
         private readonly IMovieService _movieService;
         private readonly ICustomFormatCalculationService _formatCalculator;
         private readonly IUpgradableSpecification _upgradableSpecification;
+        private readonly IMovieEditionService _movieEditionService;
 
         public MovieFileController(IBroadcastSignalRMessage signalRBroadcaster,
                                IMediaFileService mediaFileService,
                                IDeleteMediaFiles mediaFileDeletionService,
                                IMovieService movieService,
                                ICustomFormatCalculationService formatCalculator,
-                               IUpgradableSpecification upgradableSpecification)
+                               IUpgradableSpecification upgradableSpecification,
+                               IMovieEditionService movieEditionService)
             : base(signalRBroadcaster)
         {
             _mediaFileService = mediaFileService;
@@ -46,6 +49,7 @@ namespace Radarr.Api.V3.MovieFiles
             _movieService = movieService;
             _formatCalculator = formatCalculator;
             _upgradableSpecification = upgradableSpecification;
+            _movieEditionService = movieEditionService;
         }
 
         protected override MovieFileResource GetResourceById(int id)
@@ -102,6 +106,8 @@ namespace Radarr.Api.V3.MovieFiles
             }
 
             _mediaFileService.Update(movieFile);
+            MoveToEdition(movieFile, movieFileResource.MovieEditionId);
+
             return Accepted(movieFile.Id);
         }
 
@@ -151,6 +157,24 @@ namespace Radarr.Api.V3.MovieFiles
             var movie = _movieService.GetMovie(movieFiles.First().MovieId);
 
             return Accepted(movieFiles.ConvertAll(f => f.ToResource(movie, _upgradableSpecification, _formatCalculator)));
+        }
+
+        // Moving a file to another edition only changes the database, the file stays where it is
+        private void MoveToEdition(MovieFile movieFile, int movieEditionId)
+        {
+            if (movieEditionId <= 0 || movieEditionId == movieFile.MovieEditionId)
+            {
+                return;
+            }
+
+            var edition = _movieEditionService.GetEditions(movieFile.MovieId).FirstOrDefault(e => e.Id == movieEditionId);
+
+            if (edition == null)
+            {
+                throw new BadRequestException("Edition does not belong to the file's movie");
+            }
+
+            _movieEditionService.AssignFiles(new List<MovieFile> { movieFile }, edition);
         }
 
         [RestDeleteById]
@@ -231,6 +255,11 @@ namespace Radarr.Api.V3.MovieFiles
             }
 
             _mediaFileService.Update(movieFiles);
+
+            foreach (var movieFile in movieFiles)
+            {
+                MoveToEdition(movieFile, resources.Single(r => r.Id == movieFile.Id).MovieEditionId);
+            }
 
             var movie = _movieService.GetMovie(movieFiles.First().MovieId);
 

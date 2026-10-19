@@ -4,8 +4,10 @@ using FizzWare.NBuilder;
 using FluentAssertions;
 using NUnit.Framework;
 using NzbDrone.Core.CustomFormats;
+using NzbDrone.Core.Datastore;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Profiles.Qualities;
 using NzbDrone.Core.Qualities;
 using NzbDrone.Core.Test.CustomFormats;
@@ -85,6 +87,57 @@ namespace NzbDrone.Core.Test.MovieTests.MovieRepositoryTests
             Subject.Update(movie);
 
             Subject.Get(movie.Id).MovieFile.Id.Should().Be(main.Id);
+        }
+
+        [Test]
+        public void movie_missing_a_monitored_edition_should_count_as_missing()
+        {
+            var profile = _profileRepository.Insert(new QualityProfile
+            {
+                Items = Qualities.QualityFixture.GetDefaultQualities(),
+                FormatItems = CustomFormatsTestHelpers.GetDefaultFormatItems(),
+                Name = "TestProfile"
+            });
+
+            var metadata = Mocker.Resolve<MovieMetadataRepository>().Insert(Builder<MovieMetadata>.CreateNew().With(m => m.Year = 1982).BuildNew());
+            var movie = Builder<Movie>.CreateNew()
+                .With(m => m.QualityProfileId = profile.Id)
+                .With(m => m.MovieMetadataId = metadata.Id)
+                .With(m => m.Monitored = true)
+                .BuildNew();
+            Subject.Insert(movie);
+
+            var editionRepository = Mocker.Resolve<MovieEditionRepository>();
+            editionRepository.Insert(MovieEdition.CreateDefault(movie.Id));
+
+            // An untagged file covers the default edition
+            var file = Mocker.Resolve<MediaFileRepository>().Insert(Builder<MovieFile>.CreateNew()
+                .With(f => f.MovieId = movie.Id)
+                .With(f => f.MovieEditionId = 0)
+                .With(f => f.Quality = new QualityModel(Quality.Bluray1080p))
+                .With(f => f.Languages = new List<NzbDrone.Core.Languages.Language>())
+                .BuildNew());
+
+            movie.MovieFileId = file.Id;
+            Subject.Update(movie);
+
+            GetMissing().Should().BeEmpty();
+
+            var finalCut = editionRepository.Insert(MovieEdition.CreateNew(movie.Id, "Final Cut", true));
+
+            GetMissing().Should().ContainSingle(m => m.Id == movie.Id);
+
+            finalCut.Monitored = false;
+            editionRepository.Update(finalCut);
+
+            GetMissing().Should().BeEmpty();
+        }
+
+        private List<Movie> GetMissing()
+        {
+            var pagingSpec = new PagingSpec<Movie> { Page = 1, PageSize = 10, SortKey = "Id", SortDirection = SortDirection.Ascending };
+
+            return Subject.MoviesWithoutFiles(pagingSpec).Records;
         }
     }
 }

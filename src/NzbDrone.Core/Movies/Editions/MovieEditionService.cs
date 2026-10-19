@@ -23,6 +23,7 @@ namespace NzbDrone.Core.Movies.Editions
         MovieEdition UpdateEdition(MovieEdition edition);
         void UpdateEditions(List<MovieEdition> editions);
         void DeleteEdition(MovieEdition edition);
+        void AssignFiles(List<MovieFile> files, MovieEdition edition);
         QualityProfile GetQualityProfile(Movie movie, MovieEdition edition);
         MovieFile GetCurrentFile(Movie movie, MovieEdition edition);
         MovieFile GetCurrentFile(Movie movie, MovieEdition edition, IEnumerable<MovieFile> movieFiles);
@@ -39,16 +40,19 @@ namespace NzbDrone.Core.Movies.Editions
         private readonly IMovieEditionRepository _editionRepository;
         private readonly IMediaFileRepository _mediaFileRepository;
         private readonly IQualityProfileRepository _qualityProfileRepository;
+        private readonly IEventAggregator _eventAggregator;
         private readonly Logger _logger;
 
         public MovieEditionService(IMovieEditionRepository editionRepository,
                                    IMediaFileRepository mediaFileRepository,
                                    IQualityProfileRepository qualityProfileRepository,
+                                   IEventAggregator eventAggregator,
                                    Logger logger)
         {
             _editionRepository = editionRepository;
             _mediaFileRepository = mediaFileRepository;
             _qualityProfileRepository = qualityProfileRepository;
+            _eventAggregator = eventAggregator;
             _logger = logger;
         }
 
@@ -77,12 +81,16 @@ namespace NzbDrone.Core.Movies.Editions
         public Dictionary<int, List<MovieEdition>> GetEditions(IEnumerable<int> movieIds, bool includeFiles = false)
         {
             var ids = movieIds.Distinct().ToList();
-            var editionsByMovie = _editionRepository.GetByMovieIds(ids)
+
+            // Reading whole tables beats a huge IN list when a large part of the library is asked for
+            var readAll = ids.Count > 500;
+
+            var editionsByMovie = (readAll ? _editionRepository.All() : _editionRepository.GetByMovieIds(ids))
                 .GroupBy(e => e.MovieId)
                 .ToDictionary(g => g.Key, g => g.ToList());
 
             var filesByMovie = includeFiles
-                ? _mediaFileRepository.GetFilesByMovies(ids).GroupBy(f => f.MovieId).ToDictionary(g => g.Key, g => g.ToList())
+                ? (readAll ? _mediaFileRepository.All() : _mediaFileRepository.GetFilesByMovies(ids)).GroupBy(f => f.MovieId).ToDictionary(g => g.Key, g => g.ToList())
                 : new Dictionary<int, List<MovieFile>>();
 
             var result = new Dictionary<int, List<MovieEdition>>();
@@ -221,7 +229,38 @@ namespace NzbDrone.Core.Movies.Editions
 
             _logger.Info("Removing edition '{0}' from movie {1}", edition.DisplayTitle, edition.MovieId);
 
+            // Files still in the edition are kept and go back to the default edition
+            var files = _mediaFileRepository.GetFilesByMovie(edition.MovieId).Where(f => f.MovieEditionId == edition.Id).ToList();
+
+            if (files.Any())
+            {
+                AssignFiles(files, GetDefaultEdition(edition.MovieId));
+            }
+
             _editionRepository.Delete(edition.Id);
+        }
+
+        public void AssignFiles(List<MovieFile> files, MovieEdition edition)
+        {
+            foreach (var file in files)
+            {
+                if (file.MovieId != edition.MovieId)
+                {
+                    throw new ArgumentException("Files can only be moved to an edition of their own movie");
+                }
+
+                _logger.Info("Moving file {0} to edition '{1}'", file.RelativePath, edition.DisplayTitle);
+
+                file.MovieEditionId = edition.Id;
+                file.Edition = edition.Title;
+            }
+
+            _mediaFileRepository.UpdateMany(files);
+
+            foreach (var movieId in files.Select(f => f.MovieId).Distinct())
+            {
+                _eventAggregator.PublishEvent(new MovieEditionFilesChangedEvent(movieId));
+            }
         }
 
         public QualityProfile GetQualityProfile(Movie movie, MovieEdition edition)

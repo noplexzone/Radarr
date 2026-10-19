@@ -16,6 +16,10 @@ namespace Radarr.Api.V3.Queue
     {
         public int? MovieId { get; set; }
         public MovieResource Movie { get; set; }
+
+        // The edition the download is for, 0 when it isn't known yet
+        public int MovieEditionId { get; set; }
+        public string EditionTitle { get; set; }
         public List<Language> Languages { get; set; }
         public QualityModel Quality { get; set; }
         public List<CustomFormatResource> CustomFormats { get; set; }
@@ -65,6 +69,8 @@ namespace Radarr.Api.V3.Queue
                 Id = model.Id,
                 MovieId = model.Movie?.Id,
                 Movie = includeMovie && model.Movie != null ? model.Movie.ToResource(0) : null,
+                MovieEditionId = model.RemoteMovie?.MovieEdition?.Id ?? 0,
+                EditionTitle = model.RemoteMovie?.MovieEdition?.DisplayTitle,
                 Languages = model.Languages,
                 Quality = model.Quality,
                 CustomFormats = customFormats?.ToResource(false),

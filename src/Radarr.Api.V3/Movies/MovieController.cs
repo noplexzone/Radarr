@@ -14,6 +14,7 @@ using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.Commands;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Movies.Events;
 using NzbDrone.Core.Movies.Translations;
 using NzbDrone.Core.MovieStats;
@@ -21,6 +22,7 @@ using NzbDrone.Core.RootFolders;
 using NzbDrone.Core.Validation;
 using NzbDrone.Core.Validation.Paths;
 using NzbDrone.SignalR;
+using Radarr.Api.V3.MovieEditions;
 using Radarr.Http;
 using Radarr.Http.REST;
 using Radarr.Http.REST.Attributes;
@@ -45,6 +47,7 @@ namespace Radarr.Api.V3.Movies
         private readonly IRootFolderService _rootFolderService;
         private readonly IUpgradableSpecification _qualityUpgradableSpecification;
         private readonly IConfigService _configService;
+        private readonly IMovieEditionService _movieEditionService;
 
         public MovieController(IBroadcastSignalRMessage signalRBroadcaster,
                            IMovieService moviesService,
@@ -56,6 +59,7 @@ namespace Radarr.Api.V3.Movies
                            IRootFolderService rootFolderService,
                            IUpgradableSpecification qualityUpgradableSpecification,
                            IConfigService configService,
+                           IMovieEditionService movieEditionService,
                            RootFolderValidator rootFolderValidator,
                            MappedNetworkDriveValidator mappedNetworkDriveValidator,
                            MoviePathValidator moviesPathValidator,
@@ -74,6 +78,7 @@ namespace Radarr.Api.V3.Movies
             _movieStatisticsService = movieStatisticsService;
             _qualityUpgradableSpecification = qualityUpgradableSpecification;
             _configService = configService;
+            _movieEditionService = movieEditionService;
             _coverMapper = coverMapper;
             _commandQueueManager = commandQueueManager;
             _rootFolderService = rootFolderService;
@@ -158,6 +163,7 @@ namespace Radarr.Api.V3.Movies
                 }
 
                 LinkMovieStatistics(moviesResources, sdict);
+                LinkEditions(moviesResources, movies);
 
                 var rootFolders = _rootFolderService.All();
 
@@ -190,6 +196,7 @@ namespace Radarr.Api.V3.Movies
             var resource = movie.ToResource(availDelay, translation, _qualityUpgradableSpecification);
             MapCoversToLocal(resource);
             FetchAndLinkMovieStatistics(resource);
+            LinkEditions(new List<MovieResource> { resource }, new List<Movie> { movie });
 
             resource.RootFolderPath = _rootFolderService.GetBestRootFolderPath(resource.Path);
 
@@ -238,7 +245,10 @@ namespace Radarr.Api.V3.Movies
         [Produces("application/json")]
         public ActionResult<MovieResource> AddMovie([FromBody] MovieResource moviesResource)
         {
-            var movie = _addMovieService.AddMovie(moviesResource.ToModel());
+            var model = moviesResource.ToModel();
+            model.AutoAddEditions = moviesResource.AutoAddEditions ?? _configService.AutoAddEditionsDefault;
+
+            var movie = _addMovieService.AddMovie(model);
 
             return Created(movie.Id);
         }
@@ -277,6 +287,20 @@ namespace Radarr.Api.V3.Movies
         public void DeleteMovie(int id, bool deleteFiles = false, bool addImportExclusion = false)
         {
             _moviesService.DeleteMovie(id, deleteFiles, addImportExclusion);
+        }
+
+        private void LinkEditions(List<MovieResource> resources, List<Movie> movies)
+        {
+            var editions = _movieEditionService.GetEditions(movies.Select(m => m.Id), true);
+            var moviesById = movies.ToDictionary(m => m.Id);
+
+            foreach (var resource in resources)
+            {
+                if (editions.TryGetValue(resource.Id, out var movieEditions) && moviesById.TryGetValue(resource.Id, out var movie))
+                {
+                    resource.Editions = movieEditions.ToSummaryResource(e => _movieEditionService.GetCurrentFile(movie, e, e.Files));
+                }
+            }
         }
 
         private void MapCoversToLocal(params MovieResource[] movies)

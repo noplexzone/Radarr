@@ -21,6 +21,10 @@ namespace Radarr.Api.V3.ManualImport
         public long Size { get; set; }
         public MovieResource Movie { get; set; }
         public int? MovieFileId { get; set; }
+
+        // The edition the file would be imported into, a new edition has id 0 and its title set
+        public int MovieEditionId { get; set; }
+        public string EditionTitle { get; set; }
         public string ReleaseGroup { get; set; }
         public QualityModel Quality { get; set; }
         public List<Language> Languages { get; set; }
@@ -54,6 +58,8 @@ namespace Radarr.Api.V3.ManualImport
                 Size = model.Size,
                 Movie = model.Movie.ToResource(0),
                 MovieFileId = model.MovieFileId,
+                MovieEditionId = model.MovieEdition?.Id ?? 0,
+                EditionTitle = model.MovieEdition?.DisplayTitle,
                 ReleaseGroup = model.ReleaseGroup,
                 Quality = model.Quality,
                 Languages = model.Languages,

@@ -7,9 +7,11 @@ using NzbDrone.Core.Datastore;
 using NzbDrone.Core.DecisionEngine.Specifications;
 using NzbDrone.Core.MediaCover;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Movies.Translations;
 using NzbDrone.Core.MovieStats;
 using NzbDrone.SignalR;
+using Radarr.Api.V3.MovieEditions;
 using Radarr.Api.V3.Movies;
 using Radarr.Http;
 using Radarr.Http.Extensions;
@@ -19,6 +21,8 @@ namespace Radarr.Api.V3.Wanted
     [V3ApiController("wanted/missing")]
     public class MissingController : MovieControllerWithSignalR
     {
+        private readonly IMovieEditionService _movieEditionService;
+
         public MissingController(IMovieService movieService,
                             IMovieTranslationService movieTranslationService,
                             IMovieStatisticsService movieStatisticsService,
@@ -26,9 +30,11 @@ namespace Radarr.Api.V3.Wanted
                             ICustomFormatCalculationService formatCalculator,
                             IConfigService configService,
                             IMapCoversToLocal coverMapper,
-                            IBroadcastSignalRMessage signalRBroadcaster)
+                            IBroadcastSignalRMessage signalRBroadcaster,
+                            IMovieEditionService movieEditionService)
             : base(movieService, movieTranslationService, movieStatisticsService, upgradableSpecification, formatCalculator, configService, coverMapper, signalRBroadcaster)
         {
+            _movieEditionService = movieEditionService;
         }
 
         [NonAction]
@@ -57,7 +63,21 @@ namespace Radarr.Api.V3.Wanted
 
             pagingSpec.FilterExpressions.Add(v => v.Monitored == monitored);
 
-            var resource = pagingSpec.ApplyToPage(_movieService.MoviesWithoutFiles, v => MapToResource(v));
+            var movies = new Dictionary<int, Movie>();
+            var resource = pagingSpec.ApplyToPage(_movieService.MoviesWithoutFiles, v =>
+            {
+                movies[v.Id] = v;
+                return MapToResource(v);
+            });
+
+            // Each record lists its editions so the missing ones can be shown and searched one by one
+            var editions = _movieEditionService.GetEditions(movies.Keys, true);
+
+            foreach (var record in resource.Records)
+            {
+                var movie = movies[record.Id];
+                record.Editions = editions[record.Id].ToSummaryResource(e => _movieEditionService.GetCurrentFile(movie, e, e.Files));
+            }
 
             return resource;
         }

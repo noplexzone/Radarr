@@ -53,7 +53,8 @@ namespace NzbDrone.Core.Movies
     }
 
     public class MovieService : IMovieService, IHandle<MovieFileAddedEvent>,
-                                               IHandle<MovieFileDeletedEvent>
+                                               IHandle<MovieFileDeletedEvent>,
+                                               IHandle<MovieEditionFilesChangedEvent>
     {
         private readonly IMovieRepository _movieRepository;
         private readonly IConfigService _configService;
@@ -447,6 +448,19 @@ namespace NzbDrone.Core.Movies
             _movieRepository.Update(movie);
 
             _logger.Info("Assigning file [{0}] to movie [{1}]", message.MovieFile.RelativePath, message.MovieFile.Movie);
+        }
+
+        public void Handle(MovieEditionFilesChangedEvent message)
+        {
+            var movie = GetMovie(message.MovieId);
+            var movieFileId = _movieEditionService.GetRepresentativeFileId(movie);
+
+            if (movieFileId != movie.MovieFileId)
+            {
+                movie.MovieFileId = movieFileId;
+                _movieRepository.Update(movie);
+                _eventAggregator.PublishEvent(new MovieUpdatedEvent(movie));
+            }
         }
 
         public void Handle(MovieFileDeletedEvent message)

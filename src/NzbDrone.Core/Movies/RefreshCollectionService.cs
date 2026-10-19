@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using NLog;
 using NzbDrone.Common.Instrumentation.Extensions;
+using NzbDrone.Core.Configuration;
 using NzbDrone.Core.Exceptions;
 using NzbDrone.Core.ImportLists.ImportExclusions;
 using NzbDrone.Core.Messaging.Commands;
@@ -23,6 +24,7 @@ namespace NzbDrone.Core.Movies
         private readonly IAddMovieService _addMovieService;
         private readonly IImportListExclusionService _importListExclusionService;
         private readonly IEventAggregator _eventAggregator;
+        private readonly IConfigService _configService;
 
         private readonly Logger _logger;
 
@@ -33,6 +35,7 @@ namespace NzbDrone.Core.Movies
                                         IAddMovieService addMovieService,
                                         IImportListExclusionService importListExclusionService,
                                         IEventAggregator eventAggregator,
+                                        IConfigService configService,
                                         Logger logger)
         {
             _movieInfo = movieInfo;
@@ -42,6 +45,7 @@ namespace NzbDrone.Core.Movies
             _addMovieService = addMovieService;
             _importListExclusionService = importListExclusionService;
             _eventAggregator = eventAggregator;
+            _configService = configService;
             _logger = logger;
         }
 
@@ -149,6 +153,7 @@ namespace NzbDrone.Core.Movies
                             AddMethod = AddMovieMethod.Collection
                         },
                         Monitored = true,
+                        AutoAddEditions = _configService.AutoAddEditionsDefault,
                         Tags = collection.Tags
                     }).ToList(),
                         true);

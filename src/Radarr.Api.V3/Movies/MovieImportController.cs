@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Microsoft.AspNetCore.Mvc;
+using NzbDrone.Core.Configuration;
 using NzbDrone.Core.Movies;
 using Radarr.Http;
 using Radarr.Http.REST;
@@ -11,10 +12,12 @@ namespace Radarr.Api.V3.Movies
     public class MovieImportController : RestController<MovieResource>
     {
         private readonly IAddMovieService _addMovieService;
+        private readonly IConfigService _configService;
 
-        public MovieImportController(IAddMovieService addMovieService)
+        public MovieImportController(IAddMovieService addMovieService, IConfigService configService)
         {
             _addMovieService = addMovieService;
+            _configService = configService;
         }
 
         [NonAction]
@@ -34,6 +37,11 @@ namespace Radarr.Api.V3.Movies
         public IEnumerable<MovieResource> Import([FromBody] List<MovieResource> resource)
         {
             var newMovies = resource.ToModel();
+
+            for (var i = 0; i < newMovies.Count; i++)
+            {
+                newMovies[i].AutoAddEditions = resource[i].AutoAddEditions ?? _configService.AutoAddEditionsDefault;
+            }
 
             return _addMovieService.AddMovies(newMovies).ToResource(0);
         }

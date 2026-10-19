@@ -105,6 +105,7 @@ namespace NzbDrone.Core.ImportLists
                 moviesToAdd.Add(new Movie
                 {
                     Monitored = monitorType != MonitorTypes.None,
+                    AutoAddEditions = _configService.AutoAddEditionsDefault,
                     RootFolderPath = importList.RootFolderPath,
                     QualityProfileId = importList.QualityProfileId,
                     MinimumAvailability = importList.MinimumAvailability,

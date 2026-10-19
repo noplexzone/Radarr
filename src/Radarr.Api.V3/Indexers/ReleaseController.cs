@@ -15,6 +15,7 @@ using NzbDrone.Core.History;
 using NzbDrone.Core.Indexers;
 using NzbDrone.Core.IndexerSearch;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Profiles.Qualities;
@@ -34,6 +35,7 @@ namespace Radarr.Api.V3.Indexers
         private readonly IDownloadService _downloadService;
         private readonly IMovieService _movieService;
         private readonly IHistoryService _historyService;
+        private readonly IMovieEditionService _movieEditionService;
         private readonly Logger _logger;
 
         private readonly ICached<RemoteMovie> _remoteMovieCache;
@@ -45,6 +47,7 @@ namespace Radarr.Api.V3.Indexers
                              IDownloadService downloadService,
                              IMovieService movieService,
                              IHistoryService historyService,
+                             IMovieEditionService movieEditionService,
                              ICacheManager cacheManager,
                              IQualityProfileService qualityProfileService,
                              Logger logger)
@@ -57,6 +60,7 @@ namespace Radarr.Api.V3.Indexers
             _downloadService = downloadService;
             _movieService = movieService;
             _historyService = historyService;
+            _movieEditionService = movieEditionService;
             _logger = logger;
 
             PostValidator.RuleFor(s => s.IndexerId).ValidId();
@@ -100,7 +104,11 @@ namespace Radarr.Api.V3.Indexers
                         ReleaseSource = remoteMovie.ReleaseSource
                     };
 
+                    var originalMovieId = remoteMovie.Movie?.Id;
+                    var originalEdition = _remoteMovieCache.Find(GetCacheKey(release))?.MovieEdition;
+
                     remoteMovie.Movie = _movieService.GetMovie(release.MovieId!.Value);
+                    remoteMovie.MovieEdition = originalMovieId == remoteMovie.Movie.Id ? originalEdition : null;
                     remoteMovie.ParsedMovieInfo.Quality = release.Quality;
                     remoteMovie.Languages = release.Languages;
                 }
@@ -119,6 +127,8 @@ namespace Radarr.Api.V3.Indexers
                     }
                 }
 
+                SetTargetEdition(remoteMovie, release);
+
                 await _downloadService.DownloadReport(remoteMovie, release.DownloadClientId);
             }
             catch (ReleaseDownloadException ex)
@@ -132,21 +142,23 @@ namespace Radarr.Api.V3.Indexers
 
         [HttpGet]
         [Produces("application/json")]
-        public async Task<List<ReleaseResource>> GetReleases(int? movieId)
+        public async Task<List<ReleaseResource>> GetReleases(int? movieId, int? movieEditionId)
         {
             if (movieId.HasValue)
             {
-                return await GetMovieReleases(movieId.Value);
+                return await GetMovieReleases(movieId.Value, movieEditionId ?? 0);
             }
 
             return await GetRss();
         }
 
-        private async Task<List<ReleaseResource>> GetMovieReleases(int movieId)
+        private async Task<List<ReleaseResource>> GetMovieReleases(int movieId, int movieEditionId)
         {
             try
             {
-                var decisions = await _releaseSearchService.MovieSearch(movieId, true, true);
+                var decisions = movieEditionId > 0
+                    ? await _releaseSearchService.MovieEditionSearch(movieId, movieEditionId, true, true)
+                    : await _releaseSearchService.MovieSearch(movieId, true, true);
                 var prioritizedDecisions = _prioritizeDownloadDecision.PrioritizeDecisionsForMovies(decisions);
                 var history = _historyService.FindByMovieId(movieId);
 
@@ -178,6 +190,20 @@ namespace Radarr.Api.V3.Indexers
             _remoteMovieCache.Set(GetCacheKey(resource), decision.RemoteMovie, TimeSpan.FromMinutes(30));
 
             return resource;
+        }
+
+        // The edition chosen in interactive search wins over the one the release was matched to
+        private void SetTargetEdition(RemoteMovie remoteMovie, ReleaseResource release)
+        {
+            if (release.NewEditionTitle.IsNotNullOrWhiteSpace())
+            {
+                remoteMovie.MovieEdition = MovieEdition.CreateNew(remoteMovie.Movie.Id, release.NewEditionTitle, true);
+            }
+            else if (release.MovieEditionId > 0 && release.MovieEditionId != remoteMovie.MovieEdition?.Id)
+            {
+                remoteMovie.MovieEdition = _movieEditionService.GetEditions(remoteMovie.Movie.Id).FirstOrDefault(e => e.Id == release.MovieEditionId) ??
+                                           throw new NzbDroneClientException(HttpStatusCode.BadRequest, "Edition does not belong to the movie");
+            }
         }
 
         private string GetCacheKey(ReleaseResource resource)

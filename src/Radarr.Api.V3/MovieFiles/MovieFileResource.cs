@@ -21,6 +21,9 @@ namespace Radarr.Api.V3.MovieFiles
         public string SceneName { get; set; }
         public string ReleaseGroup { get; set; }
         public string Edition { get; set; }
+
+        // 0 for files from before editions, which belong to the default edition
+        public int MovieEditionId { get; set; }
         public List<Language> Languages { get; set; }
         public QualityModel Quality { get; set; }
         public List<CustomFormatResource> CustomFormats { get; set; }
@@ -57,6 +60,7 @@ namespace Radarr.Api.V3.MovieFiles
                 Languages = model.Languages,
                 ReleaseGroup = model.ReleaseGroup,
                 Edition = model.Edition,
+                MovieEditionId = model.MovieEditionId,
                 MediaInfo = model.MediaInfo.ToResource(model.SceneName),
                 OriginalFilePath = model.OriginalFilePath
             };
@@ -82,6 +86,7 @@ namespace Radarr.Api.V3.MovieFiles
                 Quality = model.Quality,
                 Languages = model.Languages,
                 Edition = model.Edition,
+                MovieEditionId = model.MovieEditionId,
                 ReleaseGroup = model.ReleaseGroup,
                 MediaInfo = model.MediaInfo.ToResource(model.SceneName),
                 QualityCutoffNotMet = upgradableSpecification?.QualityCutoffNotMet(movie.QualityProfile, model.Quality) ?? false,

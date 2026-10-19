@@ -9,6 +9,7 @@ using NzbDrone.Core.Languages;
 using NzbDrone.Core.MediaCover;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.Translations;
+using Radarr.Api.V3.MovieEditions;
 using Radarr.Api.V3.MovieFiles;
 using Radarr.Http.REST;
 using Swashbuckle.AspNetCore.Annotations;
@@ -85,6 +86,10 @@ namespace Radarr.Api.V3.Movies
         public float Popularity { get; set; }
         public DateTime? LastSearchTime { get; set; }
         public MovieStatisticsResource Statistics { get; set; }
+
+        // Null when not sent, so clients that don't know about editions leave the setting alone
+        public bool? AutoAddEditions { get; set; }
+        public List<MovieEditionSummaryResource> Editions { get; set; }
 
         // Hiding this so people don't think its usable (only used to set the initial state)
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
@@ -165,6 +170,7 @@ namespace Radarr.Api.V3.Movies
                 Collection = collection,
                 Popularity = model.MovieMetadata.Value.Popularity,
                 LastSearchTime = model.LastSearchTime,
+                AutoAddEditions = model.AutoAddEditions,
             };
         }
 
@@ -212,13 +218,15 @@ namespace Radarr.Api.V3.Movies
 
                 Tags = resource.Tags ?? new HashSet<int>(),
                 Added = resource.Added,
-                AddOptions = resource.AddOptions
+                AddOptions = resource.AddOptions,
+                AutoAddEditions = resource.AutoAddEditions ?? false
             };
         }
 
         public static Movie ToModel(this MovieResource resource, Movie movie)
         {
             var updatedMovie = resource.ToModel();
+            updatedMovie.AutoAddEditions = resource.AutoAddEditions ?? movie.AutoAddEditions;
 
             movie.ApplyChanges(updatedMovie);
 

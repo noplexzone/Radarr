@@ -50,6 +50,15 @@ namespace Radarr.Api.V3.Indexers
         public int ReleaseWeight { get; set; }
         public string Edition { get; set; }
 
+        // The edition the release would be imported into: matched, default, new or ambiguous
+        public int MovieEditionId { get; set; }
+        public string EditionMatch { get; set; }
+        public string EditionTitle { get; set; }
+
+        // Sent with a grab to choose the edition, or to create one
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public string NewEditionTitle { get; set; }
+
         public string MagnetUrl { get; set; }
         public string InfoHash { get; set; }
         public int? Seeders { get; set; }
@@ -115,6 +124,9 @@ namespace Radarr.Api.V3.Indexers
                 MovieRequested = remoteMovie.MovieRequested,
                 DownloadAllowed = remoteMovie.DownloadAllowed,
                 Edition = parsedMovieInfo.Edition,
+                MovieEditionId = remoteMovie.MovieEdition?.Id ?? 0,
+                EditionMatch = remoteMovie.MovieEditionMatch?.Type.ToString().ToLowerInvariant(),
+                EditionTitle = remoteMovie.MovieEdition?.DisplayTitle,
 
                 // ReleaseWeight
                 MagnetUrl = torrentInfo.MagnetUrl,

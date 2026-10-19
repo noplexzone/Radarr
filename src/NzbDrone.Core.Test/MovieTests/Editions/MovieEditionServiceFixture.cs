@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using FizzWare.NBuilder;
 using FluentAssertions;
+using Moq;
 using NUnit.Framework;
 using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.MediaFiles;
@@ -228,6 +229,47 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
             finalCut.Monitored = false;
             Subject.UpdateEdition(finalCut);
             Subject.GetMovieIdsWithMissingEditions().Should().BeEmpty();
+        }
+
+        [Test]
+        public void assigning_files_should_move_them_and_notify()
+        {
+            var defaultEdition = Subject.GetDefaultEdition(_movie.Id);
+            var finalCut = Subject.AddEdition(MovieEdition.CreateNew(_movie.Id, "Final Cut", true));
+            var file = GivenFile(defaultEdition.Id, Quality.Bluray1080p);
+
+            Subject.AssignFiles(new List<MovieFile> { file }, finalCut);
+
+            var stored = _fileRepository.Get(file.Id);
+            stored.MovieEditionId.Should().Be(finalCut.Id);
+            stored.Edition.Should().Be("Final Cut");
+
+            Mocker.GetMock<NzbDrone.Core.Messaging.Events.IEventAggregator>()
+                .Verify(v => v.PublishEvent(It.Is<MovieEditionFilesChangedEvent>(e => e.MovieId == _movie.Id)), Times.Once());
+        }
+
+        [Test]
+        public void should_not_assign_files_to_edition_of_other_movie()
+        {
+            var otherEdition = Subject.AddEdition(MovieEdition.CreateNew(_movie.Id + 1, "Final Cut", true));
+            var file = GivenFile(0, Quality.Bluray1080p);
+
+            Assert.Throws<System.ArgumentException>(() => Subject.AssignFiles(new List<MovieFile> { file }, otherEdition));
+
+            _fileRepository.Get(file.Id).MovieEditionId.Should().Be(0);
+        }
+
+        [Test]
+        public void deleting_edition_should_keep_its_files_in_default_edition()
+        {
+            var defaultEdition = Subject.GetDefaultEdition(_movie.Id);
+            var finalCut = Subject.AddEdition(MovieEdition.CreateNew(_movie.Id, "Final Cut", true));
+            var file = GivenFile(finalCut.Id, Quality.Bluray2160p);
+
+            Subject.DeleteEdition(finalCut);
+
+            _fileRepository.Get(file.Id).MovieEditionId.Should().Be(defaultEdition.Id);
+            Subject.GetEditions(_movie.Id).Should().ContainSingle(e => e.IsDefault);
         }
     }
 }

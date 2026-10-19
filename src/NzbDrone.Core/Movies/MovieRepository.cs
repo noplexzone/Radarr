@@ -254,8 +254,12 @@ namespace NzbDrone.Core.Movies
             return Query(builder);
         }
 
+        // Missing means no file at all, or a monitored edition without a file (untagged files count for the default edition)
         public SqlBuilder MoviesWithoutFilesBuilder() => Builder()
-            .Where<Movie>(x => x.MovieFileId == 0)
+            .Where("(\"Movies\".\"MovieFileId\" = 0 OR EXISTS (SELECT 1 FROM \"MovieEditions\" WHERE \"MovieEditions\".\"MovieId\" = \"Movies\".\"Id\" AND \"MovieEditions\".\"Monitored\" = @editionMonitored " +
+                   "AND NOT EXISTS (SELECT 1 FROM \"MovieFiles\" AS \"EditionFiles\" WHERE \"EditionFiles\".\"MovieId\" = \"MovieEditions\".\"MovieId\" " +
+                   "AND (\"EditionFiles\".\"MovieEditionId\" = \"MovieEditions\".\"Id\" OR (\"MovieEditions\".\"IsDefault\" = @editionIsDefault AND \"EditionFiles\".\"MovieEditionId\" = 0)))))",
+                   new { editionMonitored = true, editionIsDefault = true })
             .Where<Movie>(m => m.MovieMetadata.Value.Year > 0)
             .GroupBy<Movie>(m => m.Id)
             .GroupBy<MovieMetadata>(m => m.Id);
