@@ -9,6 +9,7 @@ using NzbDrone.Core.Datastore;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.Messaging.Events;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Movies.Events;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.RomanNumerals;
@@ -59,6 +60,7 @@ namespace NzbDrone.Core.Movies
         private readonly IEventAggregator _eventAggregator;
         private readonly IBuildMoviePaths _moviePathBuilder;
         private readonly IAutoTaggingService _autoTaggingService;
+        private readonly IMovieEditionService _movieEditionService;
         private readonly Logger _logger;
 
         public MovieService(IMovieRepository movieRepository,
@@ -66,6 +68,7 @@ namespace NzbDrone.Core.Movies
                             IConfigService configService,
                             IBuildMoviePaths moviePathBuilder,
                             IAutoTaggingService autoTaggingService,
+                            IMovieEditionService movieEditionService,
                             Logger logger)
         {
             _movieRepository = movieRepository;
@@ -73,6 +76,7 @@ namespace NzbDrone.Core.Movies
             _configService = configService;
             _moviePathBuilder = moviePathBuilder;
             _autoTaggingService = autoTaggingService;
+            _movieEditionService = movieEditionService;
             _logger = logger;
         }
 
@@ -439,26 +443,49 @@ namespace NzbDrone.Core.Movies
         public void Handle(MovieFileAddedEvent message)
         {
             var movie = message.MovieFile.Movie;
-            movie.MovieFileId = message.MovieFile.Id;
+            movie.MovieFileId = _movieEditionService.GetRepresentativeFileId(movie);
             _movieRepository.Update(movie);
 
-            // _movieRepository.SetFileId(message.MovieFile.Id, message.MovieFile.Movie.Value.Id);
             _logger.Info("Assigning file [{0}] to movie [{1}]", message.MovieFile.RelativePath, message.MovieFile.Movie);
         }
 
         public void Handle(MovieFileDeletedEvent message)
         {
-            foreach (var movie in GetMoviesByFileId(message.MovieFile.Id))
-            {
-                _logger.Debug("Detaching movie {0} from file.", movie.Id);
-                movie.MovieFileId = 0;
+            var movie = message.MovieFile.Movie ?? GetMovie(message.MovieFile.MovieId);
 
-                if (message.Reason != DeleteMediaFileReason.Upgrade && _configService.AutoUnmonitorPreviouslyDownloadedMovies)
+            _logger.Debug("Detaching movie {0} from file.", movie.Id);
+            movie.MovieFileId = _movieEditionService.GetRepresentativeFileId(movie);
+
+            if (message.Reason != DeleteMediaFileReason.Upgrade && _configService.AutoUnmonitorPreviouslyDownloadedMovies)
+            {
+                UnmonitorEdition(movie, message.MovieFile);
+            }
+
+            UpdateMovie(movie);
+        }
+
+        private void UnmonitorEdition(Movie movie, MovieFile deletedFile)
+        {
+            var editions = _movieEditionService.GetEditions(movie.Id, true);
+
+            if (editions.Count <= 1)
+            {
+                // Single edition movies behave like they always have
+                if (movie.MovieFileId == 0)
                 {
                     movie.Monitored = false;
                 }
 
-                UpdateMovie(movie);
+                return;
+            }
+
+            var edition = editions.FirstOrDefault(e => e.Id == deletedFile.MovieEditionId) ?? editions.Single(e => e.IsDefault);
+
+            if (edition.Monitored && !edition.Files.Any())
+            {
+                _logger.Debug("Unmonitoring edition {0} of movie {1} after its file was deleted", edition, movie);
+                edition.Monitored = false;
+                _movieEditionService.UpdateEditions(new List<MovieEdition> { edition });
             }
         }
     }

@@ -21,6 +21,7 @@ namespace NzbDrone.Core.Movies
         public bool Monitored { get; set; }
         public MovieStatusType MinimumAvailability { get; set; }
         public int QualityProfileId { get; set; }
+        public bool AutoAddEditions { get; set; }
 
         public string Path { get; set; }
 
@@ -154,6 +155,7 @@ namespace NzbDrone.Core.Movies
 
             Monitored = otherMovie.Monitored;
             MinimumAvailability = otherMovie.MinimumAvailability;
+            AutoAddEditions = otherMovie.AutoAddEditions;
 
             RootFolderPath = otherMovie.RootFolderPath;
             Tags = otherMovie.Tags;
