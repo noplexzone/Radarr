@@ -30,6 +30,9 @@ env:
   # Upstream release the fork is based on, the image tag adds the editions build number
   RADARR_BASE_VERSION: 6.4.4.10685
   DOTNET_CLI_TELEMETRY_OPTOUT: true
+  # Upstream 6.4.4 pins SixLabors.ImageSharp 3.1.12, which has published advisories and no patched 3.1 release.
+  # Restore treats audit warnings as errors, so auditing is off until upstream moves off that version.
+  NuGetAudit: false
   DOTNET_NOLOGO: true
 
 jobs:
