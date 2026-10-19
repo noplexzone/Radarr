@@ -280,6 +280,7 @@ def run(args):
 
         scenarios = [
             scenario_single_edition,
+            scenario_adoption,
             scenario_second_edition,
             scenario_upgrade_within_edition,
             scenario_untracked_edition,
@@ -360,6 +361,25 @@ def scenario_single_edition(ctx, r):
     # Nothing better available, a second search grabs nothing
     grabbed = search_and_import(radarr, state, "MoviesSearch", movieIds=[movie_id])
     r.check("no re-grab when the cutoff is met", grabbed == [], str(grabbed))
+
+
+def scenario_adoption(ctx, r):
+    """An existing folder of Plex-tagged editions is adopted without touching it"""
+    radarr = ctx["radarr"]
+    movie_id, path = add_movie(ctx["args"], radarr, ctx["root"], "Dune", 2021, 438631, ctx["profile_id"])
+    names = ["Theatrical", "Director's Cut", "Final Cut"]
+    for name in names:
+        mocks.make_video(os.path.join(path, f"Dune (2021) {{edition-{name}}} Bluray-1080p.mkv"), f"dune {name}")
+    before = snapshot(path)
+
+    radarr.command("RescanMovie", movieId=movie_id)
+
+    by_edition = files_by_edition(radarr, movie_id)
+    r.check("each tagged file in its own edition", all(len(by_edition.get(n, [])) == 1 for n in names),
+            str({k: len(v) for k, v in by_edition.items()}))
+    r.check("no other edition holds a file", sum(len(v) for v in by_edition.values()) == 3,
+            str({k: len(v) for k, v in by_edition.items()}))
+    r.check("folder unchanged", snapshot(path) == before)
 
 
 def scenario_second_edition(ctx, r):

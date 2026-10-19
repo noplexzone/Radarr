@@ -114,6 +114,14 @@ def add_stock_movie(args, root, title, year, tmdb_id, profile_id):
     return int(movie_id), path
 
 
+SETTINGS_TABLES = ["Config", "QualityProfiles", "Indexers", "DownloadClients", "RootFolders", "NamingConfig", "Tags", "CustomFormats"]
+
+
+def settings(args):
+    db = f"{args.pg_prefix}_main"
+    return {t: e2e.psql(args, f'SELECT * FROM "{t}" ORDER BY 1', db) for t in SETTINGS_TABLES}
+
+
 def db_state(args):
     db = f"{args.pg_prefix}_main"
     movies = e2e.psql(args, 'SELECT "Id", "MovieFileId" FROM "Movies" ORDER BY "Id"', db)
@@ -125,21 +133,25 @@ def run(args):
     work = os.path.abspath(args.work)
     shutil.rmtree(work, ignore_errors=True)
     data, root, log_path = os.path.join(work, "data"), os.path.join(work, "movies"), os.path.join(work, "radarr.log")
-    os.makedirs(root)
+    for d in (root, os.path.join(work, "complete"), os.path.join(work, "recycle")):
+        os.makedirs(d)
     args.work = work
     e2e.write_config(data, args)
     recreate_databases(args)
 
     r = e2e.Results()
     instance = None
+    state, server = mocks.start(args.mock_port, os.path.join(work, "complete"))
 
     try:
         r.scenario = "Stock Radarr owns the library"
         instance = Instance(args.stock, data, log_path, args.port)
         print(f"Stock Radarr {instance.status['version']}\n\n{r.scenario}")
         radarr = instance.radarr
-        radarr.call("POST", "/rootfolder", {"path": root})
-        profile_id = next(p for p in radarr.get("/qualityprofile") if p["name"] == "HD - 720p/1080p")["id"]
+        # The usual settings of a real install: root folder, indexer, download client, tuned profile
+        state.publish("Some.Other.Movie.2020.1080p.BluRay.x264-GRP")
+        profile_id = e2e.setup(radarr, args, args.mock_port, root)
+        radarr.call("POST", "/tag", {"label": "kids"})
 
         arrival, arrival_path = add_stock_movie(args, root, "Arrival", 2016, 329865, profile_id)
         blade, blade_path = add_stock_movie(args, root, "Blade Runner", 1982, 78, profile_id)
@@ -148,6 +160,7 @@ def run(args):
         radarr.command("RescanMovie")
 
         stock_movies, stock_files = db_state(args)
+        stock_settings = settings(args)
         library = e2e.snapshot(root)
         r.check("both movies have their file", all(not line.endswith("|0") for line in stock_movies), str(stock_movies))
         stock_version = instance.status["version"]
@@ -168,6 +181,8 @@ def run(args):
         movies, movie_files = db_state(args)
         r.check("movies keep their main file", movies == stock_movies, f"{stock_movies} -> {movies}")
         r.check("file records kept", movie_files == stock_files, f"{stock_files} -> {movie_files}")
+        changed = [t for t, rows in settings(args).items() if rows != stock_settings[t]]
+        r.check("settings, profiles, indexers and download clients preserved", not changed, str(changed))
         eds = e2e.editions(radarr, blade)
         r.check("existing file becomes the default edition", list(eds) == ["Final Cut"] and eds["Final Cut"]["isDefault"]
                 and eds["Final Cut"]["movieFileId"] == int(stock_files[1].split("|")[0]), json.dumps(eds))
@@ -224,6 +239,7 @@ def run(args):
     finally:
         if instance:
             instance.stop()
+        server.shutdown()
 
     passed = sum(c["passed"] for c in r.checks)
     with open(os.path.join(work, "results.json"), "w") as f:
@@ -248,6 +264,7 @@ if __name__ == "__main__":
     parser.add_argument("--fork", required=True, help="Path to the editions build's Radarr executable")
     parser.add_argument("--work", default="/tmp/radarr-rollback")
     parser.add_argument("--port", type=int, default=17981)
+    parser.add_argument("--mock-port", type=int, default=17982)
     parser.add_argument("--pg-host", default="localhost")
     parser.add_argument("--pg-port", type=int, default=5432)
     parser.add_argument("--pg-user", default="radarr")

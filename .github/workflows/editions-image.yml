@@ -142,6 +142,15 @@ jobs:
           curl -s -o /dev/null -w "movieedition: %{http_code}\n" -H "X-Api-Key: $api_key" "http://localhost:7878/api/v3/movieedition?movieId=1"
           curl -sf -H "X-Api-Key: $api_key" http://localhost:7878/api/v3/config/mediamanagement | jq -e 'has("autoAddEditionsDefault")'
 
+          # State in /config survives a container restart
+          curl -sf -H "X-Api-Key: $api_key" -H "Content-Type: application/json" -d '{"label":"smoke"}' http://localhost:7878/api/v3/tag > /dev/null
+          docker restart radarr
+          for i in $(seq 1 60); do
+            if [ "$(curl -s http://localhost:7878/ping | jq -r .status 2>/dev/null)" = "OK" ]; then break; fi
+            sleep 2
+          done
+          curl -sf -H "X-Api-Key: $api_key" http://localhost:7878/api/v3/tag | jq -e 'any(.[]; .label == "smoke")'
+
       - name: Show container log
         if: always()
         run: docker logs radarr 2>&1 | tail -100 || true
