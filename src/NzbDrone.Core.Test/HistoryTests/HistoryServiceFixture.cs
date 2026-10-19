@@ -117,5 +117,24 @@ namespace NzbDrone.Core.Test.HistoryTests
             Mocker.GetMock<IHistoryRepository>()
                 .Verify(v => v.Insert(It.Is<MovieHistory>(h => h.Data["movieEditionId"] == "2" && h.GetMovieEditionId() == 2)), Times.Once());
         }
+
+        [Test]
+        public void should_record_edition_of_imported_file()
+        {
+            var movieFile = Builder<MovieFile>.CreateNew()
+                                              .With(f => f.MovieEditionId = 3)
+                                              .Build();
+
+            var localMovie = new LocalMovie
+            {
+                Movie = Builder<Movie>.CreateNew().Build(),
+                Path = @"C:\Test\Unsorted\Movie.2011.Final.Cut.mkv"
+            };
+
+            Subject.Handle(new MovieFileImportedEvent(localMovie, movieFile, new List<DeletedMovieFile>(), true, new DownloadClientItem { DownloadId = "abcd" }));
+
+            Mocker.GetMock<IHistoryRepository>()
+                .Verify(v => v.Insert(It.Is<MovieHistory>(h => h.EventType == MovieHistoryEventType.DownloadFolderImported && h.GetMovieEditionId() == 3)), Times.Once());
+        }
     }
 }

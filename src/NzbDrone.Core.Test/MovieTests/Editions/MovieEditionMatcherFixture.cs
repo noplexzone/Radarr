@@ -39,6 +39,7 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
         [TestCase("DIRECTORS.CUT", 2)]
         [TestCase("Director's Edition", 2)]
         [TestCase("Final Cut", 3)]
+        [TestCase("The Final Cut", 3)]
         [TestCase("Final Cut Remastered", 3)]
         [TestCase("Remastered Final Cut", 3)]
         public void should_match_existing_edition(string parsed, int editionId)
@@ -47,6 +48,18 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
 
             match.Type.Should().Be(MovieEditionMatchType.Matched);
             match.Edition.Id.Should().Be(editionId);
+        }
+
+        [Test]
+        public void should_match_edition_named_with_leading_article()
+        {
+            _editions[2].Title = "The Final Cut";
+            _editions[2].Key = EditionNormalizer.Normalize("The Final Cut");
+
+            var match = MovieEditionMatcher.Match(1, _editions, "Final Cut");
+
+            match.Type.Should().Be(MovieEditionMatchType.Matched);
+            match.Edition.Id.Should().Be(3);
         }
 
         [Test]
@@ -80,6 +93,8 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
         [TestCase("3in1")]
         [TestCase("Theatrical 2in1")]
         [TestCase("Director's Cut Final Cut")]
+        [TestCase("Final Cut Directors Cut")]
+        [TestCase("Theatrical Cut Extended Cut")]
         public void should_be_ambiguous(string parsed)
         {
             var match = MovieEditionMatcher.Match(1, _editions, parsed);

@@ -38,6 +38,9 @@ namespace NzbDrone.Core.Movies.Editions
     {
         private static readonly Regex MultiCutRegex = new Regex(@"\b[2-4] ?in ?1\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // e.g. "Final Cut Directors Cut", a release naming two cuts
+        private static readonly Regex TwoCutsRegex = new Regex(@"\bcut\b.*\bcut\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         // Words describing a restoration rather than a different cut of the movie
         private static readonly Regex QualifierRegex = new Regex(@"\b(4k |uhd )?(remastered|remaster|restored|restoration)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
@@ -51,7 +54,7 @@ namespace NzbDrone.Core.Movies.Editions
                 return MovieEditionMatch.Default(defaultEdition);
             }
 
-            if (MultiCutRegex.IsMatch(parsedEdition))
+            if (MultiCutRegex.IsMatch(parsedEdition) || TwoCutsRegex.IsMatch(parsedEdition))
             {
                 return MovieEditionMatch.Ambiguous($"'{parsedEdition}' contains more than one cut of the movie");
             }

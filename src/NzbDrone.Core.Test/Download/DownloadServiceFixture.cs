@@ -270,7 +270,7 @@ namespace NzbDrone.Core.Test.Download
         }
 
         [Test]
-        public async Task should_not_create_new_edition_when_grab_fails()
+        public void should_not_create_new_edition_when_grab_fails()
         {
             var mock = WithUsenetClient();
             mock.Setup(s => s.Download(It.IsAny<RemoteMovie>(), It.IsAny<IIndexer>())).Throws(new DownloadClientRejectedReleaseException(_parseResult.Release, "Rejected"));

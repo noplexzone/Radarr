@@ -219,6 +219,11 @@ namespace NzbDrone.Core.History
             history.Data.Add("Size", message.MovieInfo.Size.ToString());
             history.Data.Add("IndexerFlags", message.ImportedMovie.IndexerFlags.ToString());
 
+            if (message.ImportedMovie.MovieEditionId > 0)
+            {
+                history.Data.Add(MovieHistoryEditionExtensions.MovieEditionIdKey, message.ImportedMovie.MovieEditionId.ToString());
+            }
+
             _historyRepository.Insert(history);
         }
 

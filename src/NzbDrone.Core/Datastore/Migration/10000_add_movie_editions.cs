@@ -163,6 +163,7 @@ namespace NzbDrone.Core.Datastore.Migration
             key = Regex.Replace(key, @"[^\p{L}\p{N}' ]+", " ");
             key = Regex.Replace(key, @"\b(director|collector)'?s\b", "$1's");
             key = Regex.Replace(key, @"\s{2,}", " ").Trim();
+            key = Regex.Replace(key, @"^the\s+(?=\S)", string.Empty);
             key = Regex.Replace(key, @"(?<=\S)\s+(cut|edition|version)$", string.Empty);
 
             return key;
