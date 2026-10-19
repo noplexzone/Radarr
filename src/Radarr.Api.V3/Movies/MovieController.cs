@@ -32,6 +32,7 @@ namespace Radarr.Api.V3.Movies
     [V3ApiController]
     public class MovieController : RestControllerWithSignalR<MovieResource, Movie>,
                                 IHandle<MovieUpdatedEvent>,
+                                IHandle<MovieEditionsChangedEvent>,
                                 IHandle<MovieEditedEvent>,
                                 IHandle<MoviesDeletedEvent>,
                                 IHandle<MovieRenamedEvent>,
@@ -338,6 +339,12 @@ namespace Radarr.Api.V3.Movies
         public void Handle(MovieUpdatedEvent message)
         {
             BroadcastResourceChange(ModelAction.Updated, MapToResource(message.Movie));
+        }
+
+        [NonAction]
+        public void Handle(MovieEditionsChangedEvent message)
+        {
+            BroadcastResourceChange(ModelAction.Updated, MapToResource(_moviesService.GetMovie(message.MovieId)));
         }
 
         [NonAction]

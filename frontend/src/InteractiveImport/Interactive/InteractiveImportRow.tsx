@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch } from 'react-redux';
+import SelectInput from 'Components/Form/SelectInput';
 import Icon from 'Components/Icon';
 import TableRowCell from 'Components/Table/Cells/TableRowCell';
 import TableRowCellButton from 'Components/Table/Cells/TableRowCellButton';
@@ -19,12 +20,14 @@ import Movie from 'Movie/Movie';
 import MovieFormats from 'Movie/MovieFormats';
 import MovieLanguages from 'Movie/MovieLanguages';
 import MovieQuality from 'Movie/MovieQuality';
+import useMovie from 'Movie/useMovie';
 import { QualityModel } from 'Quality/Quality';
 import {
   reprocessInteractiveImportItems,
   updateInteractiveImportItem,
 } from 'Store/Actions/interactiveImportActions';
 import CustomFormat from 'typings/CustomFormat';
+import { InputChanged } from 'typings/inputs';
 import { SelectStateInputProps } from 'typings/props';
 import Rejection from 'typings/Rejection';
 import formatBytes from 'Utilities/Number/formatBytes';
@@ -59,6 +62,8 @@ interface InteractiveImportRowProps {
   rejections: Rejection[];
   columns: Column[];
   movieFileId?: number;
+  movieEditionId?: number;
+  editionTitle?: string;
   isReprocessing?: boolean;
   isSelected?: boolean;
   modalTitle: string;
@@ -83,6 +88,8 @@ function InteractiveImportRow(props: InteractiveImportRowProps) {
     isSelected,
     modalTitle,
     movieFileId,
+    movieEditionId,
+    editionTitle,
     columns,
     onSelectedChange,
     onValidRowChange,
@@ -163,6 +170,7 @@ function InteractiveImportRow(props: InteractiveImportRowProps) {
         updateInteractiveImportItem({
           id,
           movie,
+          movieEditionId: 0,
         })
       );
 
@@ -172,6 +180,42 @@ function InteractiveImportRow(props: InteractiveImportRowProps) {
       selectRowAfterChange();
     },
     [id, dispatch, setSelectModalOpen, selectRowAfterChange]
+  );
+
+  // An edition the movie doesn't have yet comes from the file name, it's created on import
+  const libraryMovie = useMovie(movie?.id);
+
+  const editionOptions = useMemo(() => {
+    const options = (libraryMovie?.editions ?? []).map((e) => ({
+      key: e.id,
+      value: e.title,
+    }));
+
+    if (!movieEditionId && editionTitle) {
+      options.unshift({
+        key: 0,
+        value: translate('NewEditionTitle', { title: editionTitle }),
+      });
+    } else if (!movieEditionId) {
+      options.unshift({ key: 0, value: translate('EditionFromFileName') });
+    }
+
+    return options;
+  }, [libraryMovie, movieEditionId, editionTitle]);
+
+  const onEditionChange = useCallback(
+    ({ value }: InputChanged<number>) => {
+      dispatch(
+        updateInteractiveImportItem({
+          id,
+          movieEditionId: Number(value),
+        })
+      );
+
+      dispatch(reprocessInteractiveImportItems({ ids: [id] }));
+      selectRowAfterChange();
+    },
+    [id, dispatch, selectRowAfterChange]
   );
 
   const onSelectReleaseGroupPress = useCallback(() => {
@@ -291,6 +335,17 @@ function InteractiveImportRow(props: InteractiveImportRowProps) {
           )}
         </TableRowCellButton>
       ) : null}
+
+      <TableRowCell>
+        {movie ? (
+          <SelectInput
+            name="movieEditionId"
+            value={movieEditionId ?? 0}
+            values={editionOptions}
+            onChange={onEditionChange}
+          />
+        ) : null}
+      </TableRowCell>
 
       <TableRowCellButton
         title={translate('ClickToChangeReleaseGroup')}

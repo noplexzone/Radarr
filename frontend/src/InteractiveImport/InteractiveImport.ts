@@ -15,6 +15,7 @@ export interface InteractiveImportCommandOptions {
   indexerFlags: number;
   downloadId?: string;
   movieFileId?: number;
+  movieEditionId?: number;
 }
 
 interface InteractiveImport extends ModelBase {
@@ -32,6 +33,8 @@ interface InteractiveImport extends ModelBase {
   indexerFlags: number;
   rejections: Rejection[];
   movieFileId?: number;
+  movieEditionId?: number;
+  editionTitle?: string;
 }
 
 export default InteractiveImport;

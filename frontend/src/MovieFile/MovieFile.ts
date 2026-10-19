@@ -6,6 +6,8 @@ import MediaInfo from 'typings/MediaInfo';
 
 export interface MovieFile extends ModelBase {
   movieId: number;
+  movieEditionId: number;
+  edition: string;
   relativePath: string;
   path: string;
   size: number;

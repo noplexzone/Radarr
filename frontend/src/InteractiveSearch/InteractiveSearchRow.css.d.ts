@@ -6,6 +6,7 @@ interface CssExports {
   'customFormatScore': string;
   'download': string;
   'downloadIcon': string;
+  'edition': string;
   'history': string;
   'indexer': string;
   'indexerFlags': string;

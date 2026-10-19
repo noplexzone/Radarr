@@ -1,5 +1,6 @@
 export default interface MediaManagement {
   autoUnmonitorPreviouslyDownloadedMovies: boolean;
+  autoAddEditionsDefault: boolean;
   recycleBin: string;
   recycleBinCleanupDays: number;
   downloadPropersAndRepacks: string;

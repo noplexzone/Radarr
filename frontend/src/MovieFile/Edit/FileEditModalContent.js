@@ -29,6 +29,7 @@ class FileEditModalContent extends Component {
       proper,
       real,
       edition,
+      movieEditionId,
       releaseGroup
     } = props;
 
@@ -39,6 +40,7 @@ class FileEditModalContent extends Component {
       proper,
       real,
       edition,
+      movieEditionId,
       releaseGroup
     };
   }
@@ -52,6 +54,10 @@ class FileEditModalContent extends Component {
 
   onInputChange = ({ name, value }) => {
     this.setState({ [name]: value });
+  };
+
+  onEditionChange = ({ value }) => {
+    this.setState({ movieEditionId: parseInt(value) });
   };
 
   onSaveInputs = () => {
@@ -69,6 +75,7 @@ class FileEditModalContent extends Component {
       qualities,
       languages,
       relativePath,
+      editions,
       onModalClose
     } = this.props;
 
@@ -79,8 +86,16 @@ class FileEditModalContent extends Component {
       proper,
       real,
       edition,
+      movieEditionId,
       releaseGroup
     } = this.state;
+
+    const editionOptions = editions ? editions.map(({ id, title }) => {
+      return {
+        key: id,
+        value: title
+      };
+    }) : null;
 
     const qualityOptions = qualities.map(({ id, name }) => {
       return {
@@ -178,12 +193,23 @@ class FileEditModalContent extends Component {
                 <FormGroup>
                   <FormLabel>{translate('Edition')}</FormLabel>
 
-                  <FormInputGroup
-                    type={inputTypes.TEXT}
-                    name="edition"
-                    value={edition}
-                    onChange={this.onInputChange}
-                  />
+                  {
+                    editionOptions ?
+                      <FormInputGroup
+                        type={inputTypes.SELECT}
+                        name="movieEditionId"
+                        value={movieEditionId}
+                        values={editionOptions}
+                        helpText={translate('MovieFileEditionHelpText')}
+                        onChange={this.onEditionChange}
+                      /> :
+                      <FormInputGroup
+                        type={inputTypes.TEXT}
+                        name="edition"
+                        value={edition}
+                        onChange={this.onInputChange}
+                      />
+                  }
                 </FormGroup>
 
                 <FormGroup>
@@ -223,6 +249,8 @@ FileEditModalContent.propTypes = {
   real: PropTypes.bool.isRequired,
   relativePath: PropTypes.string.isRequired,
   edition: PropTypes.string.isRequired,
+  movieEditionId: PropTypes.number,
+  editions: PropTypes.arrayOf(PropTypes.object),
   releaseGroup: PropTypes.string.isRequired,
   languageIds: PropTypes.arrayOf(PropTypes.number).isRequired,
   languages: PropTypes.arrayOf(PropTypes.object).isRequired,

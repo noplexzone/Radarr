@@ -87,6 +87,11 @@ const COLUMNS = [
     isVisible: true,
   },
   {
+    name: 'edition',
+    label: () => translate('Edition'),
+    isVisible: true,
+  },
+  {
     name: 'releaseGroup',
     label: () => translate('ReleaseGroup'),
     isVisible: true,
@@ -448,6 +453,7 @@ function InteractiveImportModalContent(
           languages,
           indexerFlags,
           movieFileId,
+          movieEditionId,
         } = item;
 
         if (!movie) {
@@ -483,6 +489,7 @@ function InteractiveImportModalContent(
               quality,
               languages,
               indexerFlags,
+              movieEditionId,
             });
 
             return;
@@ -499,6 +506,7 @@ function InteractiveImportModalContent(
           indexerFlags,
           downloadId,
           movieFileId,
+          movieEditionId,
         });
       }
     });

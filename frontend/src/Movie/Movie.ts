@@ -1,5 +1,6 @@
 import ModelBase from 'App/ModelBase';
 import Language from 'Language/Language';
+import { MovieEditionSummary } from 'Movie/Editions/MovieEdition';
 import { MovieFile } from 'MovieFile/MovieFile';
 import Quality from 'Quality/Quality';
 
@@ -94,6 +95,8 @@ interface Movie extends ModelBase {
   movieFileId: number;
   movieFile?: MovieFile;
   hasFile: boolean;
+  editions?: MovieEditionSummary[];
+  autoAddEditions?: boolean;
   grabbed?: boolean;
   lastSearchTime?: string;
   isAvailable: boolean;

@@ -17,11 +17,13 @@ import translate from 'Utilities/String/translate';
 
 export interface MovieInteractiveSearchModalContentProps {
   movieId: number;
+  movieEditionId?: number;
   onModalClose(): void;
 }
 
 function MovieInteractiveSearchModalContent({
   movieId,
+  movieEditionId,
   onModalClose,
 }: MovieInteractiveSearchModalContentProps) {
   const dispatch = useDispatch();
@@ -48,7 +50,7 @@ function MovieInteractiveSearchModalContent({
       </ModalHeader>
 
       <ModalBody scrollDirection={scrollDirections.BOTH}>
-        <InteractiveSearch searchPayload={{ movieId }} />
+        <InteractiveSearch searchPayload={{ movieId, movieEditionId }} />
       </ModalBody>
 
       <ModalFooter>

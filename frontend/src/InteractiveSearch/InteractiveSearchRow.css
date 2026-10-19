@@ -11,6 +11,12 @@
   word-break: break-all;
 }
 
+.edition {
+  composes: cell from '~Components/Table/Cells/TableRowCell.css';
+
+  width: 120px;
+}
+
 .indexer {
   composes: cell from '~Components/Table/Cells/TableRowCell.css';
 

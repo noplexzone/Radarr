@@ -1,0 +1,34 @@
+.container {
+  border: 1px solid var(--borderColor);
+  border-radius: 4px;
+  background-color: var(--inputBackgroundColor);
+}
+
+.blankpad {
+  padding-top: 10px;
+  padding-bottom: 10px;
+  padding-left: 2em;
+}
+
+.monitored {
+  composes: cell from '~Components/Table/Cells/TableRowCell.css';
+
+  width: 42px;
+}
+
+.actions {
+  composes: cell from '~Components/Table/Cells/TableRowCell.css';
+
+  width: 130px;
+  white-space: nowrap;
+}
+
+.addButtonContainer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px;
+}
+
+.defaultLabel {
+  margin-left: 8px;
+}

@@ -14,6 +14,7 @@ export interface CommandBody {
   suppressMessages: boolean;
   movieId?: number;
   movieIds?: number[];
+  movieEditionId?: number;
 }
 
 interface Command extends ModelBase {

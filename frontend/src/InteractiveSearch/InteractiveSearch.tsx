@@ -46,6 +46,12 @@ const columns: Column[] = [
     isVisible: true,
   },
   {
+    name: 'editionTitle',
+    label: () => translate('Edition'),
+    isSortable: true,
+    isVisible: true,
+  },
+  {
     name: 'indexer',
     label: () => translate('Indexer'),
     isSortable: true,

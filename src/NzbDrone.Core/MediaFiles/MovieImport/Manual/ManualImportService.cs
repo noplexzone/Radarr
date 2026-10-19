@@ -25,7 +25,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
     {
         List<ManualImportItem> GetMediaFiles(int movieId);
         List<ManualImportItem> GetMediaFiles(string path, string downloadId, int? movieId, bool filterExistingFiles);
-        ManualImportItem ReprocessItem(string path, string downloadId, int movieId, string releaseGroup, QualityModel quality, List<Language> languages, int indexerFlags);
+        ManualImportItem ReprocessItem(string path, string downloadId, int movieId, string releaseGroup, QualityModel quality, List<Language> languages, int indexerFlags, int movieEditionId = 0);
     }
 
     public class ManualImportService : IExecute<ManualImportCommand>, IManualImportService
@@ -133,7 +133,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
             return ProcessFolder(path, path, downloadId, movieId, filterExistingFiles);
         }
 
-        public ManualImportItem ReprocessItem(string path, string downloadId, int movieId, string releaseGroup, QualityModel quality, List<Language> languages, int indexerFlags)
+        public ManualImportItem ReprocessItem(string path, string downloadId, int movieId, string releaseGroup, QualityModel quality, List<Language> languages, int indexerFlags, int movieEditionId = 0)
         {
             var rootFolder = Path.GetDirectoryName(path);
             var movie = _movieService.GetMovie(movieId);
@@ -172,6 +172,12 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
 
             localMovie.CustomFormats = _formatCalculator.ParseCustomFormat(localMovie);
             localMovie.CustomFormatScore = localMovie.Movie?.QualityProfile?.CalculateCustomFormatScore(localMovie.CustomFormats) ?? 0;
+
+            // A chosen edition is kept as is, otherwise the file name decides
+            if (movieEditionId > 0)
+            {
+                localMovie.MovieEdition = GetSelectedEdition(new ManualImportFile { MovieEditionId = movieEditionId }, movie);
+            }
 
             // Augment movie file so imported files have all additional information an automatic import would
             localMovie = _aggregationService.Augment(localMovie, downloadClientItem);

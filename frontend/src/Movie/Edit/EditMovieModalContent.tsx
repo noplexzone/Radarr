@@ -50,6 +50,7 @@ function EditMovieModalContent({
     monitored,
     minimumAvailability,
     qualityProfileId,
+    autoAddEditions,
     path,
     tags,
     rootFolderPath: initialRootFolderPath,
@@ -75,6 +76,7 @@ function EditMovieModalContent({
         monitored,
         minimumAvailability,
         qualityProfileId,
+        autoAddEditions,
         path,
         tags,
       },
@@ -85,6 +87,7 @@ function EditMovieModalContent({
     monitored,
     minimumAvailability,
     qualityProfileId,
+    autoAddEditions,
     path,
     tags,
     pendingChanges,
@@ -200,6 +203,18 @@ function EditMovieModalContent({
               type={inputTypes.QUALITY_PROFILE_SELECT}
               name="qualityProfileId"
               {...settings.qualityProfileId}
+              onChange={handleInputChange}
+            />
+          </FormGroup>
+
+          <FormGroup size={sizes.MEDIUM}>
+            <FormLabel>{translate('AutoAddEditions')}</FormLabel>
+
+            <FormInputGroup
+              type={inputTypes.CHECK}
+              name="autoAddEditions"
+              helpText={translate('AutoAddEditionsHelpText')}
+              {...settings.autoAddEditions}
               onChange={handleInputChange}
             />
           </FormGroup>

@@ -347,6 +347,18 @@ function MediaManagement() {
                 />
               </FormGroup>
 
+              <FormGroup size={sizes.MEDIUM}>
+                <FormLabel>{translate('AutoAddEditionsDefault')}</FormLabel>
+
+                <FormInputGroup
+                  type={inputTypes.CHECK}
+                  name="autoAddEditionsDefault"
+                  helpText={translate('AutoAddEditionsDefaultHelpText')}
+                  onChange={handleInputChange}
+                  {...settings.autoAddEditionsDefault}
+                />
+              </FormGroup>
+
               <FormGroup
                 advancedSettings={showAdvancedSettings}
                 isAdvanced={true}

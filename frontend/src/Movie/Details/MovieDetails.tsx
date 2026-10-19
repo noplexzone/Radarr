@@ -94,6 +94,7 @@ import {
 import translate from 'Utilities/String/translate';
 import MovieCastPosters from './Credits/Cast/MovieCastPosters';
 import MovieCrewPosters from './Credits/Crew/MovieCrewPosters';
+import MovieEditionsTable from './Editions/MovieEditionsTable';
 import MovieDetailsLinks from './MovieDetailsLinks';
 import MovieReleaseDates from './MovieReleaseDates';
 import MovieStatusLabel from './MovieStatusLabel';
@@ -905,6 +906,10 @@ function MovieDetails({ movieId }: MovieDetailsProps) {
               {translate('LoadingMovieCreditsFailed')}
             </Alert>
           ) : null}
+
+          <FieldSet legend={translate('Editions')}>
+            <MovieEditionsTable movieId={id} />
+          </FieldSet>
 
           <FieldSet legend={translate('Files')}>
             <MovieFileEditorTable movieId={id} />

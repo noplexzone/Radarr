@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
 import ProtocolLabel from 'Activity/Queue/ProtocolLabel';
 import Icon from 'Components/Icon';
+import Label from 'Components/Label';
 import Link from 'Components/Link/Link';
 import SpinnerIconButton from 'Components/Link/SpinnerIconButton';
 import ConfirmModal from 'Components/Modal/ConfirmModal';
@@ -95,6 +96,9 @@ function InteractiveSearchRow(props: InteractiveSearchRowProps) {
     customFormatScore,
     customFormats,
     mappedMovieId,
+    movieEditionId,
+    editionMatch,
+    editionTitle,
     indexerFlags = [],
     rejections = [],
     downloadAllowed,
@@ -182,6 +186,14 @@ function InteractiveSearchRow(props: InteractiveSearchRowProps) {
             {title}
           </Link>
         </div>
+      </TableRowCell>
+
+      <TableRowCell className={styles.edition}>
+        {editionTitle}
+
+        {editionMatch === 'new' ? (
+          <Label kind={kinds.INFO}>{translate('New')}</Label>
+        ) : null}
       </TableRowCell>
 
       <TableRowCell className={styles.indexer}>{indexer}</TableRowCell>
@@ -343,6 +355,7 @@ function InteractiveSearchRow(props: InteractiveSearchRowProps) {
         indexerId={indexerId}
         guid={guid}
         movieId={mappedMovieId}
+        movieEditionId={movieEditionId}
         languages={languages}
         quality={quality}
         protocol={protocol}

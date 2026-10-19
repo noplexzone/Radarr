@@ -13,12 +13,17 @@ function createMapStateToProps() {
     createMovieFileSelector(),
     (state) => state.settings.qualityProfiles,
     (state) => state.settings.languages,
-    (movieFile, qualityProfiles, languages) => {
+    (state) => state.movies.items,
+    (movieFile, qualityProfiles, languages, movies) => {
 
       const filterItems = ['Any', 'Original'];
       const filteredLanguages = languages.items.filter((lang) => !filterItems.includes(lang.name));
 
       const quality = movieFile.quality;
+      const editions = movies.find((m) => m.id === movieFile.movieId)?.editions;
+
+      // Files that predate editions belong to the default edition
+      const movieEditionId = movieFile.movieEditionId || editions?.find((e) => e.isDefault)?.id;
 
       return {
         isFetching: qualityProfiles.isSchemaFetching || languages.isFetching,
@@ -32,6 +37,8 @@ function createMapStateToProps() {
         languages: filteredLanguages,
         indexerFlags: movieFile.indexerFlags,
         edition: movieFile.edition,
+        editions,
+        movieEditionId,
         releaseGroup: movieFile.releaseGroup,
         relativePath: movieFile.relativePath
       };
@@ -65,6 +72,7 @@ class FileEditModalContentConnector extends Component {
       proper,
       languageIds,
       edition,
+      movieEditionId,
       releaseGroup,
       indexerFlags
     } = payload;
@@ -91,7 +99,10 @@ class FileEditModalContentConnector extends Component {
         id: this.props.movieFileId,
         languages,
         indexerFlags,
-        edition,
+
+        // The edition's name follows the chosen edition, sending the old text along would overwrite it
+        edition: this.props.editions ? undefined : edition,
+        movieEditionId,
         releaseGroup,
         quality: {
           quality,
@@ -128,6 +139,7 @@ FileEditModalContentConnector.propTypes = {
   qualityId: PropTypes.number.isRequired,
   real: PropTypes.bool.isRequired,
   edition: PropTypes.string.isRequired,
+  editions: PropTypes.arrayOf(PropTypes.object),
   releaseGroup: PropTypes.string.isRequired,
   relativePath: PropTypes.string.isRequired,
   proper: PropTypes.bool.isRequired,

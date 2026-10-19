@@ -19,6 +19,10 @@ namespace Radarr.Api.V3.ManualImport
         public List<CustomFormatResource> CustomFormats { get; set; }
         public int CustomFormatScore { get; set; }
         public int IndexerFlags { get; set; }
+
+        // 0 lets the file name decide
+        public int MovieEditionId { get; set; }
+        public string EditionTitle { get; set; }
         public IEnumerable<ImportRejectionResource> Rejections { get; set; }
     }
 }

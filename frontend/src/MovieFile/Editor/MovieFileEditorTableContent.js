@@ -15,6 +15,7 @@ class MovieFileEditorTableContent extends Component {
   render() {
     const {
       items,
+      editions,
       columns,
       sortKey,
       sortDirection,
@@ -47,6 +48,7 @@ class MovieFileEditorTableContent extends Component {
                       <MovieFileEditorRow
                         key={item.id}
                         columns={columns}
+                        editions={editions}
                         {...item}
                         onDeletePress={this.props.onDeletePress}
                       />
@@ -66,6 +68,7 @@ MovieFileEditorTableContent.propTypes = {
   movieId: PropTypes.number,
   isDeleting: PropTypes.bool.isRequired,
   items: PropTypes.arrayOf(PropTypes.object).isRequired,
+  editions: PropTypes.arrayOf(PropTypes.object),
   columns: PropTypes.arrayOf(PropTypes.object).isRequired,
   sortKey: PropTypes.string.isRequired,
   sortDirection: PropTypes.oneOf(sortDirections.all),

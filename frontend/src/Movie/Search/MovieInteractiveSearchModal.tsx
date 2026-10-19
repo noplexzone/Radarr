@@ -18,6 +18,7 @@ interface MovieInteractiveSearchModalProps
 function MovieInteractiveSearchModal({
   isOpen,
   movieId,
+  movieEditionId,
   onModalClose,
 }: MovieInteractiveSearchModalProps) {
   const dispatch = useDispatch();
@@ -38,6 +39,7 @@ function MovieInteractiveSearchModal({
     >
       <MovieInteractiveSearchModalContent
         movieId={movieId}
+        movieEditionId={movieEditionId}
         onModalClose={handleModalClose}
       />
     </Modal>

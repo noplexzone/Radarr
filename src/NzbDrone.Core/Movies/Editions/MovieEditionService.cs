@@ -150,7 +150,15 @@ namespace NzbDrone.Core.Movies.Editions
 
             _logger.Info("Adding edition '{0}' to movie {1}", edition.DisplayTitle, edition.MovieId);
 
-            return _editionRepository.Insert(edition);
+            var added = _editionRepository.Insert(edition);
+
+            // Every movie gets a default edition, announcing those would only add noise when movies are added in bulk
+            if (!added.IsDefault)
+            {
+                _eventAggregator.PublishEvent(new MovieEditionsChangedEvent(added.MovieId));
+            }
+
+            return added;
         }
 
         public MovieEdition EnsureEdition(MovieEdition edition)
@@ -212,6 +220,8 @@ namespace NzbDrone.Core.Movies.Editions
                 _mediaFileRepository.UpdateMany(files);
             }
 
+            _eventAggregator.PublishEvent(new MovieEditionsChangedEvent(stored.MovieId));
+
             return stored;
         }
 
@@ -238,6 +248,7 @@ namespace NzbDrone.Core.Movies.Editions
             }
 
             _editionRepository.Delete(edition.Id);
+            _eventAggregator.PublishEvent(new MovieEditionsChangedEvent(edition.MovieId));
         }
 
         public void AssignFiles(List<MovieFile> files, MovieEdition edition)
@@ -260,6 +271,7 @@ namespace NzbDrone.Core.Movies.Editions
             foreach (var movieId in files.Select(f => f.MovieId).Distinct())
             {
                 _eventAggregator.PublishEvent(new MovieEditionFilesChangedEvent(movieId));
+                _eventAggregator.PublishEvent(new MovieEditionsChangedEvent(movieId));
             }
         }
 

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import DescriptionList from 'Components/DescriptionList/DescriptionList';
 import DescriptionListItem from 'Components/DescriptionList/DescriptionListItem';
+import SelectInput from 'Components/Form/SelectInput';
 import Button from 'Components/Link/Button';
 import SpinnerErrorButton from 'Components/Link/SpinnerErrorButton';
 import ModalBody from 'Components/Modal/ModalBody';
@@ -22,6 +23,7 @@ import { grabRelease } from 'Store/Actions/releaseActions';
 import { fetchDownloadClients } from 'Store/Actions/settingsActions';
 import createEnabledDownloadClientsSelector from 'Store/Selectors/createEnabledDownloadClientsSelector';
 import { createMovieSelectorForHook } from 'Store/Selectors/createMovieSelector';
+import { InputChanged } from 'typings/inputs';
 import translate from 'Utilities/String/translate';
 import SelectDownloadClientModal from './DownloadClient/SelectDownloadClientModal';
 import OverrideMatchData from './OverrideMatchData';
@@ -39,6 +41,7 @@ interface OverrideMatchModalContentProps {
   title: string;
   guid: string;
   movieId?: number;
+  movieEditionId?: number;
   languages: Language[];
   quality: QualityModel;
   protocol: DownloadProtocol;
@@ -60,6 +63,7 @@ function OverrideMatchModalContent(props: OverrideMatchModalContentProps) {
   } = props;
 
   const [movieId, setMovieId] = useState(props.movieId);
+  const [movieEditionId, setMovieEditionId] = useState(props.movieEditionId);
   const [languages, setLanguages] = useState(props.languages);
   const [quality, setQuality] = useState(props.quality);
   const [downloadClientId, setDownloadClientId] = useState<number | null>(null);
@@ -88,10 +92,21 @@ function OverrideMatchModalContent(props: OverrideMatchModalContentProps) {
   const onMovieSelect = useCallback(
     (m: Movie) => {
       setMovieId(m.id);
+      setMovieEditionId(undefined);
       setSelectModalOpen(null);
     },
     [setMovieId, setSelectModalOpen]
   );
+
+  // Leaving the edition unset lets the release's own edition decide, a new edition is created when needed
+  const editionOptions = [
+    { key: 0, value: translate('EditionFromRelease') },
+    ...(movie?.editions ?? []).map((e) => ({ key: e.id, value: e.title })),
+  ];
+
+  const onEditionChange = useCallback(({ value }: InputChanged<number>) => {
+    setMovieEditionId(Number(value) || undefined);
+  }, []);
 
   const onSelectQualityPress = useCallback(() => {
     setSelectModalOpen('quality');
@@ -146,6 +161,7 @@ function OverrideMatchModalContent(props: OverrideMatchModalContentProps) {
         indexerId,
         guid,
         movieId,
+        movieEditionId,
         quality,
         languages,
         downloadClientId,
@@ -156,6 +172,7 @@ function OverrideMatchModalContent(props: OverrideMatchModalContentProps) {
     indexerId,
     guid,
     movieId,
+    movieEditionId,
     quality,
     languages,
     downloadClientId,
@@ -195,6 +212,21 @@ function OverrideMatchModalContent(props: OverrideMatchModalContentProps) {
               />
             }
           />
+
+          {movie ? (
+            <DescriptionListItem
+              className={styles.item}
+              title={translate('Edition')}
+              data={
+                <SelectInput
+                  name="movieEditionId"
+                  value={movieEditionId ?? 0}
+                  values={editionOptions}
+                  onChange={onEditionChange}
+                />
+              }
+            />
+          ) : null}
 
           <DescriptionListItem
             className={styles.item}

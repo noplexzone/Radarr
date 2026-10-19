@@ -88,6 +88,8 @@ class MovieFileEditorRow extends Component {
       indexerFlags,
       languages,
       dateAdded,
+      movieEditionId,
+      editions,
       columns
     } = this.props;
 
@@ -300,6 +302,16 @@ class MovieFileEditorRow extends Component {
               );
             }
 
+            if (name === 'movieEditionId') {
+              const edition = editions?.find((e) => e.id === movieEditionId) ?? editions?.find((e) => e.isDefault);
+
+              return (
+                <TableRowCell key={name}>
+                  {edition?.title}
+                </TableRowCell>
+              );
+            }
+
             if (name === 'releaseGroup') {
               return (
                 <TableRowCell
@@ -390,6 +402,8 @@ MovieFileEditorRow.propTypes = {
   languages: PropTypes.arrayOf(PropTypes.object).isRequired,
   mediaInfo: PropTypes.object,
   dateAdded: PropTypes.string,
+  movieEditionId: PropTypes.number,
+  editions: PropTypes.arrayOf(PropTypes.object),
   columns: PropTypes.arrayOf(PropTypes.object).isRequired,
   onDeletePress: PropTypes.func.isRequired
 };

@@ -80,6 +80,11 @@ export const defaultState = {
       isVisible: true
     },
     {
+      name: 'movieEditionId',
+      label: () => translate('Edition'),
+      isVisible: true
+    },
+    {
       name: 'quality',
       label: () => translate('Quality'),
       isVisible: true
@@ -274,6 +279,7 @@ export const actionHandlers = handleThunks({
           props.languages = movieFile.languages;
           props.quality = movieFile.quality;
           props.edition = movieFile.edition;
+          props.movieEditionId = movieFile.movieEditionId;
           props.releaseGroup = movieFile.releaseGroup;
           props.indexerFlags = movieFile.indexerFlags;
 

@@ -20,7 +20,8 @@ function createMapStateToProps() {
       movieId,
       movieFiles,
       languageProfiles,
-      qualityProfiles
+      qualityProfiles,
+      movie
     ) => {
       const languages = languageProfiles.items;
       const qualities = getQualities(qualityProfiles.schema.items);
@@ -28,6 +29,7 @@ function createMapStateToProps() {
 
       return {
         items: filesForMovie,
+        editions: movie?.editions,
         columns: movieFiles.columns,
         sortKey: movieFiles.sortKey,
         sortDirection: movieFiles.sortDirection,

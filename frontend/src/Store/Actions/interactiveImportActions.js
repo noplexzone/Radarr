@@ -169,6 +169,7 @@ export const actionHandlers = handleThunks({
         languages: item.languages,
         releaseGroup: item.releaseGroup,
         indexerFlags: item.indexerFlags,
+        movieEditionId: item.movieEditionId,
         downloadId: item.downloadId
       };
     });
