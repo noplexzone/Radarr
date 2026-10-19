@@ -1,9 +1,11 @@
 using System;
+using System.Linq;
 using NLog;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Configuration;
 using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.History;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser.Model;
 
 namespace NzbDrone.Core.DecisionEngine.Specifications.RssSync
@@ -41,12 +43,14 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.RssSync
             }
 
             var cdhEnabled = _configService.EnableCompletedDownloadHandling;
-            var qualityProfile = subject.Movie.QualityProfile;
+            var qualityProfile = subject.QualityProfile;
 
             _logger.Debug("Performing history status check on report");
 
             _logger.Debug("Checking current status of movie [{0}] in history", subject.Movie.Id);
-            var mostRecent = _historyService.MostRecentForMovie(subject.Movie.Id);
+            var mostRecent = subject.MovieEdition == null
+                ? _historyService.MostRecentForMovie(subject.Movie.Id)
+                : _historyService.GetByMovieId(subject.Movie.Id, null).Where(h => h.IsForEdition(subject.MovieEdition)).MaxBy(h => h.Date);
 
             if (mostRecent != null && mostRecent.EventType == MovieHistoryEventType.Grabbed)
             {
@@ -60,13 +64,13 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.RssSync
                 var customFormats = _formatService.ParseCustomFormat(mostRecent, subject.Movie);
 
                 var cutoffUnmet = _upgradableSpecification.CutoffNotMet(
-                    subject.Movie.QualityProfile,
+                    qualityProfile,
                     mostRecent.Quality,
                     customFormats,
                     subject.ParsedMovieInfo.Quality);
 
                 var upgradeableRejectReason = _upgradableSpecification.IsUpgradable(
-                    subject.Movie.QualityProfile,
+                    qualityProfile,
                     mostRecent.Quality,
                     customFormats,
                     subject.ParsedMovieInfo.Quality,

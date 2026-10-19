@@ -9,6 +9,7 @@ using NzbDrone.Core.Download;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.Messaging.Events;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Movies.Events;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Profiles.Qualities;
@@ -163,6 +164,11 @@ namespace NzbDrone.Core.History
             history.Data.Add("ReleaseSource", message.Movie.ReleaseSource.ToString());
             history.Data.Add("IndexerFlags", message.Movie.Release.IndexerFlags.ToString());
             history.Data.Add("IndexerId", message.Movie.Release.IndexerId.ToString());
+
+            if (message.Movie.MovieEdition is { IsNew: false })
+            {
+                history.Data.Add(MovieHistoryEditionExtensions.MovieEditionIdKey, message.Movie.MovieEdition.Id.ToString());
+            }
 
             if (!message.Movie.ParsedMovieInfo.ReleaseHash.IsNullOrWhiteSpace())
             {

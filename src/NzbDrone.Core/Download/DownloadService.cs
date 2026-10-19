@@ -11,6 +11,7 @@ using NzbDrone.Core.Download.Pending;
 using NzbDrone.Core.Exceptions;
 using NzbDrone.Core.Indexers;
 using NzbDrone.Core.Messaging.Events;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser.Model;
 
 namespace NzbDrone.Core.Download
@@ -29,6 +30,7 @@ namespace NzbDrone.Core.Download
         private readonly IRateLimitService _rateLimitService;
         private readonly IEventAggregator _eventAggregator;
         private readonly ISeedConfigProvider _seedConfigProvider;
+        private readonly IMovieEditionService _movieEditionService;
         private readonly Logger _logger;
 
         public DownloadService(IProvideDownloadClient downloadClientProvider,
@@ -38,6 +40,7 @@ namespace NzbDrone.Core.Download
                                IRateLimitService rateLimitService,
                                IEventAggregator eventAggregator,
                                ISeedConfigProvider seedConfigProvider,
+                               IMovieEditionService movieEditionService,
                                Logger logger)
         {
             _downloadClientProvider = downloadClientProvider;
@@ -47,6 +50,7 @@ namespace NzbDrone.Core.Download
             _rateLimitService = rateLimitService;
             _eventAggregator = eventAggregator;
             _seedConfigProvider = seedConfigProvider;
+            _movieEditionService = movieEditionService;
             _logger = logger;
         }
 
@@ -125,6 +129,13 @@ namespace NzbDrone.Core.Download
                 }
 
                 throw;
+            }
+
+            if (remoteMovie.MovieEdition is { IsNew: true })
+            {
+                // A release for an edition the movie doesn't have yet creates it once the download client has it
+                remoteMovie.MovieEdition = _movieEditionService.EnsureEdition(remoteMovie.MovieEdition);
+                _logger.Info("Added edition {0} to {1}", remoteMovie.MovieEdition.DisplayTitle, remoteMovie.Movie.Title);
             }
 
             var movieGrabbedEvent = new MovieGrabbedEvent(remoteMovie);

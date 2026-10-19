@@ -22,5 +22,9 @@ namespace NzbDrone.Core.Download.Pending
     {
         public MovieMatchType MovieMatchType { get; set; }
         public ReleaseSourceType ReleaseSource { get; set; }
+
+        // The edition the release was pending for, the title is kept for an edition that doesn't exist yet
+        public int MovieEditionId { get; set; }
+        public string MovieEditionTitle { get; set; }
     }
 }

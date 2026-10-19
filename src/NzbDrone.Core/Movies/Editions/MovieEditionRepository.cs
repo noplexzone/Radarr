@@ -12,6 +12,7 @@ namespace NzbDrone.Core.Movies.Editions
         List<MovieEdition> GetByMovieIds(IEnumerable<int> movieIds);
         void DeleteForMovies(List<int> movieIds);
         bool AnyMovieHasMultipleEditions();
+        List<int> GetMovieIdsWithMissingEditions();
     }
 
     public class MovieEditionRepository : BasicRepository<MovieEdition>, IMovieEditionRepository
@@ -36,6 +37,20 @@ namespace NzbDrone.Core.Movies.Editions
         public void DeleteForMovies(List<int> movieIds)
         {
             Delete(x => movieIds.Contains(x.MovieId));
+        }
+
+        // Monitored movies with a monitored edition that has no file, untagged files count for the default edition
+        public List<int> GetMovieIdsWithMissingEditions()
+        {
+            using (var conn = _database.OpenConnection())
+            {
+                return conn.Query<int>("SELECT DISTINCT \"MovieEditions\".\"MovieId\" FROM \"MovieEditions\" " +
+                                       "JOIN \"Movies\" ON \"Movies\".\"Id\" = \"MovieEditions\".\"MovieId\" " +
+                                       "WHERE \"Movies\".\"Monitored\" = @Monitored AND \"MovieEditions\".\"Monitored\" = @Monitored " +
+                                       "AND NOT EXISTS (SELECT 1 FROM \"MovieFiles\" WHERE \"MovieFiles\".\"MovieId\" = \"MovieEditions\".\"MovieId\" " +
+                                       "AND (\"MovieFiles\".\"MovieEditionId\" = \"MovieEditions\".\"Id\" OR (\"MovieEditions\".\"IsDefault\" = @Monitored AND \"MovieFiles\".\"MovieEditionId\" = 0)))",
+                                       new { Monitored = true }).ToList();
+            }
         }
 
         public bool AnyMovieHasMultipleEditions()

@@ -12,6 +12,7 @@ using NzbDrone.Core.Download.Pending;
 using NzbDrone.Core.Exceptions;
 using NzbDrone.Core.Indexers;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Profiles.Qualities;
 using NzbDrone.Core.Qualities;
@@ -285,6 +286,37 @@ namespace NzbDrone.Core.Test.Download.DownloadApprovedReportsTests
             result.Rejected.Should().NotBeEmpty();
 
             ExceptionVerification.ExpectedWarns(1);
+        }
+
+        [Test]
+        public async Task should_download_each_edition_of_a_movie_once()
+        {
+            var movie = GetMovie(1);
+            var finalCut = MovieEdition.CreateNew(movie.Id, "Final Cut", true);
+            finalCut.Id = 2;
+            var standard = MovieEdition.CreateDefault(movie.Id);
+            standard.Id = 1;
+
+            var standardRelease = GetRemoteMovie(new QualityModel(Quality.Bluray1080p), movie);
+            standardRelease.MovieEdition = standard;
+
+            var finalCutRelease = GetRemoteMovie(new QualityModel(Quality.Bluray1080p), movie);
+            finalCutRelease.MovieEdition = finalCut;
+
+            var secondFinalCutRelease = GetRemoteMovie(new QualityModel(Quality.HDTV720p), movie);
+            secondFinalCutRelease.MovieEdition = finalCut;
+
+            var decisions = new List<DownloadDecision>
+            {
+                new DownloadDecision(standardRelease),
+                new DownloadDecision(finalCutRelease),
+                new DownloadDecision(secondFinalCutRelease)
+            };
+
+            var result = await Subject.ProcessDecisions(decisions);
+
+            result.Grabbed.Should().HaveCount(2);
+            Mocker.GetMock<IDownloadService>().Verify(v => v.DownloadReport(secondFinalCutRelease, null), Times.Never());
         }
     }
 }

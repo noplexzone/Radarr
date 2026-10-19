@@ -271,10 +271,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
 
         private static string GetImportKey(LocalMovie localMovie)
         {
-            var edition = localMovie.MovieEdition;
-            var editionKey = edition == null || edition.IsDefault ? "default" : edition.IsNew ? $"new:{edition.Key}" : edition.Id.ToString();
-
-            return $"{localMovie.Movie.Id}:{editionKey}";
+            return $"{localMovie.Movie.Id}:{MovieEdition.GetScopeKey(localMovie.MovieEdition)}";
         }
     }
 }

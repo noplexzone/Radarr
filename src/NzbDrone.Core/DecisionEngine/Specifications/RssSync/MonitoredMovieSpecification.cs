@@ -29,6 +29,13 @@ namespace NzbDrone.Core.DecisionEngine.Specifications.RssSync
                 return DownloadSpecDecision.Reject(DownloadRejectionReason.MovieNotMonitored, "Movie is not monitored");
             }
 
+            // A new edition isn't tracked yet, MovieEditionSpecification decides whether it may be added
+            if (subject.MovieEdition is { IsNew: false, Monitored: false })
+            {
+                _logger.Debug("Edition {0} of {1} is not monitored. Rejecting", subject.MovieEdition, subject.Movie);
+                return DownloadSpecDecision.Reject(DownloadRejectionReason.EditionNotMonitored, "Edition is not monitored");
+            }
+
             return DownloadSpecDecision.Accept();
         }
     }

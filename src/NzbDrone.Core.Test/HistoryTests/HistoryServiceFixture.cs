@@ -10,6 +10,7 @@ using NzbDrone.Core.Indexers;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Profiles.Qualities;
 using NzbDrone.Core.Qualities;
@@ -95,6 +96,26 @@ namespace NzbDrone.Core.Test.HistoryTests
 
             Mocker.GetMock<IHistoryRepository>()
                 .Verify(v => v.Insert(It.Is<MovieHistory>(h => h.SourceTitle == Path.GetFileNameWithoutExtension(localMovie.Path))));
+        }
+
+        [Test]
+        public void should_record_edition_of_grabbed_release()
+        {
+            var edition = MovieEdition.CreateNew(1, "Final Cut", true);
+            edition.Id = 2;
+
+            var remoteMovie = new RemoteMovie
+            {
+                Movie = Builder<Movie>.CreateNew().Build(),
+                MovieEdition = edition,
+                ParsedMovieInfo = new ParsedMovieInfo { Quality = new QualityModel(Quality.Bluray1080p) },
+                Release = Builder<ReleaseInfo>.CreateNew().Build()
+            };
+
+            Subject.Handle(new MovieGrabbedEvent(remoteMovie));
+
+            Mocker.GetMock<IHistoryRepository>()
+                .Verify(v => v.Insert(It.Is<MovieHistory>(h => h.Data["movieEditionId"] == "2" && h.GetMovieEditionId() == 2)), Times.Once());
         }
     }
 }

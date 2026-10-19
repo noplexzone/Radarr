@@ -8,6 +8,7 @@ using NzbDrone.Core.Download.Clients;
 using NzbDrone.Core.Download.Pending;
 using NzbDrone.Core.Exceptions;
 using NzbDrone.Core.Indexers;
+using NzbDrone.Core.Movies.Editions;
 
 namespace NzbDrone.Core.Download
 {
@@ -166,12 +167,11 @@ namespace NzbDrone.Core.Download
 
         private bool IsMovieProcessed(List<DownloadDecision> decisions, DownloadDecision report)
         {
+            // Each edition of a movie is grabbed once, so one search can grab several editions
             var movieId = report.RemoteMovie.Movie.Id;
+            var editionKey = MovieEdition.GetScopeKey(report.RemoteMovie.MovieEdition);
 
-            return decisions.Select(r => r.RemoteMovie.Movie)
-                            .Select(e => e.Id)
-                            .ToList()
-                            .Contains(movieId);
+            return decisions.Any(r => r.RemoteMovie.Movie.Id == movieId && MovieEdition.GetScopeKey(r.RemoteMovie.MovieEdition) == editionKey);
         }
 
         private void PreparePending(List<Tuple<DownloadDecision, PendingReleaseReason>> queue, List<DownloadDecision> grabbed, List<DownloadDecision> pending, DownloadDecision report, PendingReleaseReason reason)

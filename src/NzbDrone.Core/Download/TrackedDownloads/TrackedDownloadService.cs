@@ -10,6 +10,7 @@ using NzbDrone.Core.Download.History;
 using NzbDrone.Core.History;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Movies.Events;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
@@ -172,6 +173,14 @@ namespace NzbDrone.Core.Download.TrackedDownloads
                         {
                             trackedDownload.RemoteMovie.Release.IndexerId = downloadHistory.IndexerId;
                         }
+
+                        // Restore the edition the release was grabbed for, so the queue and import use it
+                        var movieEditionId = grabbedEvent?.GetMovieEditionId() ?? 0;
+
+                        if (movieEditionId > 0 && trackedDownload.RemoteMovie.Movie?.Id == grabbedEvent.MovieId)
+                        {
+                            trackedDownload.RemoteMovie.MovieEdition = new MovieEdition { Id = movieEditionId, MovieId = grabbedEvent.MovieId };
+                        }
                     }
                 }
 
@@ -244,8 +253,14 @@ namespace NzbDrone.Core.Download.TrackedDownloads
         private void UpdateCachedItem(TrackedDownload trackedDownload)
         {
             var parsedMovieInfo = Parser.Parser.ParseMovieTitle(trackedDownload.DownloadItem.Title);
+            var previous = trackedDownload.RemoteMovie;
 
             trackedDownload.RemoteMovie = parsedMovieInfo == null ? null : _parsingService.Map(parsedMovieInfo, "", 0, null);
+
+            if (trackedDownload.RemoteMovie?.Movie != null && previous?.MovieEdition != null && previous.Movie?.Id == trackedDownload.RemoteMovie.Movie.Id)
+            {
+                trackedDownload.RemoteMovie.MovieEdition = previous.MovieEdition;
+            }
 
             _aggregationService.Augment(trackedDownload.RemoteMovie);
         }

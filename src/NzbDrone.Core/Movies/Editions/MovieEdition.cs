@@ -61,6 +61,12 @@ namespace NzbDrone.Core.Movies.Editions
             };
         }
 
+        // Identifies an edition within its movie whether or not it's been created yet, an unknown edition counts as the default
+        public static string GetScopeKey(MovieEdition edition)
+        {
+            return edition == null || edition.IsDefault ? "default" : "edition:" + edition.Key;
+        }
+
         public override string ToString()
         {
             return string.Format("[{0}] {1}", Id, DisplayTitle);

@@ -19,6 +19,9 @@ namespace NzbDrone.Core.IndexerSearch.Definitions
         public virtual bool UserInvokedSearch { get; set; }
         public virtual bool InteractiveSearch { get; set; }
 
+        // Limits the search to one edition of the movie, 0 searches every wanted edition
+        public int MovieEditionId { get; set; }
+
         public List<string> CleanSceneTitles => SceneTitles.Select(GetCleanSceneTitle).Distinct().ToList();
 
         public static string GetCleanSceneTitle(string title)

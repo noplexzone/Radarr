@@ -19,6 +19,7 @@ namespace NzbDrone.Core.IndexerSearch
     {
         Task<List<DownloadDecision>> MovieSearch(int movieId, bool userInvokedSearch, bool interactiveSearch);
         Task<List<DownloadDecision>> MovieSearch(Movie movie, bool userInvokedSearch, bool interactiveSearch);
+        Task<List<DownloadDecision>> MovieEditionSearch(int movieId, int movieEditionId, bool userInvokedSearch, bool interactiveSearch);
     }
 
     public class ReleaseSearchService : ISearchForReleases
@@ -55,9 +56,24 @@ namespace NzbDrone.Core.IndexerSearch
 
         public async Task<List<DownloadDecision>> MovieSearch(Movie movie, bool userInvokedSearch, bool interactiveSearch)
         {
+            return await MovieSearch(movie, 0, userInvokedSearch, interactiveSearch);
+        }
+
+        public async Task<List<DownloadDecision>> MovieEditionSearch(int movieId, int movieEditionId, bool userInvokedSearch, bool interactiveSearch)
+        {
+            var movie = _movieService.GetMovie(movieId);
+            movie.MovieMetadata.Value.Translations = _movieTranslationService.GetAllTranslationsForMovieMetadata(movie.MovieMetadataId);
+
+            return await MovieSearch(movie, movieEditionId, userInvokedSearch, interactiveSearch);
+        }
+
+        // Indexers are queried for the movie once, each release is then judged for its own edition
+        private async Task<List<DownloadDecision>> MovieSearch(Movie movie, int movieEditionId, bool userInvokedSearch, bool interactiveSearch)
+        {
             var downloadDecisions = new List<DownloadDecision>();
 
             var searchSpec = Get<MovieSearchCriteria>(movie, userInvokedSearch, interactiveSearch);
+            searchSpec.MovieEditionId = movieEditionId;
 
             var decisions = await Dispatch(indexer => indexer.Fetch(searchSpec), searchSpec);
             downloadDecisions.AddRange(decisions);

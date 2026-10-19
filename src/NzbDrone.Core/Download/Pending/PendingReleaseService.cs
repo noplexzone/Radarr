@@ -12,6 +12,7 @@ using NzbDrone.Core.Indexers;
 using NzbDrone.Core.Jobs;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Movies.Events;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
@@ -199,12 +200,12 @@ namespace NzbDrone.Core.Download.Pending
                 queued.Add(GetQueueItem(pendingRelease, nextRssSync, pendingRelease.RemoteMovie.Movie));
             }
 
-            // Return best quality release for each movie
-            var deduped = queued.Where(q => q.Movie != null).GroupBy(q => q.Movie.Id).Select(g =>
+            // Return best quality release for each edition of each movie
+            var deduped = queued.Where(q => q.Movie != null).GroupBy(q => (q.Movie.Id, MovieEdition.GetScopeKey(q.RemoteMovie?.MovieEdition))).Select(g =>
             {
-                var movies = g.First().Movie;
+                var profile = g.First().RemoteMovie?.QualityProfile ?? g.First().Movie.QualityProfile;
 
-                return g.OrderByDescending(e => e.Quality, new QualityModelComparer(movies.QualityProfile))
+                return g.OrderByDescending(e => e.Quality, new QualityModelComparer(profile))
                         .ThenBy(q => PrioritizeDownloadProtocol(q.Movie, q.Protocol))
                         .First();
             });
@@ -286,7 +287,8 @@ namespace NzbDrone.Core.Download.Pending
                     MovieMatchType = release.AdditionalInfo?.MovieMatchType ?? MovieMatchType.Unknown,
                     ReleaseSource = release.AdditionalInfo?.ReleaseSource ?? ReleaseSourceType.Unknown,
                     ParsedMovieInfo = release.ParsedMovieInfo,
-                    Release = release.Release
+                    Release = release.Release,
+                    MovieEdition = GetPendingEdition(movie, release.AdditionalInfo)
                 };
 
                 _aggregationService.Augment(release.RemoteMovie);
@@ -363,7 +365,9 @@ namespace NzbDrone.Core.Download.Pending
                 AdditionalInfo = new PendingReleaseAdditionalInfo
                 {
                     MovieMatchType = decision.RemoteMovie.MovieMatchType,
-                    ReleaseSource = decision.RemoteMovie.ReleaseSource
+                    ReleaseSource = decision.RemoteMovie.ReleaseSource,
+                    MovieEditionId = decision.RemoteMovie.MovieEdition?.Id ?? 0,
+                    MovieEditionTitle = decision.RemoteMovie.MovieEdition?.Title
                 }
             };
 
@@ -375,6 +379,21 @@ namespace NzbDrone.Core.Download.Pending
             _repository.Insert(release);
 
             _eventAggregator.PublishEvent(new PendingReleasesUpdatedEvent());
+        }
+
+        private static MovieEdition GetPendingEdition(Movie movie, PendingReleaseAdditionalInfo additionalInfo)
+        {
+            if (additionalInfo == null)
+            {
+                return null;
+            }
+
+            if (additionalInfo.MovieEditionId > 0)
+            {
+                return new MovieEdition { Id = additionalInfo.MovieEditionId, MovieId = movie.Id };
+            }
+
+            return additionalInfo.MovieEditionTitle.IsNotNullOrWhiteSpace() ? MovieEdition.CreateNew(movie.Id, additionalInfo.MovieEditionTitle, true) : null;
         }
 
         private void Delete(PendingRelease pendingRelease)
@@ -403,7 +422,8 @@ namespace NzbDrone.Core.Download.Pending
         {
             var pendingReleases = GetPendingReleases(remoteMovie.Movie.Id);
 
-            var existingReports = pendingReleases.Where(r => r.RemoteMovie.Movie.Id == remoteMovie.Movie.Id)
+            var existingReports = pendingReleases.Where(r => r.RemoteMovie.Movie.Id == remoteMovie.Movie.Id &&
+                                                             MovieEdition.GetScopeKey(r.RemoteMovie.MovieEdition) == MovieEdition.GetScopeKey(remoteMovie.MovieEdition))
                                                              .ToList();
 
             if (existingReports.Empty())
@@ -411,7 +431,7 @@ namespace NzbDrone.Core.Download.Pending
                 return;
             }
 
-            var profile = remoteMovie.Movie.QualityProfile;
+            var profile = remoteMovie.QualityProfile;
 
             foreach (var existingReport in existingReports)
             {

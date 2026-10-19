@@ -28,6 +28,7 @@ namespace NzbDrone.Core.Movies.Editions
         MovieFile GetCurrentFile(Movie movie, MovieEdition edition, IEnumerable<MovieFile> movieFiles);
         int GetRepresentativeFileId(Movie movie);
         bool AnyMovieHasMultipleEditions();
+        List<int> GetMovieIdsWithMissingEditions();
     }
 
     public class MovieEditionService : IMovieEditionService,
@@ -280,6 +281,11 @@ namespace NzbDrone.Core.Movies.Editions
                        files.OrderBy(f => f.Id).First();
 
             return file.Id;
+        }
+
+        public List<int> GetMovieIdsWithMissingEditions()
+        {
+            return _editionRepository.GetMovieIdsWithMissingEditions();
         }
 
         public bool AnyMovieHasMultipleEditions()

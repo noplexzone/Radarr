@@ -11,7 +11,9 @@ using NzbDrone.Core.Download;
 using NzbDrone.Core.Download.Clients;
 using NzbDrone.Core.Exceptions;
 using NzbDrone.Core.Indexers;
+using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Test.Framework;
 
@@ -247,6 +249,37 @@ namespace NzbDrone.Core.Test.Download
 
             mockTorrent.Verify(c => c.Download(It.IsAny<RemoteMovie>(), It.IsAny<IIndexer>()), Times.Once());
             mockUsenet.Verify(c => c.Download(It.IsAny<RemoteMovie>(), It.IsAny<IIndexer>()), Times.Never());
+        }
+
+        [Test]
+        public async Task should_create_new_edition_after_grab()
+        {
+            var mock = WithUsenetClient();
+            mock.Setup(s => s.Download(It.IsAny<RemoteMovie>(), It.IsAny<IIndexer>())).ReturnsAsync("id");
+
+            var created = new MovieEdition { Id = 3, MovieId = _parseResult.Movie.Id, Title = "Director's Cut", Key = "director's" };
+            _parseResult.MovieEdition = MovieEdition.CreateNew(_parseResult.Movie.Id, "Director's Cut", true);
+
+            Mocker.GetMock<IMovieEditionService>()
+                .Setup(s => s.EnsureEdition(_parseResult.MovieEdition))
+                .Returns(created);
+
+            await Subject.DownloadReport(_parseResult, null);
+
+            Mocker.GetMock<IEventAggregator>().Verify(v => v.PublishEvent(It.Is<MovieGrabbedEvent>(e => e.Movie.MovieEdition.Id == 3)), Times.Once());
+        }
+
+        [Test]
+        public async Task should_not_create_new_edition_when_grab_fails()
+        {
+            var mock = WithUsenetClient();
+            mock.Setup(s => s.Download(It.IsAny<RemoteMovie>(), It.IsAny<IIndexer>())).Throws(new DownloadClientRejectedReleaseException(_parseResult.Release, "Rejected"));
+
+            _parseResult.MovieEdition = MovieEdition.CreateNew(_parseResult.Movie.Id, "Director's Cut", true);
+
+            Assert.ThrowsAsync<DownloadClientRejectedReleaseException>(async () => await Subject.DownloadReport(_parseResult, null));
+
+            Mocker.GetMock<IMovieEditionService>().Verify(v => v.EnsureEdition(It.IsAny<MovieEdition>()), Times.Never());
         }
     }
 }

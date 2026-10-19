@@ -38,9 +38,9 @@ namespace NzbDrone.Core.DecisionEngine.Specifications
                 return DownloadSpecDecision.Accept();
             }
 
-            if (subject.Movie.MovieFileId != 0)
+            if (subject.ExistingFile != null)
             {
-                var file = subject.Movie.MovieFile;
+                var file = subject.ExistingFile;
 
                 if (_upgradableSpecification.IsRevisionUpgrade(file.Quality, subject.ParsedMovieInfo.Quality))
                 {

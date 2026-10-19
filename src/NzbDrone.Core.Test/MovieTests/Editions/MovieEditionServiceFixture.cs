@@ -205,5 +205,29 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
             Subject.AddEdition(MovieEdition.CreateNew(_movie.Id, "Final Cut", true));
             Subject.AnyMovieHasMultipleEditions().Should().BeTrue();
         }
+
+        [Test]
+        public void should_find_movies_missing_a_monitored_edition()
+        {
+            var movie = Builder<Movie>.CreateNew()
+                .With(m => m.Id = 0)
+                .With(m => m.Monitored = true)
+                .With(m => m.Tags = new HashSet<int>())
+                .BuildNew();
+            movie = Db.Insert(movie);
+            _movie.Id = movie.Id;
+
+            Subject.GetDefaultEdition(_movie.Id);
+            GivenFile(0, Quality.Bluray1080p);
+
+            Subject.GetMovieIdsWithMissingEditions().Should().BeEmpty();
+
+            var finalCut = Subject.AddEdition(MovieEdition.CreateNew(_movie.Id, "Final Cut", true));
+            Subject.GetMovieIdsWithMissingEditions().Should().BeEquivalentTo(new[] { _movie.Id });
+
+            finalCut.Monitored = false;
+            Subject.UpdateEdition(finalCut);
+            Subject.GetMovieIdsWithMissingEditions().Should().BeEmpty();
+        }
     }
 }

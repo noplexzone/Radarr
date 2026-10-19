@@ -85,6 +85,13 @@ namespace NzbDrone.Core.Configuration
             set { SetValue("AutoUnmonitorPreviouslyDownloadedMovies", value); }
         }
 
+        // Default for the per-movie setting that lets RSS and automatic searches add editions a movie doesn't have yet
+        public bool AutoAddEditionsDefault
+        {
+            get { return GetValueBoolean("AutoAddEditionsDefault", false); }
+            set { SetValue("AutoAddEditionsDefault", value); }
+        }
+
         public int Retention
         {
             get { return GetValueInt("Retention", 0); }

@@ -4,6 +4,7 @@ using NLog;
 using NzbDrone.Core.Configuration;
 using NzbDrone.Core.History;
 using NzbDrone.Core.Indexers;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser.Model;
 
 namespace NzbDrone.Core.DecisionEngine.Specifications
@@ -41,14 +42,14 @@ namespace NzbDrone.Core.DecisionEngine.Specifications
             _logger.Debug("Performing already imported check on report");
             if (movie != null)
             {
-                if (!movie.HasFile)
+                if (subject.MovieEdition != null ? subject.EditionFile == null : !movie.HasFile)
                 {
                     _logger.Debug("Skipping already imported check for movie without file");
                     return DownloadSpecDecision.Accept();
                 }
 
                 var historyForMovie = _historyService.GetByMovieId(movie.Id, null);
-                var lastGrabbed = historyForMovie.FirstOrDefault(h => h.EventType == MovieHistoryEventType.Grabbed);
+                var lastGrabbed = historyForMovie.FirstOrDefault(h => h.EventType == MovieHistoryEventType.Grabbed && h.IsForEdition(subject.MovieEdition));
 
                 if (lastGrabbed == null)
                 {
