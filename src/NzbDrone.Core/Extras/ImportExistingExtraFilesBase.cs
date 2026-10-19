@@ -4,6 +4,7 @@ using System.Linq;
 using NzbDrone.Common;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Extras.Files;
+using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Movies;
 
 namespace NzbDrone.Core.Extras
@@ -12,10 +13,17 @@ namespace NzbDrone.Core.Extras
         where TExtraFile : ExtraFile, new()
     {
         private readonly IExtraFileService<TExtraFile> _extraFileService;
+        private readonly IMediaFileService _mediaFileService;
 
         public ImportExistingExtraFilesBase(IExtraFileService<TExtraFile> extraFileService)
         {
             _extraFileService = extraFileService;
+        }
+
+        public ImportExistingExtraFilesBase(IExtraFileService<TExtraFile> extraFileService, IMediaFileService mediaFileService)
+            : this(extraFileService)
+        {
+            _mediaFileService = mediaFileService;
         }
 
         public abstract int Order { get; }
@@ -37,6 +45,32 @@ namespace NzbDrone.Core.Extras
             Clean(movie, filesOnDisk, importedFiles, movieFiles);
 
             return Filter(movie, filesOnDisk, importedFiles, movieFiles);
+        }
+
+        // With several editions in one folder an extra belongs to the movie file whose name it starts with
+        protected List<MovieFile> GetMovieFiles(Movie movie)
+        {
+            return _mediaFileService?.GetFilesByMovie(movie.Id) ?? new List<MovieFile>();
+        }
+
+        protected static int GetMovieFileId(Movie movie, List<MovieFile> movieFiles, string extraFilePath)
+        {
+            if (movieFiles.Count < 2)
+            {
+                return movie.MovieFileId;
+            }
+
+            var extraFolder = Path.GetDirectoryName(extraFilePath);
+            var extraName = Path.GetFileName(extraFilePath);
+
+            var match = movieFiles
+                .Select(f => new { f.Id, Path = Path.Combine(movie.Path, f.RelativePath) })
+                .Where(f => PathEqualityComparer.Instance.Equals(Path.GetDirectoryName(f.Path), extraFolder))
+                .Select(f => new { f.Id, Name = Path.GetFileNameWithoutExtension(f.Path) })
+                .Where(f => extraName.StartsWith(f.Name + ".", System.StringComparison.OrdinalIgnoreCase))
+                .MaxBy(f => f.Name.Length);
+
+            return match?.Id ?? movie.MovieFileId;
         }
 
         private ImportExistingExtraFileFilterResult<TExtraFile> Filter(Movie movie, List<string> filesOnDisk, List<string> importedFiles, List<TExtraFile> movieFiles)

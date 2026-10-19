@@ -9,6 +9,7 @@ using NzbDrone.Core.Download;
 using NzbDrone.Core.Download.TrackedDownloads;
 using NzbDrone.Core.MediaFiles.MovieImport.Aggregation;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser.Model;
 
 namespace NzbDrone.Core.MediaFiles.MovieImport
@@ -31,6 +32,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
         private readonly IDetectSample _detectSample;
         private readonly ITrackedDownloadService _trackedDownloadService;
         private readonly ICustomFormatCalculationService _formatCalculator;
+        private readonly IMovieEditionService _movieEditionService;
         private readonly Logger _logger;
 
         public ImportDecisionMaker(IEnumerable<IImportDecisionEngineSpecification> specifications,
@@ -40,6 +42,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                                    IDetectSample detectSample,
                                    ITrackedDownloadService trackedDownloadService,
                                    ICustomFormatCalculationService formatCalculator,
+                                   IMovieEditionService movieEditionService,
                                    Logger logger)
         {
             _specifications = specifications;
@@ -49,6 +52,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
             _detectSample = detectSample;
             _trackedDownloadService = trackedDownloadService;
             _formatCalculator = formatCalculator;
+            _movieEditionService = movieEditionService;
             _logger = logger;
         }
 
@@ -142,7 +146,8 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                     }
 
                     localMovie.CustomFormats = _formatCalculator.ParseCustomFormat(localMovie);
-                    localMovie.CustomFormatScore = localMovie.Movie.QualityProfile?.CalculateCustomFormatScore(localMovie.CustomFormats) ?? 0;
+                    var qualityProfile = localMovie.MovieEdition == null ? localMovie.Movie.QualityProfile : _movieEditionService.GetQualityProfile(localMovie.Movie, localMovie.MovieEdition);
+                    localMovie.CustomFormatScore = qualityProfile?.CalculateCustomFormatScore(localMovie.CustomFormats) ?? 0;
 
                     decision = GetDecision(localMovie, downloadClientItem);
                 }

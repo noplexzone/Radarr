@@ -71,6 +71,11 @@ namespace NzbDrone.Core.Movies
                 movieEntry.MovieFile = movieFile;
                 dict.Add(movieEntry.Id, movieEntry);
             }
+            else if (movieFile != null && movieFile.Id == movieEntry.MovieFileId && movieEntry.MovieFile?.Id != movieFile.Id)
+            {
+                // A movie with several editions joins several files, its main file is the one MovieFileId points to
+                movieEntry.MovieFile = movieFile;
+            }
 
             if (altTitle != null)
             {

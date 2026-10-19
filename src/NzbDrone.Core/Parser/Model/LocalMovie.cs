@@ -5,6 +5,7 @@ using NzbDrone.Core.Languages;
 using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.MediaInfo;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Qualities;
 
 namespace NzbDrone.Core.Parser.Model
@@ -32,6 +33,8 @@ namespace NzbDrone.Core.Parser.Model
         public bool SceneSource { get; set; }
         public string ReleaseGroup { get; set; }
         public string Edition { get; set; }
+        public MovieEdition MovieEdition { get; set; }
+        public string MovieEditionRejection { get; set; }
         public string SceneName { get; set; }
         public bool OtherVideoFiles { get; set; }
         public List<CustomFormat> CustomFormats { get; set; }

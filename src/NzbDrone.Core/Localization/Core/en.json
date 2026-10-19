@@ -615,6 +615,7 @@
   "EditSelectedMovies": "Edit Selected Movies",
   "Edition": "Edition",
   "EditionFootNote": "Optionally control truncation to a maximum number of bytes including ellipsis (`...`). Truncating from the end (e.g. `{Edition Tags:30}`) or the beginning (e.g. `{Edition Tags:-30}`) are both supported.",
+  "EditionNamingCheckMessage": "Some movies have more than one edition but the Standard Movie Format doesn't include {Edition Tags}. Renaming skips files whose names would collide; add {edition-{Edition Tags}} to the format to keep editions apart.",
   "Enable": "Enable",
   "EnableAutomaticAdd": "Enable Automatic Add",
   "EnableAutomaticAddMovieHelpText": "If enabled, movies will be automatically added to {appName} from this list",

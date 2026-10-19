@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using Dapper;
 using NzbDrone.Core.Datastore;
 using NzbDrone.Core.Messaging.Events;
 
@@ -10,6 +11,7 @@ namespace NzbDrone.Core.Movies.Editions
         List<MovieEdition> GetByMovieId(int movieId);
         List<MovieEdition> GetByMovieIds(IEnumerable<int> movieIds);
         void DeleteForMovies(List<int> movieIds);
+        bool AnyMovieHasMultipleEditions();
     }
 
     public class MovieEditionRepository : BasicRepository<MovieEdition>, IMovieEditionRepository
@@ -18,6 +20,8 @@ namespace NzbDrone.Core.Movies.Editions
             : base(database, eventAggregator)
         {
         }
+
+        protected override bool PublishModelEvents => true;
 
         public List<MovieEdition> GetByMovieId(int movieId)
         {
@@ -32,6 +36,14 @@ namespace NzbDrone.Core.Movies.Editions
         public void DeleteForMovies(List<int> movieIds)
         {
             Delete(x => movieIds.Contains(x.MovieId));
+        }
+
+        public bool AnyMovieHasMultipleEditions()
+        {
+            using (var conn = _database.OpenConnection())
+            {
+                return conn.Query<int>("SELECT \"MovieId\" FROM \"MovieEditions\" GROUP BY \"MovieId\" HAVING COUNT(*) > 1 LIMIT 1").Any();
+            }
         }
     }
 }

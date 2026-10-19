@@ -12,6 +12,7 @@ using NzbDrone.Core.MediaFiles.Commands;
 using NzbDrone.Core.MediaFiles.Events;
 using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Messaging.Events;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Qualities;
 
@@ -32,6 +33,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
         private readonly IHistoryService _historyService;
         private readonly IEventAggregator _eventAggregator;
         private readonly IManageCommandQueue _commandQueueManager;
+        private readonly IMovieEditionService _movieEditionService;
         private readonly Logger _logger;
 
         public ImportApprovedMovie(IUpgradeMediaFiles movieFileUpgrader,
@@ -42,6 +44,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                                    IHistoryService historyService,
                                    IEventAggregator eventAggregator,
                                    IManageCommandQueue commandQueueManager,
+                                   IMovieEditionService movieEditionService,
                                    Logger logger)
         {
             _movieFileUpgrader = movieFileUpgrader;
@@ -52,6 +55,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
             _historyService = historyService;
             _eventAggregator = eventAggregator;
             _commandQueueManager = commandQueueManager;
+            _movieEditionService = movieEditionService;
             _logger = logger;
         }
 
@@ -62,7 +66,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
             // I added a null op for the rare case that the quality is null. TODO: find out why that would even happen in the first place.
             var qualifiedImports = decisions
                 .Where(decision => decision.Approved)
-                .GroupBy(decision => decision.LocalMovie.Movie.Id)
+                .GroupBy(decision => GetImportKey(decision.LocalMovie))
                 .SelectMany(group => group
                     .OrderByDescending(decision => decision.LocalMovie.Quality ?? new QualityModel { Quality = Quality.Unknown }, new QualityModelComparer(group.First().LocalMovie.Movie.QualityProfile))
                     .ThenByDescending(decision => decision.LocalMovie.Size))
@@ -77,12 +81,31 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
 
                 try
                 {
-                    // check if already imported
-                    if (importResults.Select(r => r.ImportDecision.LocalMovie.Movie)
-                                         .Select(m => m.Id).Contains(localMovie.Movie.Id))
+                    // check if already imported, each edition of a movie can be imported once per batch
+                    if (importResults.Select(r => GetImportKey(r.ImportDecision.LocalMovie))
+                                     .Contains(GetImportKey(localMovie)))
                     {
                         importResults.Add(new ImportResult(importDecision, "Movie has already been imported"));
                         continue;
+                    }
+
+                    if (localMovie.MovieEdition == null)
+                    {
+                        // Without a known edition only a single edition movie can be imported safely
+                        var editions = _movieEditionService.GetEditions(localMovie.Movie.Id);
+
+                        if (editions != null && editions.Count > 1)
+                        {
+                            importResults.Add(new ImportResult(importDecision, "Edition could not be determined, choose one in Manual Import"));
+                            continue;
+                        }
+
+                        localMovie.MovieEdition = editions?.FirstOrDefault();
+                    }
+
+                    if (localMovie.MovieEdition != null)
+                    {
+                        localMovie.MovieEdition = _movieEditionService.EnsureEdition(localMovie.MovieEdition);
                     }
 
                     var movieFile = new MovieFile();
@@ -95,7 +118,8 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
                     movieFile.MediaInfo = localMovie.MediaInfo;
                     movieFile.Movie = localMovie.Movie;
                     movieFile.ReleaseGroup = localMovie.ReleaseGroup;
-                    movieFile.Edition = localMovie.Edition;
+                    movieFile.MovieEditionId = localMovie.MovieEdition?.Id ?? 0;
+                    movieFile.Edition = localMovie.MovieEdition?.Title ?? localMovie.Edition;
 
                     if (downloadClientItem?.DownloadId.IsNotNullOrWhiteSpace() == true)
                     {
@@ -243,6 +267,14 @@ namespace NzbDrone.Core.MediaFiles.MovieImport
             }
 
             return Path.GetFileName(path);
+        }
+
+        private static string GetImportKey(LocalMovie localMovie)
+        {
+            var edition = localMovie.MovieEdition;
+            var editionKey = edition == null || edition.IsDefault ? "default" : edition.IsNew ? $"new:{edition.Key}" : edition.Id.ToString();
+
+            return $"{localMovie.Movie.Id}:{editionKey}";
         }
     }
 }

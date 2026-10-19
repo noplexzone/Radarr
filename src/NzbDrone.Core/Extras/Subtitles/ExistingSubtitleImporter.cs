@@ -4,6 +4,7 @@ using System.Linq;
 using NLog;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Extras.Files;
+using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.MediaFiles.MovieImport.Aggregation;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Parser;
@@ -21,8 +22,9 @@ namespace NzbDrone.Core.Extras.Subtitles
         public ExistingSubtitleImporter(IExtraFileService<SubtitleFile> subtitleFileService,
                                         IAggregationService aggregationService,
                                         IParsingService parsingService,
+                                        IMediaFileService mediaFileService,
                                         Logger logger)
-            : base(subtitleFileService)
+            : base(subtitleFileService, mediaFileService)
         {
             _subtitleFileService = subtitleFileService;
             _aggregationService = aggregationService;
@@ -37,6 +39,7 @@ namespace NzbDrone.Core.Extras.Subtitles
             _logger.Debug("Looking for existing subtitle files in {0}", movie.Path);
 
             var subtitleFiles = new List<SubtitleFile>();
+            var movieFiles = GetMovieFiles(movie);
             var filterResult = FilterAndClean(movie, filesOnDisk, importedFiles, fileNameBeforeRename is not null);
 
             foreach (var possibleSubtitleFile in filterResult.FilesOnDisk)
@@ -74,7 +77,7 @@ namespace NzbDrone.Core.Extras.Subtitles
                     var subtitleFile = new SubtitleFile
                     {
                         MovieId = movie.Id,
-                        MovieFileId = movie.MovieFileId,
+                        MovieFileId = GetMovieFileId(movie, movieFiles, possibleSubtitleFile),
                         RelativePath = movie.Path.GetRelativePath(possibleSubtitleFile),
                         Language = localMovie.SubtitleInfo.Language,
                         LanguageTags = localMovie.SubtitleInfo.LanguageTags,

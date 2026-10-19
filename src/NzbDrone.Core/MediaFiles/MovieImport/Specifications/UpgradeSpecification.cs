@@ -3,6 +3,7 @@ using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Configuration;
 using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.Download;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Qualities;
 
@@ -12,26 +13,45 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Specifications
     {
         private readonly IConfigService _configService;
         private readonly ICustomFormatCalculationService _formatService;
+        private readonly IMovieEditionService _movieEditionService;
         private readonly Logger _logger;
 
         public UpgradeSpecification(IConfigService configService,
                                     ICustomFormatCalculationService formatService,
+                                    IMovieEditionService movieEditionService,
                                     Logger logger)
         {
             _configService = configService;
             _formatService = formatService;
+            _movieEditionService = movieEditionService;
             _logger = logger;
         }
 
         public ImportSpecDecision IsSatisfiedBy(LocalMovie localMovie, DownloadClientItem downloadClientItem)
         {
             var downloadPropersAndRepacks = _configService.DownloadPropersAndRepacks;
-            var qualityProfile = localMovie.Movie.QualityProfile;
+            var edition = localMovie.MovieEdition;
+            var qualityProfile = edition == null ? localMovie.Movie.QualityProfile : _movieEditionService.GetQualityProfile(localMovie.Movie, edition);
             var qualityComparer = new QualityModelComparer(qualityProfile);
 
-            if (localMovie.Movie.MovieFileId > 0)
+            // Only the file of the edition being imported into is compared, other editions are never affected
+            var hasExistingFile = edition == null ? localMovie.Movie.MovieFileId > 0 : !edition.IsNew;
+
+            if (hasExistingFile)
             {
-                var movieFile = localMovie.Movie.MovieFile;
+                var movieFile = edition == null ? localMovie.Movie.MovieFile : _movieEditionService.GetCurrentFile(localMovie.Movie, edition);
+
+                if (edition != null && movieFile == null)
+                {
+                    return ImportSpecDecision.Accept();
+                }
+
+                if (edition != null && localMovie.ExistingFile)
+                {
+                    // A second file of the same edition already in the movie folder is tracked as a duplicate, nothing is replaced
+                    _logger.Debug("{0} is another file of edition {1} already in the movie folder", localMovie.Path, edition);
+                    return ImportSpecDecision.Accept();
+                }
 
                 if (movieFile == null)
                 {

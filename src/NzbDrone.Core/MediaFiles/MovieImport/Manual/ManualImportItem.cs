@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using NzbDrone.Core.CustomFormats;
 using NzbDrone.Core.Languages;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Qualities;
 
 namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
@@ -14,6 +15,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
         public string Name { get; set; }
         public long Size { get; set; }
         public Movie Movie { get; set; }
+        public MovieEdition MovieEdition { get; set; }
         public int? MovieFileId { get; set; }
         public QualityModel Quality { get; set; } = new();
         public List<Language> Languages { get; set; } = new();

@@ -13,6 +13,7 @@ namespace NzbDrone.Core.Parser.Model
         public IndexerFlags IndexerFlags { get; set; }
 
         public List<int> MovieIds { get; set; }
+        public int MovieEditionId { get; set; }
 
         public GrabbedReleaseInfo(List<MovieHistory> grabbedHistories)
         {
@@ -23,12 +24,14 @@ namespace NzbDrone.Core.Parser.Model
             grabbedHistory.Data.TryGetValue("size", out var sizeString);
             Enum.TryParse(grabbedHistory.Data.GetValueOrDefault("indexerFlags"), out IndexerFlags indexerFlags);
             long.TryParse(sizeString, out var size);
+            int.TryParse(grabbedHistory.Data.GetValueOrDefault("movieEditionId"), out var movieEditionId);
 
             Title = grabbedHistory.SourceTitle;
             Indexer = indexer;
             Size = size;
             IndexerFlags = indexerFlags;
             MovieIds = movieIds;
+            MovieEditionId = movieEditionId;
         }
     }
 }

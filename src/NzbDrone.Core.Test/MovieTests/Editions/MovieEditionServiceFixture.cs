@@ -195,5 +195,15 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
             Subject.GetQualityProfile(_movie, edition).Name.Should().Be("4K");
             Subject.GetQualityProfile(_movie, MovieEdition.CreateNew(_movie.Id, "Theatrical", true)).Should().BeSameAs(_movie.QualityProfile);
         }
+
+        [Test]
+        public void should_report_movies_with_multiple_editions()
+        {
+            Subject.GetDefaultEdition(_movie.Id);
+            Subject.AnyMovieHasMultipleEditions().Should().BeFalse();
+
+            Subject.AddEdition(MovieEdition.CreateNew(_movie.Id, "Final Cut", true));
+            Subject.AnyMovieHasMultipleEditions().Should().BeTrue();
+        }
     }
 }

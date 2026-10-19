@@ -14,6 +14,7 @@ using NzbDrone.Core.MediaFiles.MovieImport.Aggregation;
 using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Movies;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Parser;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.Qualities;
@@ -41,6 +42,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
         private readonly IMediaFileService _mediaFileService;
         private readonly ICustomFormatCalculationService _formatCalculator;
         private readonly IEventAggregator _eventAggregator;
+        private readonly IMovieEditionService _movieEditionService;
         private readonly Logger _logger;
 
         public ManualImportService(IDiskProvider diskProvider,
@@ -55,6 +57,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
                                    IMediaFileService mediaFileService,
                                    ICustomFormatCalculationService formatCalculator,
                                    IEventAggregator eventAggregator,
+                                   IMovieEditionService movieEditionService,
                                    Logger logger)
         {
             _diskProvider = diskProvider;
@@ -69,6 +72,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
             _mediaFileService = mediaFileService;
             _formatCalculator = formatCalculator;
             _eventAggregator = eventAggregator;
+            _movieEditionService = movieEditionService;
             _logger = logger;
         }
 
@@ -373,6 +377,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
             if (decision.LocalMovie.Movie != null)
             {
                 item.Movie = decision.LocalMovie.Movie;
+                item.MovieEdition = decision.LocalMovie.MovieEdition;
 
                 item.CustomFormats = _formatCalculator.ParseCustomFormat(decision.LocalMovie);
                 item.CustomFormatScore = item.Movie.QualityProfile?.CalculateCustomFormatScore(item.CustomFormats) ?? 0;
@@ -397,6 +402,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
             item.Size = _diskProvider.GetFileSize(item.Path);
             item.Rejections = Enumerable.Empty<ImportRejection>();
             item.MovieFileId = movieFile.Id;
+            item.MovieEdition = _movieEditionService.GetEditions(movie.Id).FirstOrDefault(e => e.Id == movieFile.MovieEditionId);
             item.CustomFormats = _formatCalculator.ParseCustomFormat(movieFile, movie);
 
             return item;
@@ -429,6 +435,7 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
                     Languages = file.Languages,
                     IndexerFlags = (IndexerFlags)file.IndexerFlags,
                     Movie = movie,
+                    MovieEdition = GetSelectedEdition(file, movie),
                     Size = 0
                 };
 
@@ -508,6 +515,28 @@ namespace NzbDrone.Core.MediaFiles.MovieImport.Manual
                     _eventAggregator.PublishEvent(new DownloadCompletedEvent(trackedDownload, importMovie.Id));
                 }
             }
+        }
+
+        private MovieEdition GetSelectedEdition(ManualImportFile file, Movie movie)
+        {
+            if (file.MovieEditionId > 0)
+            {
+                var edition = _movieEditionService.GetEditions(movie.Id).FirstOrDefault(e => e.Id == file.MovieEditionId);
+
+                if (edition == null)
+                {
+                    throw new ArgumentException($"Edition {file.MovieEditionId} does not belong to movie {movie}");
+                }
+
+                return edition;
+            }
+
+            if (file.NewEditionTitle.IsNotNullOrWhiteSpace())
+            {
+                return MovieEdition.CreateNew(movie.Id, file.NewEditionTitle, true);
+            }
+
+            return null;
         }
     }
 }

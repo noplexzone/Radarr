@@ -5,6 +5,7 @@ using NLog;
 using NzbDrone.Core.Extras.Files;
 using NzbDrone.Core.Extras.Metadata.Files;
 using NzbDrone.Core.Extras.Subtitles;
+using NzbDrone.Core.MediaFiles;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Parser;
 
@@ -20,8 +21,9 @@ namespace NzbDrone.Core.Extras.Metadata
         public ExistingMetadataImporter(IExtraFileService<MetadataFile> metadataFileService,
                                         IEnumerable<IMetadata> consumers,
                                         IParsingService parsingService,
+                                        IMediaFileService mediaFileService,
                                         Logger logger)
-        : base(metadataFileService)
+        : base(metadataFileService, mediaFileService)
         {
             _metadataFileService = metadataFileService;
             _parsingService = parsingService;
@@ -36,6 +38,7 @@ namespace NzbDrone.Core.Extras.Metadata
             _logger.Debug("Looking for existing metadata in {0}", movie.Path);
 
             var metadataFiles = new List<MetadataFile>();
+            var movieFiles = GetMovieFiles(movie);
             var filterResult = FilterAndClean(movie, filesOnDisk, importedFiles, fileNameBeforeRename is not null);
 
             foreach (var possibleMetadataFile in filterResult.FilesOnDisk)
@@ -67,7 +70,7 @@ namespace NzbDrone.Core.Extras.Metadata
                             continue;
                         }
 
-                        metadata.MovieFileId = movie.MovieFileId;
+                        metadata.MovieFileId = GetMovieFileId(movie, movieFiles, possibleMetadataFile);
                     }
 
                     metadata.Extension = Path.GetExtension(possibleMetadataFile);
