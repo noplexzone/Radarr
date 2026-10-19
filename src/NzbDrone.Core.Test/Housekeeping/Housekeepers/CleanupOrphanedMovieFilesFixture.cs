@@ -31,23 +31,46 @@ namespace NzbDrone.Core.Test.Housekeeping.Housekeepers
         [Test]
         public void should_not_delete_unorphaned_movie_files()
         {
+            var movie = Builder<Movie>.CreateNew().BuildNew();
+            Db.Insert(movie);
+
             var movieFiles = Builder<MovieFile>.CreateListOfSize(2)
                                                    .All()
+                                                   .With(h => h.Quality = new QualityModel())
+                                                   .With(h => h.Languages = new List<Language> { Language.English })
+                                                   .TheFirst(1)
+                                                   .With(h => h.MovieId = movie.Id)
+                                                   .TheNext(1)
+                                                   .With(h => h.MovieId = movie.Id + 1)
+                                                   .BuildListOfNew();
+
+            Db.InsertMany(movieFiles);
+
+            Subject.Clean();
+            AllStoredModels.Should().ContainSingle(f => f.MovieId == movie.Id);
+        }
+
+        [Test]
+        public void should_not_delete_files_of_other_editions()
+        {
+            var movie = Builder<Movie>.CreateNew().BuildNew();
+            Db.Insert(movie);
+
+            var movieFiles = Builder<MovieFile>.CreateListOfSize(2)
+                                                   .All()
+                                                   .With(h => h.MovieId = movie.Id)
                                                    .With(h => h.Quality = new QualityModel())
                                                    .With(h => h.Languages = new List<Language> { Language.English })
                                                    .BuildListOfNew();
 
             Db.InsertMany(movieFiles);
 
-            var movie = Builder<Movie>.CreateNew()
-                                          .With(e => e.MovieFileId = movieFiles.First().Id)
-                                          .BuildNew();
-
-            Db.Insert(movie);
+            // Only the default edition's file is the movie's main file
+            movie.MovieFileId = movieFiles.First().Id;
+            Db.Update(movie);
 
             Subject.Clean();
-            AllStoredModels.Should().HaveCount(1);
-            Db.All<Movie>().Should().Contain(e => e.MovieFileId == AllStoredModels.First().Id);
+            AllStoredModels.Should().HaveCount(2);
         }
     }
 }

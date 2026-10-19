@@ -535,8 +535,18 @@ def scenario_rename_guard(ctx, r):
 
 def scenario_database(ctx, r):
     """Database stays consistent on Postgres"""
-    args = ctx["args"]
+    args, radarr = ctx["args"], ctx["radarr"]
     db = f"{args.pg_prefix}_main"
+
+    # Radarr's scheduled maintenance must keep every edition's file, not just each movie's main one
+    file_count = psql(args, 'SELECT count(*) FROM "MovieFiles"', db)
+    before = snapshot(ctx["root"])
+    radarr.command("Housekeeping")
+    radarr.command("RescanMovie")
+    r.check("housekeeping and disk scan keep every edition's file", psql(args, 'SELECT count(*) FROM "MovieFiles"', db) == file_count,
+            f"{file_count} before")
+    r.check("files on disk untouched by maintenance", snapshot(ctx["root"]) == before)
+
     orphans = psql(args, 'SELECT count(*) FROM "MovieFiles" f WHERE f."MovieEditionId" <> 0 AND NOT EXISTS '
                          '(SELECT 1 FROM "MovieEditions" e WHERE e."Id" = f."MovieEditionId" AND e."MovieId" = f."MovieId")', db)
     r.check("every file points at an edition of its own movie", orphans == "0", orphans)
