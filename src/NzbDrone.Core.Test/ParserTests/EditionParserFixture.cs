@@ -56,6 +56,28 @@ namespace NzbDrone.Core.Test.ParserTests
             parsed.Edition.Should().Be(edition);
         }
 
+        [TestCase("Movie (2012) {edition-Theatrical}", "Theatrical")]
+        [TestCase("Movie (2012) {edition-Director's Cut}", "Director's Cut")]
+        [TestCase("Movie (2012) {edition-Criterion}", "Criterion")]
+        [TestCase("Movie (2015) {edition-Black and Chrome} [Bluray-1080p].mkv", "Black and Chrome")]
+        [TestCase("Movie (2012) {edition-Final Cut} [Bluray-2160p][DV HDR10][TrueHD Atmos 7.1]-GRP", "Final Cut")]
+        [TestCase("Movie (2012) {imdb-tt0083658} {edition-Final Cut}", "Final Cut")]
+        [TestCase("Movie (2012) Directors Cut {edition-Criterion}", "Criterion")]
+        public void should_parse_plex_edition_tag(string postTitle, string edition)
+        {
+            var parsed = Parser.Parser.ParseMovieTitle(postTitle);
+            parsed.Edition.Should().Be(edition);
+        }
+
+        [TestCase("Movie.2012.REMASTERED.EXTENDED.1080p.BluRay.x264-GRP", "REMASTERED EXTENDED")]
+        [TestCase("Movie.2012.EXTENDED.UNRATED.1080p.BluRay.x264-GRP", "EXTENDED UNRATED")]
+        [TestCase("Movie.2012.IMAX.Remastered.2160p.UHD.BluRay.x265-GRP", "IMAX Remastered")]
+        public void should_parse_multiple_edition_tags(string postTitle, string edition)
+        {
+            var parsed = Parser.Parser.ParseMovieTitle(postTitle);
+            parsed.Edition.Should().Be(edition);
+        }
+
         [TestCase("Movie.Holiday.Special.1978.DVD.REMUX.DD.2.0-ViETNAM")]
         [TestCase("Directors.Cut.German.2006.COMPLETE.PAL.DVDR-LoD")]
         [TestCase("Movie Impossible: Rogue Movie 2012 Bluray")]

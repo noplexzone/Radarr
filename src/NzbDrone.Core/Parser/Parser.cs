@@ -19,6 +19,9 @@ namespace NzbDrone.Core.Parser
 
         private static readonly Regex ReportEditionRegex = new Regex(@"^.+?" + EditionRegex, RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // Plex style edition tag, e.g. "Movie (2000) {edition-Director's Cut}"
+        private static readonly Regex PlexEditionRegex = new Regex(@"\{edition-(?<edition>[^{}]+)\}", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         private static readonly Regex HardcodedSubsRegex = new Regex(@"\b((?<hcsub>(\w+(?<!SOFT|MULTI|HORRIBLE)SUBS?))|(?<hc>(HC|SUBBED)))\b",
                                                         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace);
 
@@ -282,7 +285,14 @@ namespace NzbDrone.Core.Parser
                                 result.Quality = QualityParser.ParseQuality(title);
                                 Logger.Debug("Quality parsed: {0}", result.Quality);
 
-                                if (result.Edition.IsNullOrWhiteSpace())
+                                var plexEdition = ParsePlexEdition(title);
+
+                                if (plexEdition.IsNotNullOrWhiteSpace())
+                                {
+                                    result.Edition = plexEdition;
+                                    Logger.Debug("Edition parsed from Plex edition tag: {0}", result.Edition);
+                                }
+                                else if (result.Edition.IsNullOrWhiteSpace())
                                 {
                                     result.Edition = ParseEdition(simpleReleaseTitle);
                                     Logger.Debug("Edition parsed: {0}", result.Edition);
@@ -362,10 +372,36 @@ namespace NzbDrone.Core.Parser
             if (editionMatch.Success && editionMatch.Groups["edition"].Value != null &&
                 editionMatch.Groups["edition"].Value.IsNotNullOrWhiteSpace())
             {
-                return editionMatch.Groups["edition"].Value.Replace(".", " ");
+                var editionGroup = editionMatch.Groups["edition"];
+                var editions = new List<string> { editionGroup.Value.Replace(".", " ") };
+
+                // Collect further edition tags following the first one, e.g. "REMASTERED.EXTENDED"
+                foreach (Match additional in EditionRegex.Matches(languageTitle, editionGroup.Index + editionGroup.Length))
+                {
+                    var edition = additional.Groups["edition"].Value.Replace(".", " ");
+
+                    if (edition.IsNotNullOrWhiteSpace() && !editions.Contains(edition, StringComparer.OrdinalIgnoreCase))
+                    {
+                        editions.Add(edition);
+                    }
+                }
+
+                return string.Join(" ", editions);
             }
 
             return "";
+        }
+
+        public static string ParsePlexEdition(string title)
+        {
+            if (title.IsNullOrWhiteSpace())
+            {
+                return null;
+            }
+
+            var match = PlexEditionRegex.Match(title);
+
+            return match.Success ? match.Groups["edition"].Value.Trim() : null;
         }
 
         public static string ReplaceGermanUmlauts(string s)
