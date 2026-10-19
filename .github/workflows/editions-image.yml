@@ -1,0 +1,186 @@
+name: Editions build
+
+# Builds and tests the editions fork and its Docker image on every push.
+# The image is only pushed to GHCR when someone runs this workflow by hand with "publish" ticked.
+
+on:
+  push:
+    branches:
+      - feature/editions
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    branches:
+      - feature/editions
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the image to ghcr.io/noplexzone/radarr
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: editions-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Upstream release the fork is based on, the image tag adds the editions build number
+  RADARR_BASE_VERSION: 6.4.4.10685
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+
+jobs:
+  test:
+    name: Unit tests (${{ matrix.database }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgres]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build backend and tests
+        run: ./build.sh --backend -r linux-x64 -f net8.0
+
+      - name: Start Postgres
+        if: matrix.database == 'postgres'
+        run: |
+          docker run -d --name postgres -e POSTGRES_USER=radarr -e POSTGRES_PASSWORD=radarr -p 5432:5432 postgres:16
+          for i in $(seq 1 30); do docker exec postgres pg_isready -U radarr && break; sleep 2; done
+
+      - name: Run unit tests
+        working-directory: _tests/net8.0/linux-x64/publish
+        env:
+          RADARR_TESTS_LOG_OUTPUT: File
+        run: |
+          # Database tests run against Postgres when these are set, SQLite otherwise
+          if [ "${{ matrix.database }}" = "postgres" ]; then
+            export Radarr__Postgres__Host=localhost Radarr__Postgres__Port=5432
+            export Radarr__Postgres__User=radarr Radarr__Postgres__Password=radarr
+          fi
+
+          find . -name ffprobe -exec chmod a+x {} \;
+          find . -name "Radarr.Test.Dummy" -exec chmod a+x {} \;
+          mkdir -p ~/.config/Radarr
+
+          # Same assemblies and categories as upstream's test.sh, which reports failures without failing
+          assemblies=$(ls Radarr.Api.Test.dll Radarr.Common.Test.dll Radarr.Core.Test.dll Radarr.Host.Test.dll \
+            Radarr.Libraries.Test.dll Radarr.Mono.Test.dll Radarr.Update.Test.dll 2>/dev/null)
+          dotnet test $assemblies \
+            --filter "Category!=ManualTest&Category!=WINDOWS&Category!=IntegrationTest&Category!=AutomationTest"
+
+  image:
+    name: Docker image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Set version
+        id: version
+        run: |
+          short_sha=$(git rev-parse --short=7 HEAD)
+          echo "assembly=${RADARR_BASE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${RADARR_BASE_VERSION}-editions.${GITHUB_RUN_NUMBER}.${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Radarr for Alpine
+        env:
+          RADARRVERSION: ${{ steps.version.outputs.assembly }}
+          BUILD_SOURCEBRANCHNAME: editions
+        run: ./build.sh --backend --frontend --packages -r linux-musl-x64 -f net8.0
+
+      - name: Build image
+        run: |
+          rm -rf distribution/docker/radarr
+          cp -r _artifacts/linux-musl-x64/net8.0/Radarr distribution/docker/radarr
+          docker build \
+            --build-arg VERSION=${{ steps.version.outputs.tag }} \
+            --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            -t radarr-editions:${{ steps.version.outputs.tag }} \
+            distribution/docker
+
+      - name: Smoke test image
+        run: |
+          mkdir -p /tmp/radarr-config
+          docker run -d --name radarr -p 7878:7878 \
+            -e PUID=$(id -u) -e PGID=$(id -g) -e TZ=Etc/UTC \
+            -v /tmp/radarr-config:/config \
+            radarr-editions:${{ steps.version.outputs.tag }}
+
+          for i in $(seq 1 60); do
+            if [ "$(curl -s http://localhost:7878/ping | jq -r .status 2>/dev/null)" = "OK" ]; then break; fi
+            sleep 2
+          done
+
+          api_key=$(sed -n 's:.*<ApiKey>\(.*\)</ApiKey>.*:\1:p' /tmp/radarr-config/config.xml)
+          curl -sf -H "X-Api-Key: $api_key" http://localhost:7878/api/v3/system/status | jq '{version, isDocker, packageUpdateMechanism}'
+
+          # The editions API answers (an empty list is fine for a fresh database)
+          curl -s -o /dev/null -w "movieedition: %{http_code}\n" -H "X-Api-Key: $api_key" "http://localhost:7878/api/v3/movieedition?movieId=1"
+          curl -sf -H "X-Api-Key: $api_key" http://localhost:7878/api/v3/config/mediamanagement | jq -e 'has("autoAddEditionsDefault")'
+
+      - name: Show container log
+        if: always()
+        run: docker logs radarr 2>&1 | tail -100 || true
+
+      - name: Save image
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        run: docker save radarr-editions:${{ steps.version.outputs.tag }} | gzip > image.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        with:
+          name: image
+          path: image.tar.gz
+          retention-days: 1
+
+  publish:
+    name: Push to GHCR
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: [test, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: image
+
+      - name: Push immutable tag
+        env:
+          TAG: ${{ needs.image.outputs.tag }}
+        run: |
+          image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/radarr
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+          # Tags are never reused, an existing one means this build was already published
+          if docker manifest inspect "$image:$TAG" > /dev/null 2>&1; then
+            echo "$image:$TAG already exists, not overwriting it"
+            exit 1
+          fi
+
+          gunzip -c image.tar.gz | docker load
+          docker tag "radarr-editions:$TAG" "$image:$TAG"
+          docker push "$image:$TAG"
+          echo "Pushed $image:$TAG" >> "$GITHUB_STEP_SUMMARY"
