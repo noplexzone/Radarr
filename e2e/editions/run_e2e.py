@@ -486,7 +486,7 @@ def scenario_auto_add_edition(ctx, r):
 
     r.check("Directors Cut grabbed", grabbed == ["Blade.Runner.1982.Directors.Cut.1080p.BluRay.x264-GRP"], str(grabbed))
     eds = editions(radarr, movie_id)
-    r.check("Directors Cut edition created", any(t.lower().startswith("directors cut") for t in eds), str(list(eds)))
+    r.check("Director's Cut edition created with a formatted name", "Director's Cut" in eds, str(list(eds)))
     after = snapshot(ctx["blade_path"])
     r.check("existing files untouched", all(after.get(k) == v for k, v in before.items()), str(set(before) - set(after)))
     r.check("three editions with one file each", sorted(len(v) for v in files_by_edition(radarr, movie_id).values()) == [1, 1, 1],

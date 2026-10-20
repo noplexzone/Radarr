@@ -87,7 +87,7 @@ namespace NzbDrone.Core.Movies.Editions
                 return MovieEditionMatch.Ambiguous($"'{parsedEdition}' matches several editions: {string.Join(", ", contained.Select(e => e.DisplayTitle))}");
             }
 
-            return MovieEditionMatch.New(MovieEdition.CreateNew(movieId, parsedEdition, monitorNewEdition));
+            return MovieEditionMatch.New(MovieEdition.CreateNew(movieId, EditionTitle.Format(parsedEdition), monitorNewEdition));
         }
 
         private static bool ContainsPhrase(string key, string phrase)

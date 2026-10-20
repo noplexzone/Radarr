@@ -143,9 +143,49 @@ namespace NzbDrone.Core.Datastore.Migration
             return defaultFile?.Id ?? current?.Id ?? movieFiles.OrderBy(f => f.Id).First().Id;
         }
 
+        // Frozen copy of EditionTitle.Format as of this migration: "UNRATED" becomes "Unrated", "Directors Cut" becomes "Director's Cut"
         private static string CleanTitle(string edition)
         {
-            return string.IsNullOrWhiteSpace(edition) ? null : edition.Trim();
+            if (string.IsNullOrWhiteSpace(edition))
+            {
+                return null;
+            }
+
+            var acronyms = new HashSet<string> { "3D", "4K", "DC", "HD", "HDR", "IMAX", "SDR", "TV", "UHD", "UK", "US" };
+            var smallWords = new HashSet<string> { "a", "and", "of", "the" };
+
+            var title = Regex.Replace(edition, @"[._\s]+", " ").Trim();
+            title = Regex.Replace(title, @"\bextcut\b", "Extended Cut", RegexOptions.IgnoreCase);
+
+            var words = title.Split(' ').Select((word, index) =>
+            {
+                var upper = word.ToUpperInvariant();
+                var lower = word.ToLowerInvariant();
+
+                if (acronyms.Contains(upper))
+                {
+                    return upper;
+                }
+
+                if (Regex.IsMatch(word, @"^\d+(st|nd|rd|th|in\d+)$", RegexOptions.IgnoreCase))
+                {
+                    return lower;
+                }
+
+                if (word != upper && word != lower)
+                {
+                    return word;
+                }
+
+                if (index > 0 && smallWords.Contains(lower))
+                {
+                    return lower;
+                }
+
+                return char.ToUpperInvariant(lower[0]) + lower.Substring(1);
+            });
+
+            return Regex.Replace(string.Join(" ", words), @"\b(Director|Collector)s\b", "$1's");
         }
 
         // Frozen copy of EditionNormalizer as of this migration, so later normaliser changes can't alter migrated keys

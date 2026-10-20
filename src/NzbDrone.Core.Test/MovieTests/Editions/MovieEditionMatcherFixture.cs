@@ -73,6 +73,15 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
         }
 
         [Test]
+        public void should_format_new_edition_title()
+        {
+            var match = MovieEditionMatcher.Match(1, _editions, "DIRECTORS CUT UNCUT", false);
+
+            match.Type.Should().Be(MovieEditionMatchType.New);
+            match.Edition.Title.Should().Be("Director's Cut Uncut");
+        }
+
+        [Test]
         public void should_match_existing_remastered_edition()
         {
             _editions.Add(new MovieEdition { Id = 4, MovieId = 1, Title = "Remastered", Key = EditionNormalizer.Normalize("Remastered") });
@@ -121,7 +130,7 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
 
             match.Type.Should().Be(MovieEditionMatchType.New);
             match.Edition.IsNew.Should().BeTrue();
-            match.Edition.Title.Should().Be(parsed);
+            match.Edition.Title.Should().Be(EditionTitle.Format(parsed));
             match.Edition.MovieId.Should().Be(1);
             match.Edition.Monitored.Should().BeFalse();
         }

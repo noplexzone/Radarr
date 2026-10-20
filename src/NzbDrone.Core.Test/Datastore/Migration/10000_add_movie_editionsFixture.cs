@@ -96,6 +96,21 @@ namespace NzbDrone.Core.Test.Datastore.Migration
         }
 
         [Test]
+        public void should_format_edition_titles_from_file_names()
+        {
+            var db = WithDapperMigrationTestDb(c =>
+            {
+                AddMovie(c, 1, 1);
+                AddFile(c, 1, 1, "UNRATED");
+                AddFile(c, 2, 1, "Directors Cut");
+            });
+
+            var editions = db.Query<MovieEdition10000>("SELECT * FROM \"MovieEditions\"").ToList();
+
+            editions.Where(e => !e.IsDefault).Select(e => e.Title).Should().BeEquivalentTo("Unrated", "Director's Cut");
+        }
+
+        [Test]
         public void should_split_multiple_files_into_editions()
         {
             var db = WithDapperMigrationTestDb(c =>
