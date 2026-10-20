@@ -165,6 +165,7 @@ function MovieIndexOverview(props: MovieIndexOverviewProps) {
           <MovieIndexProgressBar
             movieId={movieId}
             movieFile={movie.movieFile}
+            editions={movie.editions}
             monitored={monitored}
             hasFile={hasFile}
             isAvailable={isAvailable}

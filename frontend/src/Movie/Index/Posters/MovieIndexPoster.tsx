@@ -84,6 +84,7 @@ function MovieIndexPoster(props: MovieIndexPosterProps) {
     releaseDate,
     path,
     movieFile,
+    editions,
     ratings,
     statistics = {} as Statistics,
     certification,
@@ -219,6 +220,7 @@ function MovieIndexPoster(props: MovieIndexPosterProps) {
       <MovieIndexProgressBar
         movieId={movieId}
         movieFile={movieFile}
+        editions={editions}
         monitored={monitored}
         hasFile={hasFile}
         isAvailable={isAvailable}

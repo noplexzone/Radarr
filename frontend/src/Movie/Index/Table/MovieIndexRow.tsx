@@ -82,6 +82,7 @@ function MovieIndexRow(props: MovieIndexRowProps) {
     isAvailable,
     hasFile,
     movieFile,
+    editions,
     youTubeTrailerId,
     isSaving = false,
   } = movie;
@@ -364,6 +365,7 @@ function MovieIndexRow(props: MovieIndexRowProps) {
               <MovieIndexProgressBar
                 movieId={movieId}
                 movieFile={movieFile}
+                editions={editions}
                 monitored={monitored}
                 hasFile={hasFile}
                 isAvailable={isAvailable}

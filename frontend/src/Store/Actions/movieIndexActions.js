@@ -329,6 +329,11 @@ export const defaultState = {
       valueType: filterBuilderValueTypes.MINIMUM_AVAILABILITY
     },
     {
+      name: 'monitoredEditions',
+      label: () => translate('MonitoredEditions'),
+      type: filterBuilderTypes.NUMBER
+    },
+    {
       name: 'standardEditionHasFile',
       label: () => translate('StandardEditionHasFile'),
       type: filterBuilderTypes.EXACT,

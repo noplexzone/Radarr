@@ -2,6 +2,7 @@ import React from 'react';
 import { useSelector } from 'react-redux';
 import ProgressBar from 'Components/ProgressBar';
 import { sizes } from 'Helpers/Props';
+import { MovieEditionSummary } from 'Movie/Editions/MovieEdition';
 import createMovieQueueItemsDetailsSelector, {
   MovieQueueDetails,
 } from 'Movie/Index/createMovieQueueDetailsSelector';
@@ -14,6 +15,7 @@ import styles from './MovieIndexProgressBar.css';
 interface MovieIndexProgressBarProps {
   movieId: number;
   movieFile?: MovieFile;
+  editions?: MovieEditionSummary[];
   monitored: boolean;
   status: MovieStatus;
   hasFile: boolean;
@@ -27,6 +29,7 @@ interface MovieIndexProgressBarProps {
 function MovieIndexProgressBar({
   movieId,
   movieFile,
+  editions,
   monitored,
   status,
   hasFile,
@@ -40,12 +43,22 @@ function MovieIndexProgressBar({
     createMovieQueueItemsDetailsSelector(movieId)
   );
 
-  const progress = 100;
+  // With several editions the bar counts monitored editions that have a file, e.g. 1/2
+  const monitoredEditions =
+    editions && editions.length > 1 ? editions.filter((e) => e.monitored) : [];
+  const editionCount = monitoredEditions.length;
+  const editionFileCount = monitoredEditions.filter((e) => e.hasFile).length;
+  const showEditions = editionCount > 0;
+  const allFiles = showEditions ? editionFileCount === editionCount : hasFile;
+
+  const progress = showEditions ? (editionFileCount / editionCount) * 100 : 100;
   const queueStatusText =
     queueDetails.count > 0 ? translate('Downloading') : null;
 
   let movieStatus = translate('NotAvailable');
-  if (hasFile) {
+  if (showEditions) {
+    movieStatus = `${editionFileCount}/${editionCount}`;
+  } else if (hasFile) {
     movieStatus = movieFile?.quality?.quality.name ?? translate('Downloaded');
   } else if (status === 'deleted') {
     movieStatus = translate('Deleted');
@@ -66,7 +79,7 @@ function MovieIndexProgressBar({
       kind={getProgressBarKind(
         status,
         monitored,
-        hasFile,
+        allFiles,
         isAvailable,
         queueDetails.count > 0
       )}

@@ -87,18 +87,13 @@ export const filters = [
     ]
   },
   {
-    key: 'missingStandardEdition',
-    label: () => translate('MissingStandardEdition'),
+    key: 'multipleEditionsMonitored',
+    label: () => translate('MultipleEditionsMonitored'),
     filters: [
       {
-        key: 'hasFile',
-        value: true,
-        type: filterTypes.EQUAL
-      },
-      {
-        key: 'standardEditionHasFile',
-        value: false,
-        type: filterTypes.EQUAL
+        key: 'monitoredEditions',
+        value: 1,
+        type: filterTypes.GREATER_THAN
       }
     ]
   },
@@ -149,6 +144,13 @@ export const filterPredicates = {
     const standardEdition = (item.editions ?? []).find((e) => e.isDefault);
 
     return predicate(standardEdition ? standardEdition.hasFile : item.hasFile, filterValue);
+  },
+
+  monitoredEditions: function(item, filterValue, type) {
+    const predicate = filterTypePredicates[type];
+    const monitoredEditions = (item.editions ?? []).filter((e) => e.monitored).length;
+
+    return predicate(monitoredEditions, filterValue);
   },
 
   releaseGroups: function(item, filterValue, type) {
