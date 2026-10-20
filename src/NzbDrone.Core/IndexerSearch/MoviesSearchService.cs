@@ -121,6 +121,7 @@ namespace NzbDrone.Core.IndexerSearch
         {
             _logger.ProgressInfo("Performing search for {0} movies", movies.Count);
             var downloadedCount = 0;
+            var newEditionCount = 0;
 
             foreach (var movieId in movies.GroupBy(e => e.Id).OrderBy(g => g.Min(m => m.LastSearchTime ?? DateTime.MinValue)))
             {
@@ -136,12 +137,75 @@ namespace NzbDrone.Core.IndexerSearch
                     continue;
                 }
 
+                // Grabbing a release for a new edition creates it, so note which editions were new beforehand
+                var newEditions = decisions
+                    .Where(d => d.RemoteMovie.MovieEdition is { IsNew: true })
+                    .GroupBy(d => d.RemoteMovie.MovieEdition.Key)
+                    .Select(g => (Title: g.First().RemoteMovie.MovieEdition.DisplayTitle, Decisions: g.ToList()))
+                    .ToList();
+
                 var processDecisions = await _processDownloadDecisions.ProcessDecisions(decisions);
 
                 downloadedCount += processDecisions.Grabbed.Count;
+                newEditionCount += ReportEditionDiscovery(movieId.First(), decisions, newEditions, processDecisions, userInvokedSearch && movies.Count == 1);
             }
 
-            _logger.ProgressInfo("Completed search for {0} movies. {1} reports downloaded.", movies.Count, downloadedCount);
+            if (newEditionCount > 0)
+            {
+                _logger.ProgressInfo("Completed search for {0} movies. {1} reports downloaded. {2} new editions found.", movies.Count, downloadedCount, newEditionCount);
+            }
+            else
+            {
+                _logger.ProgressInfo("Completed search for {0} movies. {1} reports downloaded.", movies.Count, downloadedCount);
+            }
+        }
+
+        // Says which editions a movie doesn't have yet were found in the results and what happened to them,
+        // so it's visible in System > Events why an edition was or wasn't added
+        private int ReportEditionDiscovery(Movie movie, List<DownloadDecision> decisions, List<(string Title, List<DownloadDecision> Decisions)> newEditions, ProcessedDecisions processed, bool reportNothingFound)
+        {
+            var name = $"{movie.Title} ({movie.Year})";
+
+            foreach (var (title, editionDecisions) in newEditions)
+            {
+                var grabbed = editionDecisions.FirstOrDefault(d => processed.Grabbed.Contains(d));
+
+                if (grabbed != null)
+                {
+                    _logger.Info("New edition '{0}' found for {1} in {2}, added and grabbed {3}", title, name, Releases(editionDecisions.Count), grabbed.RemoteMovie.Release.Title);
+                    continue;
+                }
+
+                var rejections = editionDecisions.SelectMany(d => d.Rejections).ToList();
+
+                if (rejections.Any(r => r.Reason == DownloadRejectionReason.EditionNotTracked))
+                {
+                    _logger.Info("New edition '{0}' found for {1} in {2}, not added because Auto-add new editions is off for this movie", title, name, Releases(editionDecisions.Count));
+                    continue;
+                }
+
+                var reasons = rejections.Select(r => r.Message).Distinct().Take(3);
+                _logger.Info("New edition '{0}' found for {1} in {2}, not added: {3}", title, name, Releases(editionDecisions.Count), string.Join("; ", reasons));
+            }
+
+            var unclear = decisions.Count(d => d.RemoteMovie.MovieEdition == null && d.RemoteMovie.MovieEditionMatch is { IsResolved: false });
+
+            if (unclear > 0)
+            {
+                _logger.Info("{0} for {1} skipped because their edition couldn't be determined", Releases(unclear), name);
+            }
+
+            if (newEditions.Count == 0 && reportNothingFound)
+            {
+                _logger.Info("No new editions found for {0} in {1}", name, Releases(decisions.Count));
+            }
+
+            return newEditions.Count;
+        }
+
+        private static string Releases(int count)
+        {
+            return count == 1 ? "1 release" : $"{count} releases";
         }
     }
 }
