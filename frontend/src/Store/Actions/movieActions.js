@@ -87,6 +87,22 @@ export const filters = [
     ]
   },
   {
+    key: 'missingStandardEdition',
+    label: () => translate('MissingStandardEdition'),
+    filters: [
+      {
+        key: 'hasFile',
+        value: true,
+        type: filterTypes.EQUAL
+      },
+      {
+        key: 'standardEditionHasFile',
+        value: false,
+        type: filterTypes.EQUAL
+      }
+    ]
+  },
+  {
     key: 'cutoffunmet',
     label: () => translate('CutoffUnmet'),
     filters: [
@@ -126,6 +142,13 @@ export const filterPredicates = {
     const { originalLanguage } = item;
 
     return predicate(originalLanguage ? originalLanguage.name : '', filterValue);
+  },
+
+  standardEditionHasFile: function(item, filterValue, type) {
+    const predicate = filterTypePredicates[type];
+    const standardEdition = (item.editions ?? []).find((e) => e.isDefault);
+
+    return predicate(standardEdition ? standardEdition.hasFile : item.hasFile, filterValue);
   },
 
   releaseGroups: function(item, filterValue, type) {

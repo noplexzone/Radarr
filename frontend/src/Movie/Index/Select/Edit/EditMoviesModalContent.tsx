@@ -15,6 +15,7 @@ import styles from './EditMoviesModalContent.css';
 
 interface SavePayload {
   monitored?: boolean;
+  standardEditionMonitored?: boolean;
   qualityProfileId?: number;
   minimumAvailability?: string;
   rootFolderPath?: string;
@@ -55,6 +56,8 @@ function EditMoviesModalContent(props: EditMoviesModalContentProps) {
   const { movieIds, onSavePress, onModalClose } = props;
 
   const [monitored, setMonitored] = useState(NO_CHANGE);
+  const [standardEditionMonitored, setStandardEditionMonitored] =
+    useState(NO_CHANGE);
   const [qualityProfileId, setQualityProfileId] = useState<string | number>(
     NO_CHANGE
   );
@@ -70,6 +73,12 @@ function EditMoviesModalContent(props: EditMoviesModalContentProps) {
       if (monitored !== NO_CHANGE) {
         hasChanges = true;
         payload.monitored = monitored === 'monitored';
+      }
+
+      if (standardEditionMonitored !== NO_CHANGE) {
+        hasChanges = true;
+        payload.standardEditionMonitored =
+          standardEditionMonitored === 'monitored';
       }
 
       if (qualityProfileId !== NO_CHANGE) {
@@ -96,6 +105,7 @@ function EditMoviesModalContent(props: EditMoviesModalContentProps) {
     },
     [
       monitored,
+      standardEditionMonitored,
       qualityProfileId,
       minimumAvailability,
       rootFolderPath,
@@ -109,6 +119,9 @@ function EditMoviesModalContent(props: EditMoviesModalContentProps) {
       switch (name) {
         case 'monitored':
           setMonitored(value as string);
+          break;
+        case 'standardEditionMonitored':
+          setStandardEditionMonitored(value as string);
           break;
         case 'qualityProfileId':
           setQualityProfileId(value as string);
@@ -163,6 +176,19 @@ function EditMoviesModalContent(props: EditMoviesModalContentProps) {
             name="monitored"
             value={monitored}
             values={monitoredOptions}
+            onChange={onInputChange}
+          />
+        </FormGroup>
+
+        <FormGroup>
+          <FormLabel>{translate('StandardEdition')}</FormLabel>
+
+          <FormInputGroup
+            type={inputTypes.SELECT}
+            name="standardEditionMonitored"
+            value={standardEditionMonitored}
+            values={monitoredOptions}
+            helpText={translate('StandardEditionMonitoredHelpText')}
             onChange={onInputChange}
           />
         </FormGroup>

@@ -384,6 +384,17 @@ def scenario_adoption(ctx, r):
             str({k: len(v) for k, v in by_edition.items()}))
     r.check("folder unchanged", snapshot(path) == before)
 
+    # The bulk movie editor monitors or unmonitors the Standard edition
+    updated = radarr.call("PUT", "/movie/editor", {"movieIds": [movie_id], "standardEditionMonitored": False}, ok=(200, 202))
+    standard = editions(radarr, movie_id)["Standard"]
+    returned = [e for e in updated[0].get("editions") or [] if e["isDefault"]]
+    r.check("bulk editor unmonitors only the Standard edition",
+            not standard["monitored"] and all(e["monitored"] for t, e in editions(radarr, movie_id).items() if t != "Standard")
+            and returned and not returned[0]["monitored"] and returned[0]["hasFile"],
+            str({t: e["monitored"] for t, e in editions(radarr, movie_id).items()}))
+    radarr.call("PUT", "/movie/editor", {"movieIds": [movie_id], "standardEditionMonitored": True}, ok=(200, 202))
+    r.check("bulk editor monitors the Standard edition again", editions(radarr, movie_id)["Standard"]["monitored"])
+
 
 def scenario_second_edition(ctx, r):
     """A second edition is grabbed and imported next to the existing file"""

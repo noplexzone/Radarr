@@ -329,6 +329,12 @@ export const defaultState = {
       valueType: filterBuilderValueTypes.MINIMUM_AVAILABILITY
     },
     {
+      name: 'standardEditionHasFile',
+      label: () => translate('StandardEditionHasFile'),
+      type: filterBuilderTypes.EXACT,
+      valueType: filterBuilderValueTypes.BOOL
+    },
+    {
       name: 'title',
       label: () => translate('Title'),
       type: filterBuilderTypes.STRING

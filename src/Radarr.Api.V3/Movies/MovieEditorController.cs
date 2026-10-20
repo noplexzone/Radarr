@@ -10,7 +10,9 @@ using NzbDrone.Core.MediaCover;
 using NzbDrone.Core.Messaging.Commands;
 using NzbDrone.Core.Movies;
 using NzbDrone.Core.Movies.Commands;
+using NzbDrone.Core.Movies.Editions;
 using NzbDrone.Core.Movies.Translations;
+using Radarr.Api.V3.MovieEditions;
 using Radarr.Http;
 
 namespace Radarr.Api.V3.Movies
@@ -25,6 +27,7 @@ namespace Radarr.Api.V3.Movies
         private readonly IManageCommandQueue _commandQueueManager;
         private readonly MovieEditorValidator _movieEditorValidator;
         private readonly IUpgradableSpecification _upgradableSpecification;
+        private readonly IMovieEditionService _movieEditionService;
 
         public MovieEditorController(IMovieService movieService,
             IMovieTranslationService movieTranslationService,
@@ -32,7 +35,8 @@ namespace Radarr.Api.V3.Movies
             IConfigService configService,
             IManageCommandQueue commandQueueManager,
             MovieEditorValidator movieEditorValidator,
-            IUpgradableSpecification upgradableSpecification)
+            IUpgradableSpecification upgradableSpecification,
+            IMovieEditionService movieEditionService)
         {
             _movieService = movieService;
             _movieTranslationService = movieTranslationService;
@@ -41,6 +45,7 @@ namespace Radarr.Api.V3.Movies
             _commandQueueManager = commandQueueManager;
             _movieEditorValidator = movieEditorValidator;
             _upgradableSpecification = upgradableSpecification;
+            _movieEditionService = movieEditionService;
         }
 
         [HttpPut]
@@ -119,6 +124,18 @@ namespace Radarr.Api.V3.Movies
             var tdict = translations.ToDictionaryIgnoreDuplicates(x => x.MovieMetadataId);
 
             var updatedMovies = _movieService.UpdateMovie(moviesToUpdate, !resource.MoveFiles);
+            var editions = _movieEditionService.GetEditions(updatedMovies.Select(m => m.Id), true);
+
+            if (resource.StandardEditionMonitored.HasValue)
+            {
+                var changed = editions.Values
+                    .Select(e => e.Single(d => d.IsDefault))
+                    .Where(d => d.Monitored != resource.StandardEditionMonitored.Value)
+                    .ToList();
+
+                changed.ForEach(d => d.Monitored = resource.StandardEditionMonitored.Value);
+                _movieEditionService.UpdateEditions(changed);
+            }
 
             var moviesResources = new List<MovieResource>(updatedMovies.Count);
 
@@ -126,6 +143,11 @@ namespace Radarr.Api.V3.Movies
             {
                 var translation = GetTranslationFromDict(tdict, movie.MovieMetadata, configLanguage);
                 var movieResource = movie.ToResource(availabilityDelay, translation, _upgradableSpecification);
+
+                if (editions.TryGetValue(movie.Id, out var movieEditions))
+                {
+                    movieResource.Editions = movieEditions.ToSummaryResource(e => _movieEditionService.GetCurrentFile(movie, e, e.Files));
+                }
 
                 MapCoversToLocal(movieResource);
 

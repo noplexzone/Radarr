@@ -7,6 +7,7 @@ namespace Radarr.Api.V3.Movies
     {
         public List<int> MovieIds { get; set; }
         public bool? Monitored { get; set; }
+        public bool? StandardEditionMonitored { get; set; }
         public int? QualityProfileId { get; set; }
         public MovieStatusType? MinimumAvailability { get; set; }
         public string RootFolderPath { get; set; }
