@@ -31,6 +31,7 @@ COPY radarr/ /app/radarr/bin/
 # Updates come from new images, never from inside the container
 RUN \
   rm -rf /app/radarr/bin/Radarr.Update && \
+  chmod 755 /app/radarr/bin/Radarr /app/radarr/bin/ffprobe && \
   printf "UpdateMethod=docker\nBranch=editions\nPackageVersion=%s\nPackageAuthor=[noplexzone](https://github.com/noplexzone/radarr)\n" "${VERSION}" > /app/radarr/package_info && \
   printf "noplexzone/radarr editions version: %s\nBuild-date: %s\n" "${VERSION}" "${BUILD_DATE}" > /build_version
 

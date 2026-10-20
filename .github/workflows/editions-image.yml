@@ -142,6 +142,9 @@ jobs:
           curl -s -o /dev/null -w "movieedition: %{http_code}\n" -H "X-Api-Key: $api_key" "http://localhost:7878/api/v3/movieedition?movieId=1"
           curl -sf -H "X-Api-Key: $api_key" http://localhost:7878/api/v3/config/mediamanagement | jq -e 'has("autoAddEditionsDefault")'
 
+          # Media info and sample detection need ffprobe to run as the service user
+          docker exec radarr s6-setuidgid abc /app/radarr/bin/ffprobe -version | head -1
+
           # State in /config survives a container restart
           curl -sf -H "X-Api-Key: $api_key" -H "Content-Type: application/json" -d '{"label":"smoke"}' http://localhost:7878/api/v3/tag > /dev/null
           docker restart radarr

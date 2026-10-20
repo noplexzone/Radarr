@@ -24,6 +24,7 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
         [TestCase("Extended Edition", "extended")]
         [TestCase("Extended Cut", "extended")]
         [TestCase("Extended", "extended")]
+        [TestCase("ExtCut", "extended")]
         [TestCase("25th Anniversary Edition", "25th anniversary")]
         [TestCase("Black & Chrome", "black and chrome")]
         [TestCase("Black and Chrome", "black and chrome")]

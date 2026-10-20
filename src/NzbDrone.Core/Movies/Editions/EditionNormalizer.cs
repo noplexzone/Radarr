@@ -11,6 +11,7 @@ namespace NzbDrone.Core.Movies.Editions
         private static readonly Regex InvalidCharsRegex = new Regex(@"[^\p{L}\p{N}' ]+", RegexOptions.Compiled);
         private static readonly Regex WhitespaceRegex = new Regex(@"\s{2,}", RegexOptions.Compiled);
         private static readonly Regex SuffixRegex = new Regex(@"(?<=\S)\s+(cut|edition|version)$", RegexOptions.Compiled);
+        private static readonly Regex ExtCutRegex = new Regex(@"\bextcut\b", RegexOptions.Compiled);
         private static readonly Regex ArticleRegex = new Regex(@"^the\s+(?=\S)", RegexOptions.Compiled);
 
         // Produces the key used to decide whether two edition names describe the same edition,
@@ -31,6 +32,7 @@ namespace NzbDrone.Core.Movies.Editions
             key = PossessiveRegex.Replace(key, "$1's");
             key = WhitespaceRegex.Replace(key, " ").Trim();
             key = ArticleRegex.Replace(key, string.Empty);
+            key = ExtCutRegex.Replace(key, "extended");
             key = SuffixRegex.Replace(key, string.Empty);
 
             return key;

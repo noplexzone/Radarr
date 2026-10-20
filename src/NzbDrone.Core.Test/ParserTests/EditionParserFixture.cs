@@ -11,6 +11,7 @@ namespace NzbDrone.Core.Test.ParserTests
         [TestCase("Movie Title 1999 (Despecialized).mkv", "Despecialized")]
         [TestCase("Movie Title.2012.(Special.Edition.Remastered).[Bluray-1080p].mkv", "Special Edition Remastered")]
         [TestCase("Movie Title 2012 Extended", "Extended")]
+        [TestCase("LOTR-Fellowship.of.the.Ring.2001.ExtCut.BluRay.1080p.DD5.1.x265-d3g", "ExtCut")]
         [TestCase("Movie Title 2012 Extended Directors Cut Fan Edit", "Extended Directors Cut Fan Edit")]
         [TestCase("Movie Title 2012 Director's Cut", "Director's Cut")]
         [TestCase("Movie Title 2012 Directors Cut", "Directors Cut")]
