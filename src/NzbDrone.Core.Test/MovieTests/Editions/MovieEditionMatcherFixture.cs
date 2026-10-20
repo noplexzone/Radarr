@@ -26,6 +26,10 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
         [TestCase("")]
         [TestCase("Remastered")]
         [TestCase("REMASTERED")]
+        [TestCase("Theatrical")]
+        [TestCase("Theatrical Cut")]
+        [TestCase("Theatrical.Edition")]
+        [TestCase("Theatrical Remastered")]
         public void should_match_default_edition(string parsed)
         {
             var match = MovieEditionMatcher.Match(1, _editions, parsed);
@@ -72,6 +76,17 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
 
             match.Type.Should().Be(MovieEditionMatchType.Default);
             match.Edition.Id.Should().Be(1);
+        }
+
+        [Test]
+        public void should_match_existing_theatrical_edition_instead_of_default()
+        {
+            _editions.Add(new MovieEdition { Id = 4, MovieId = 1, Title = "Theatrical", Key = EditionNormalizer.Normalize("Theatrical") });
+
+            var match = MovieEditionMatcher.Match(1, _editions, "Theatrical Cut");
+
+            match.Type.Should().Be(MovieEditionMatchType.Matched);
+            match.Edition.Id.Should().Be(4);
         }
 
         [TestCase("IMAX")]

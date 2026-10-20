@@ -375,7 +375,10 @@ def scenario_adoption(ctx, r):
     radarr.command("RescanMovie", movieId=movie_id)
 
     by_edition = files_by_edition(radarr, movie_id)
-    r.check("each tagged file in its own edition", all(len(by_edition.get(n, [])) == 1 for n in names),
+    # A Theatrical tag describes the cut the Standard edition holds
+    expected = {"Standard": 1, "Director's Cut": 1, "Final Cut": 1}
+    r.check("each tagged file in its own edition, Theatrical in Standard",
+            {k: len(v) for k, v in by_edition.items()} == expected,
             str({k: len(v) for k, v in by_edition.items()}))
     r.check("no other edition holds a file", sum(len(v) for v in by_edition.values()) == 3,
             str({k: len(v) for k, v in by_edition.items()}))

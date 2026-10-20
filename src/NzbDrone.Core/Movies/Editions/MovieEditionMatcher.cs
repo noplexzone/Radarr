@@ -44,6 +44,9 @@ namespace NzbDrone.Core.Movies.Editions
         // Words describing a restoration rather than a different cut of the movie
         private static readonly Regex QualifierRegex = new Regex(@"\b(4k |uhd )?(remastered|remaster|restored|restoration)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // Names for the cut the Standard edition already holds, unless the movie has an edition by that name
+        private static readonly Regex StandardCutRegex = new Regex(@"^(theatrical|standard)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public static MovieEditionMatch Match(int movieId, IEnumerable<MovieEdition> movieEditions, string parsedEdition, bool monitorNewEdition = true)
         {
             var editions = movieEditions.ToList();
@@ -69,9 +72,9 @@ namespace NzbDrone.Core.Movies.Editions
 
             var withoutQualifiers = EditionNormalizer.Normalize(QualifierRegex.Replace(key, " "));
 
-            if (withoutQualifiers.IsNullOrWhiteSpace())
+            if (withoutQualifiers.IsNullOrWhiteSpace() || StandardCutRegex.IsMatch(withoutQualifiers))
             {
-                // e.g. "Remastered" alone describes the standard cut
+                // e.g. "Remastered" or "Theatrical Cut" alone describes the standard cut
                 return MovieEditionMatch.Default(defaultEdition);
             }
 
