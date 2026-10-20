@@ -24,9 +24,6 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
 
         [TestCase(null)]
         [TestCase("")]
-        [TestCase("Theatrical")]
-        [TestCase("Theatrical Cut")]
-        [TestCase("Theatrical.Edition")]
         public void should_match_default_edition(string parsed)
         {
             var match = MovieEditionMatcher.Match(1, _editions, parsed);
@@ -108,6 +105,8 @@ namespace NzbDrone.Core.Test.MovieTests.Editions
             match.Edition.Id.Should().Be(4);
         }
 
+        [TestCase("Theatrical")]
+        [TestCase("Theatrical Cut")]
         [TestCase("Remastered")]
         [TestCase("REMASTERED")]
         [TestCase("Restored")]

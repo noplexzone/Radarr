@@ -375,10 +375,7 @@ def scenario_adoption(ctx, r):
     radarr.command("RescanMovie", movieId=movie_id)
 
     by_edition = files_by_edition(radarr, movie_id)
-    # A Theatrical tag describes the cut the Standard edition holds
-    expected = {"Standard": 1, "Director's Cut": 1, "Final Cut": 1}
-    r.check("each tagged file in its own edition, Theatrical in Standard",
-            {k: len(v) for k, v in by_edition.items()} == expected,
+    r.check("each tagged file in its own edition", all(len(by_edition.get(n, [])) == 1 for n in names),
             str({k: len(v) for k, v in by_edition.items()}))
     r.check("no other edition holds a file", sum(len(v) for v in by_edition.values()) == 3,
             str({k: len(v) for k, v in by_edition.items()}))
@@ -390,7 +387,7 @@ def scenario_adoption(ctx, r):
     returned = [e for e in updated[0].get("editions") or [] if e["isDefault"]]
     r.check("bulk editor unmonitors only the Standard edition",
             not standard["monitored"] and all(e["monitored"] for t, e in editions(radarr, movie_id).items() if t != "Standard")
-            and returned and not returned[0]["monitored"] and returned[0]["hasFile"],
+            and returned and not returned[0]["monitored"],
             str({t: e["monitored"] for t, e in editions(radarr, movie_id).items()}))
     radarr.call("PUT", "/movie/editor", {"movieIds": [movie_id], "standardEditionMonitored": True}, ok=(200, 202))
     r.check("bulk editor monitors the Standard edition again", editions(radarr, movie_id)["Standard"]["monitored"])

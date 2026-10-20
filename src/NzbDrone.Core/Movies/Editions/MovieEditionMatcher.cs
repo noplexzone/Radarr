@@ -44,10 +44,6 @@ namespace NzbDrone.Core.Movies.Editions
         // Words describing a restoration rather than a different cut of the movie
         private static readonly Regex QualifierRegex = new Regex(@"\b(4k |uhd )?(remastered|remaster|restored|restoration)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-        // Names for the cut the Standard edition already holds, unless the movie has an edition by that name.
-        // A remaster of it ("Remastered", "Theatrical Remastered") is a separate edition.
-        private static readonly Regex StandardCutRegex = new Regex(@"^(theatrical|standard)$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
         public static MovieEditionMatch Match(int movieId, IEnumerable<MovieEdition> movieEditions, string parsedEdition, bool monitorNewEdition = true)
         {
             var editions = movieEditions.ToList();
@@ -71,17 +67,11 @@ namespace NzbDrone.Core.Movies.Editions
                 return exact.IsDefault ? MovieEditionMatch.Default(exact) : MovieEditionMatch.Matched(exact);
             }
 
-            if (StandardCutRegex.IsMatch(key))
-            {
-                // e.g. "Theatrical Cut" alone describes the standard cut
-                return MovieEditionMatch.Default(defaultEdition);
-            }
-
             var withoutQualifiers = EditionNormalizer.Normalize(QualifierRegex.Replace(key, " "));
 
             if (withoutQualifiers.IsNotNullOrWhiteSpace() && withoutQualifiers != key)
             {
-                // "Final Cut Remastered" is the Final Cut edition, but a remaster is never the Standard edition
+                // "Final Cut Remastered" is the Final Cut edition, but only a release without an edition name is the Standard edition
                 var qualified = editions.FirstOrDefault(e => e.Key == withoutQualifiers && !e.IsDefault);
 
                 if (qualified != null)
