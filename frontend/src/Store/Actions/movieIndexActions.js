@@ -331,7 +331,24 @@ export const defaultState = {
     {
       name: 'monitoredEditions',
       label: () => translate('MonitoredEditions'),
-      type: filterBuilderTypes.NUMBER
+      type: filterBuilderTypes.ARRAY,
+      optionsSelector: function(items) {
+        const titles = new Set();
+
+        items.forEach((movie) => {
+          (movie.editions ?? []).forEach((edition) => titles.add(edition.title));
+        });
+
+        return Array.from(titles)
+          .map((title) => ({ id: title, name: title }))
+          .sort(sortByProp('name'));
+      }
+    },
+    {
+      name: 'multipleEditionsMonitored',
+      label: () => translate('MultipleEditionsMonitored'),
+      type: filterBuilderTypes.EXACT,
+      valueType: filterBuilderValueTypes.BOOL
     },
     {
       name: 'standardEditionHasFile',

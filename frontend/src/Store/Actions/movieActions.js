@@ -59,8 +59,8 @@ export const filters = [
         type: filterTypes.EQUAL
       },
       {
-        key: 'hasFile',
-        value: false,
+        key: 'isMissing',
+        value: true,
         type: filterTypes.EQUAL
       }
     ]
@@ -75,25 +75,14 @@ export const filters = [
         type: filterTypes.EQUAL
       },
       {
-        key: 'hasFile',
-        value: false,
+        key: 'isMissing',
+        value: true,
         type: filterTypes.EQUAL
       },
       {
         key: 'isAvailable',
         value: true,
         type: filterTypes.EQUAL
-      }
-    ]
-  },
-  {
-    key: 'multipleEditionsMonitored',
-    label: () => translate('MultipleEditionsMonitored'),
-    filters: [
-      {
-        key: 'monitoredEditions',
-        value: 1,
-        type: filterTypes.GREATER_THAN
       }
     ]
   },
@@ -146,11 +135,30 @@ export const filterPredicates = {
     return predicate(standardEdition ? standardEdition.hasFile : item.hasFile, filterValue);
   },
 
+  // No file at all, or a movie with several editions missing a monitored one
+  isMissing: function(item, filterValue, type) {
+    const predicate = filterTypePredicates[type];
+    const editions = item.editions ?? [];
+    const editionMissing =
+      editions.length > 1 && editions.some((e) => e.monitored && !e.hasFile);
+
+    return predicate(!item.hasFile || editionMissing, filterValue);
+  },
+
   monitoredEditions: function(item, filterValue, type) {
     const predicate = filterTypePredicates[type];
-    const monitoredEditions = (item.editions ?? []).filter((e) => e.monitored).length;
+    const monitoredEditions = (item.editions ?? [])
+      .filter((e) => e.monitored)
+      .map((e) => e.title);
 
     return predicate(monitoredEditions, filterValue);
+  },
+
+  multipleEditionsMonitored: function(item, filterValue, type) {
+    const predicate = filterTypePredicates[type];
+    const monitoredCount = (item.editions ?? []).filter((e) => e.monitored).length;
+
+    return predicate(monitoredCount > 1, filterValue);
   },
 
   releaseGroups: function(item, filterValue, type) {
