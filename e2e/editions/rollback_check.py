@@ -184,8 +184,11 @@ def run(args):
         changed = [t for t, rows in settings(args).items() if rows != stock_settings[t]]
         r.check("settings, profiles, indexers and download clients preserved", not changed, str(changed))
         eds = e2e.editions(radarr, blade)
-        r.check("existing file becomes the default edition", list(eds) == ["Final Cut"] and eds["Final Cut"]["isDefault"]
+        r.check("tagged file keeps its own edition", "Final Cut" in eds and not eds["Final Cut"]["isDefault"]
                 and eds["Final Cut"]["movieFileId"] == int(stock_files[1].split("|")[0]), json.dumps(eds))
+        r.check("movie gets an empty, unmonitored Standard edition", "Standard" in eds and eds["Standard"]["isDefault"]
+                and not eds["Standard"]["monitored"] and not eds["Standard"].get("movieFile"), json.dumps(eds))
+        r.check("untagged file stays in Standard", list(e2e.editions(radarr, arrival)) == ["Standard"])
 
         # A second edition added after the switch, which stock Radarr knows nothing about
         mocks.make_video(os.path.join(blade_path, "Blade.Runner.1982.Directors.Cut.1080p.BluRay.x264-GRP.mkv"), "directors cut")

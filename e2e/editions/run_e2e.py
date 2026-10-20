@@ -577,7 +577,7 @@ def scenario_database(ctx, r):
                        '(SELECT 1 FROM "MovieFiles" f WHERE f."Id" = m."MovieFileId" AND f."MovieId" = m."Id")', db)
     r.check("every movie's main file exists", stale == "0", stale)
     versions = psql(args, 'SELECT "Version" FROM "VersionInfo" WHERE "Version" >= 10000', db)
-    r.check("fork migration applied once", versions.splitlines() == ["10000"], versions)
+    r.check("fork migrations applied once", versions.splitlines() == ["10000", "10001"], versions)
 
 
 if __name__ == "__main__":
